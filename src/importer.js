@@ -161,7 +161,10 @@ const IGNORED = new Set(IGNORED_TEMPLATE_COLUMNS.map(norm));
 /**
  * rows: 2-D array (header row first). Returns { products: [{rowNumber, row}], errors: [{rowNumber, messages}], unknownColumns, skipped }
  */
-const TERM_KEYS = new Set(['currency', 'incoterm', 'fob_port', 'payment_terms', 'moq', 'sample_lead_days', 'production_lead_days', 'quote_valid_until']);
+const TERM_KEYS = new Set(['currency', 'incoterm', 'fob_port', 'payment_terms', 'moq', 'sample_lead_days', 'production_lead_days', 'quote_valid_until', 'country_of_origin']);
+// Header-block labels may be bilingual ("Currency\n币种"): try as-is, then with the Chinese part removed.
+const stripCjk = (v) => String(v || '').replace(/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]+/g, ' ');
+const keyOfLabel = (v) => HEADER_MAP.get(norm(v)) || HEADER_MAP.get(norm(String(v || '').split('\n')[0])) || HEADER_MAP.get(norm(stripCjk(v))) || null;
 const nums = (s) => (String(s).match(/\d+(?:\.\d+)?/g) || []).map(Number);
 
 // Quotation-level terms in label/value cells above the table (value to the right or directly below).
@@ -169,18 +172,20 @@ function readTerms(rows, headerIdx) {
   const terms = {};
   for (let i = 0; i < headerIdx; i++) {
     rows[i].forEach((cell, c) => {
-      const key = HEADER_MAP.get(norm(cell));
+      const key = keyOfLabel(cell);
       if (!key || !TERM_KEYS.has(key) || terms[key] !== undefined) return;
-      const isLabel = (v) => HEADER_MAP.has(norm(v));
-      const below = rows[i + 1] && i + 1 < headerIdx ? rows[i + 1][c] : '';
-      let val = below !== undefined && String(below).trim() !== '' && !isLabel(below) ? below : '';
+      const isLabel = (v) => !!keyOfLabel(v) || /[\u3400-\u9fff]/.test(String(v)) && /\n/.test(String(v));
+      // Value to the right of the label (Lulyboo template, quotation form); otherwise directly below.
+      let val = '';
+      for (let k = c + 1; k < rows[i].length; k++) {
+        const v = rows[i][k];
+        if (String(v).trim() === '') continue;
+        if (!isLabel(v)) val = v;
+        break;
+      }
       if (val === '') {
-        for (let k = c + 1; k < rows[i].length; k++) {
-          const v = rows[i][k];
-          if (String(v).trim() === '') continue;
-          if (!isLabel(v)) val = v;
-          break;
-        }
+        const below = rows[i + 1] && i + 1 < headerIdx ? rows[i + 1][c] : '';
+        if (below !== undefined && String(below).trim() !== '' && !isLabel(below)) val = below;
       }
       if (String(val).trim() !== '') terms[key] = val;
     });
@@ -214,7 +219,7 @@ function mapRows(rows) {
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const keys = rows[i].map((h) => HEADER_MAP.get(norm(h)) || null);
     const table = keys.filter((k) => k && !TERM_KEYS.has(k));
-    if (table.length >= 3 && (keys.includes('product_name') || (keys.includes('description') && keys.includes('unit_price')))) { headerIdx = i; colKeys = keys; break; }
+    if (table.length >= 2 && keys.filter(Boolean).length >= 3 && (keys.includes('product_name') || (keys.includes('description') && keys.includes('unit_price')))) { headerIdx = i; colKeys = keys; break; }
   }
   if (headerIdx < 0) {
     return { products: [], errors: [{ rowNumber: 1, messages: [m('Could not find the header row. Use the Lulyboo template (the first row must include "Product Name").', '找不到标题行。请使用 Lulyboo 模板（第一行须包含 “Product Name”）。')] }], unknownColumns: [], skipped: 0 };

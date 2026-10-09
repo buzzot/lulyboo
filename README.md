@@ -16,7 +16,8 @@ A bilingual (English / 中文) portal where factories submit products, prices, p
 
 **Supplier side** (`/portal`, after sign-in)
 - Add or edit products one at a time, with up to 10 photos each. Photos are compressed automatically.
-- Bulk upload using the Lulyboo template (.xlsx or .csv), **or the Factory Quotation Request Excel as is**. The importer reads the commercial terms above the table (currency, Incoterm, port, payment, MOQ, lead times, valid-until) and splits combined cells such as `50x35x30` and `9.6/10.6`.
+- Bulk upload with the Lulyboo Excel template (`public/Lulyboo_Supplier_Product_Template.xlsx`). Factory details and terms that apply to every product (currency, Incoterm, port, payment, valid-until, origin, sample lead time) are entered **once at the top**; then there is **one row per product**. The older Factory Quotation Request form and flat CSV files are also accepted, and combined cells such as `50x35x30` and `9.6/10.6` are split.
+- To change the template, edit `scripts/make_template.py` and run `python3 scripts/make_template.py` (needs Python with openpyxl).
 - Live container fit (20GP / 40GP / 40HQ) appears while the factory types carton size.
 - Suppliers never see your review fields, prices or notes. A product is locked once it is *Selected* or *Rejected*.
 
@@ -112,7 +113,7 @@ src/ai.js               Claude API prompts and structured outputs
 src/db.js               Supabase REST and Storage client
 src/routes/*.js         supplier portal, admin, admin tools
 supabase/schema.sql     database schema and storage bucket
-public/                 CSS, JS, Excel/CSV templates
+public/                 CSS, JS, Excel template (built by scripts/make_template.py)
 scripts/demo.js         local demo with sample data
 test/                   node:test suite with fixtures
 ```

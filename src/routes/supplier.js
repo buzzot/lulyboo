@@ -218,8 +218,8 @@ function importPage(base) {
   return html`<h1>${t('Bulk upload', '批量上传')}</h1>
   <section class="card">
     <ol class="steps">
-      <li>${t('Download the template:', '下载模板：')} <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Excel (.xlsx)</a> · <a href="/static/Lulyboo_Supplier_Product_Template.csv">CSV</a></li>
-      <li>${t('Fill in one row per product. Keep the header rows.', '每个产品填写一行，请保留标题行。')}</li>
+      <li>${t('Download the template:', '下载模板：')} <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Lulyboo_Supplier_Product_Template.xlsx</a></li>
+      <li>${t('Fill in your factory details and terms once at the top, then one row per product.', '在顶部填写一次工厂信息和条款，然后每个产品填写一行。')}</li>
       <li>${t('Upload the file below, then open each product to add photos.', '上传文件后，再逐个产品添加图片。')}</li>
     </ol>
     <form method="post" enctype="multipart/form-data" action="${base}/import" class="inline-form">

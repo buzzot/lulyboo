@@ -62,25 +62,36 @@ test('DDP price excludes freight and duty; missing data flagged', () => {
 });
 
 // ── Importers ─────────────────────────────────────────────────
-test('imports the Lulyboo Excel template (skips CN header + example row, reports bad row)', () => {
+test('imports the Lulyboo Excel template: header terms apply to every product row', () => {
   const r = parseUpload({ name: 'template_filled.xlsx', buffer: fs.readFileSync(path.join(FIX, 'template_filled.xlsx')) });
-  assert.equal(r.products.length, 1);
-  assert.equal(r.skipped, 2);
-  const p = r.products[0].row;
-  assert.equal(p.product_name, 'Cat tunnel 3-way');
-  assert.equal(p.currency, 'CNY');
-  assert.equal(p.unit_price, 22.5);
-  assert.equal(p.carton_l_cm, 60);
-  assert.equal(r.errors.length, 1);
-  assert.match(r.errors[0].messages[0], /Unit Price/);
+  assert.equal(r.products.length, 2);
+  assert.equal(r.skipped, 2); // Chinese header row + example row
   assert.deepEqual(r.unknownColumns, []);
+  const [a, b] = r.products.map((x) => x.row);
+  assert.equal(r.products[0].rowNumber, 17);
+  assert.equal(a.product_name, 'Rubber bath duck set');
+  assert.equal(a.supplier_sku, 'MW-01');
+  assert.equal(a.unit_price, 8.5);
+  assert.equal(a.moq, 2000);
+  assert.equal(a.carton_l_cm, 60); assert.equal(a.carton_gw_kg, 9.2);
+  // From the "terms for all products" block, entered once
+  for (const p of [a, b]) {
+    assert.equal(p.currency, 'CNY'); assert.equal(p.incoterm, 'FOB'); assert.equal(p.fob_port, 'Shenzhen');
+    assert.equal(p.payment_terms, '30% deposit, 70% before shipment'); assert.equal(p.quote_valid_until, '2026-12-31');
+    assert.equal(p.country_of_origin, 'China'); assert.equal(p.sample_lead_days, 7);
+  }
+  assert.equal(r.errors.length, 1);
+  assert.equal(r.errors[0].rowNumber, 19);
+  assert.match(r.errors[0].messages[0], /Unit Price/);
 });
 
-test('imports the CSV template (UTF-8 BOM)', () => {
-  const r = parseUpload({ name: 't.csv', buffer: fs.readFileSync(path.join(PUB, 'Lulyboo_Supplier_Product_Template.csv')) });
-  assert.equal(r.products.length, 0);
-  assert.equal(r.skipped, 1); // example row
-  assert.deepEqual(r.unknownColumns, []);
+test('imports a flat CSV (UTF-8 BOM), one product per row', () => {
+  const csv = '\uFEFFProduct Name,Unit Price,Currency,MOQ (units)\r\nExample: thing,1,USD,1\r\nBib,"1,250.50",CNY,500\r\n';
+  const r = parseUpload({ name: 't.csv', buffer: Buffer.from(csv, 'utf8') });
+  assert.equal(r.skipped, 1);
+  assert.equal(r.products.length, 1);
+  assert.equal(r.products[0].row.unit_price, 1250.5);
+  assert.equal(r.products[0].row.currency, 'CNY');
 });
 
 test('imports the Factory Quotation Request form, with terms and split cells', () => {

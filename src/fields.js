@@ -72,7 +72,7 @@ const PACKING_ROWS = [
 ];
 
 // Template-only columns that are not stored on the product row.
-const IGNORED_TEMPLATE_COLUMNS = ['Supplier / Factory Name'];
+const IGNORED_TEMPLATE_COLUMNS = ['Supplier / Factory Name', 'CBM per Carton (auto)'];
 
 const SUPPLIER_FIELDS = [
   { key: 'name', en: 'Factory / Company Name', cn: '工厂 / 公司名称', type: 'text', required: true },
