@@ -90,6 +90,8 @@ if (require.main === module) {
   const { createSupabaseDb } = require('./db');
   const db = createSupabaseDb({ url: config.supabaseUrl, key: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY });
   if (!config.adminPassword) console.warn('ADMIN_PASSWORD is not set; admin login is disabled.');
+  if (!process.env.RESEND_API_KEY) console.warn('RESEND_API_KEY is not set: emails (codes, invitations) are not sent.');
+  if (process.env.EMAIL_DEV_LOG === 'true') console.warn('EMAIL_DEV_LOG=true: email contents incl. codes are written to this log. Turn it off for production.');
   if (!process.env.SESSION_SECRET) console.warn('SESSION_SECRET is not set; using a value derived from ADMIN_PASSWORD.');
   const server = http.createServer(createApp({ db, config }));
   server.requestTimeout = 5 * 60_000; // AI calls and large uploads

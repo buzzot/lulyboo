@@ -37,19 +37,18 @@ const PRODUCT_FIELDS = [
   { key: 'sample_lead_days', group: 'pricing', en: 'Sample Lead Time (days)', cn: '样品交期（天）', type: 'int', csv: 'Sample Lead Time (days)' },
   { key: 'production_lead_days', group: 'pricing', en: 'Production Lead Time (days)', cn: '生产交期（天）', type: 'int', csv: 'Production Lead Time (days)' },
   { key: 'quote_valid_until', group: 'pricing', en: 'Quote Valid Until', cn: '报价有效期至', type: 'date', csv: 'Quote Valid Until' },
-  { key: 'suggested_retail_usd', group: 'pricing', en: 'Suggested Retail (USD)', cn: '建议零售价（USD）', type: 'number', csv: 'Suggested Retail (USD)' },
 
   // ── Packing & carton
   { key: 'units_per_inner', group: 'packing', en: 'Units per Inner Pack', cn: '内盒装数（件）', type: 'int', csv: 'Units per Inner Pack' },
   { key: 'units_per_carton', group: 'packing', en: 'Units per Master Carton', cn: '外箱装数（件/箱）', type: 'int', csv: 'Units per Master Carton', logistics: true },
-  { key: 'carton_l_cm', group: 'packing', en: 'Carton Length (cm)', cn: '外箱长（cm）', type: 'number', csv: 'Carton Length (cm)', logistics: true },
-  { key: 'carton_w_cm', group: 'packing', en: 'Carton Width (cm)', cn: '外箱宽（cm）', type: 'number', csv: 'Carton Width (cm)', logistics: true },
-  { key: 'carton_h_cm', group: 'packing', en: 'Carton Height (cm)', cn: '外箱高（cm）', type: 'number', csv: 'Carton Height (cm)', logistics: true },
-  { key: 'carton_nw_kg', group: 'packing', en: 'Carton Net Weight (kg)', cn: '外箱净重（kg）', type: 'number', csv: 'Carton Net Weight (kg)' },
-  { key: 'carton_gw_kg', group: 'packing', en: 'Carton Gross Weight (kg)', cn: '外箱毛重（kg）', type: 'number', csv: 'Carton Gross Weight (kg)', logistics: true },
-  { key: 'supplier_qty_20gp', group: 'packing', en: 'Qty per 20GP (units, optional)', cn: '20GP 装柜数量（件，选填）', type: 'int', csv: 'Qty per 20GP (units)' },
-  { key: 'supplier_qty_40gp', group: 'packing', en: 'Qty per 40GP (units, optional)', cn: '40GP 装柜数量（件，选填）', type: 'int', csv: 'Qty per 40GP (units)' },
-  { key: 'supplier_qty_40hq', group: 'packing', en: 'Qty per 40HQ (units, optional)', cn: '40HQ 装柜数量（件，选填）', type: 'int', csv: 'Qty per 40HQ (units)' },
+  { key: 'carton_l_cm', group: 'packing', en: 'Carton Length (cm)', cn: '外箱长（cm）', short: ['Length', '长'], type: 'number', csv: 'Carton Length (cm)', logistics: true },
+  { key: 'carton_w_cm', group: 'packing', en: 'Carton Width (cm)', cn: '外箱宽（cm）', short: ['Width', '宽'], type: 'number', csv: 'Carton Width (cm)', logistics: true },
+  { key: 'carton_h_cm', group: 'packing', en: 'Carton Height (cm)', cn: '外箱高（cm）', short: ['Height', '高'], type: 'number', csv: 'Carton Height (cm)', logistics: true },
+  { key: 'carton_nw_kg', group: 'packing', en: 'Carton Net Weight (kg)', cn: '外箱净重（kg）', short: ['Net weight', '净重'], type: 'number', csv: 'Carton Net Weight (kg)' },
+  { key: 'carton_gw_kg', group: 'packing', en: 'Carton Gross Weight (kg)', cn: '外箱毛重（kg）', short: ['Gross weight', '毛重'], type: 'number', csv: 'Carton Gross Weight (kg)', logistics: true },
+  { key: 'supplier_qty_20gp', group: 'packing', en: 'Qty per 20GP (units, optional)', cn: '20GP 装柜数量（件，选填）', short: ['20GP', ''], type: 'int', csv: 'Qty per 20GP (units)' },
+  { key: 'supplier_qty_40gp', group: 'packing', en: 'Qty per 40GP (units, optional)', cn: '40GP 装柜数量（件，选填）', short: ['40GP', ''], type: 'int', csv: 'Qty per 40GP (units)' },
+  { key: 'supplier_qty_40hq', group: 'packing', en: 'Qty per 40HQ (units, optional)', cn: '40HQ 装柜数量（件，选填）', short: ['40HQ', ''], type: 'int', csv: 'Qty per 40HQ (units)' },
 
   // ── Other
   { key: 'photo_link', group: 'other', en: 'Photo / Catalog Link', cn: '图片 / 目录链接', type: 'url', csv: 'Photo Link' },
@@ -61,6 +60,14 @@ const GROUPS = [
   { id: 'pricing', en: 'Pricing & Terms', cn: '价格与条款' },
   { id: 'packing', en: 'Packing & Carton', cn: '包装与外箱' },
   { id: 'other', en: 'Other', cn: '其他' },
+];
+
+// Packing section is laid out in rows so related numbers sit side by side.
+const PACKING_ROWS = [
+  { en: 'Quantity per carton', cn: '装箱数量', keys: ['units_per_inner', 'units_per_carton'] },
+  { en: 'Master carton size (cm)', cn: '外箱尺寸（厘米）', keys: ['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], sep: '×' },
+  { en: 'Master carton weight (kg)', cn: '外箱重量（千克）', keys: ['carton_nw_kg', 'carton_gw_kg'] },
+  { en: 'Units per container (optional, we also calculate it)', cn: '装柜数量（选填，系统会自动计算）', keys: ['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'] },
 ];
 
 // Template-only columns that are not stored on the product row.
@@ -142,6 +149,7 @@ function cleanProduct(input, { partial = false } = {}) {
         else v = d;
       } else {
         v = String(v).slice(0, f.type === 'textarea' ? 5000 : 500);
+        if (f.type === 'url' && !/^https?:\/\//i.test(v)) v = `https://${v}`;
         if (f.type === 'select' && f.key === 'currency') v = v.toUpperCase();
         if (f.type === 'select' && f.key === 'incoterm') v = v.toUpperCase();
       }
@@ -161,6 +169,7 @@ function cleanSupplier(input) {
   for (const f of SUPPLIER_FIELDS) {
     let v = input[f.key];
     v = typeof v === 'string' ? v.trim().slice(0, 1000) : null;
+    if (v && f.type === 'url' && !/^https?:\/\//i.test(v)) v = `https://${v}`;
     row[f.key] = v || null;
     if (f.required && !row[f.key]) errors.push(`${f.en} is required`);
   }
@@ -194,7 +203,7 @@ function cleanReview(input) {
 }
 
 module.exports = {
-  PRODUCT_FIELDS, GROUPS, SUPPLIER_FIELDS, REVIEW_FIELDS, SUPPLIER_COLUMNS, IGNORED_TEMPLATE_COLUMNS,
+  PRODUCT_FIELDS, GROUPS, PACKING_ROWS, SUPPLIER_FIELDS, REVIEW_FIELDS, SUPPLIER_COLUMNS, IGNORED_TEMPLATE_COLUMNS,
   CATEGORIES, INCOTERMS, CURRENCIES, STATUSES, STORES, CONTAINERS,
   parseNumber, parseDate, cleanProduct, cleanSupplier, cleanReview,
 };

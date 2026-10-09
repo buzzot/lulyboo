@@ -1,14 +1,22 @@
 'use strict';
 // Transactional email via Resend's HTTPS API (no SMTP needed on Railway).
-// Without RESEND_API_KEY the email is printed to the server log instead (development).
+// Without RESEND_API_KEY nothing is sent. Emails (which contain codes and links) are written to the
+// server log ONLY when EMAIL_DEV_LOG=true is set explicitly, for local testing. Never enable it in production.
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const emailConfigured = () => !!process.env.RESEND_API_KEY;
 
 async function sendEmail(config, { to, subject, text, html }) {
   const key = process.env.RESEND_API_KEY;
   if (!key) {
-    console.log(`[email:dev] to=${to} subject="${subject}"\n${text}`);
-    return { dev: true };
+    if (process.env.EMAIL_DEV_LOG === 'true') {
+      console.log(`[email:dev] to=${to} subject="${subject}"\n${text}`);
+      return { dev: true };
+    }
+    const err = new Error('Email is not set up on this portal yet, so we cannot send your code. Please contact Lulyboo. 平台邮件功能尚未开通，无法发送验证码，请联系 Lulyboo。');
+    err.status = 503;
+    throw err;
   }
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -53,4 +61,4 @@ function inviteEmail({ link, companyName, days }) {
   };
 }
 
-module.exports = { sendEmail, codeEmail, inviteEmail };
+module.exports = { sendEmail, codeEmail, inviteEmail, emailConfigured };

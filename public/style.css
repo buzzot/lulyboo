@@ -209,3 +209,18 @@ table.compare thead th { text-transform: none; letter-spacing: 0; font-size: .9r
 .mt { margin-top: 14px; }
 .auth h2 { margin-top: 18px; }
 td.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .grid.two { grid-template-columns: 1fr; } }
+
+/* Packing section: related numbers on one line */
+.field-row { display: grid; grid-template-columns: 220px 1fr; gap: 6px 16px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.field-row:last-of-type { border-bottom: 0; }
+.row-title { font-weight: 650; font-size: .9rem; align-self: center; }
+.row-inputs { display: flex; gap: 10px; align-items: end; }
+.row-inputs label { flex: 1 1 0; min-width: 0; }
+.row-inputs.cols-2 label { flex: 0 1 220px; }
+.row-inputs .sep { padding-bottom: 10px; color: var(--muted); font-weight: 600; }
+@media (max-width: 760px) {
+  .field-row { grid-template-columns: 1fr; }
+  .row-inputs.cols-2 label { flex: 1 1 0; }
+}

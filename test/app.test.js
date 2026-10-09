@@ -120,6 +120,8 @@ test('images are converted to WebP ≤1600px with a 400px thumbnail', async () =
 });
 
 // ── HTTP end-to-end ───────────────────────────────────────────
+process.env.EMAIL_DEV_LOG = 'true';
+process.on('exit', () => {}); // keep console tidy
 function startServer(db) {
   const config = { ...buildConfig({ ADMIN_PASSWORD: 'pw-test', SESSION_SECRET: 's', PORT: '0', SUPABASE_URL: 'https://x.supabase.co' }), publicUrl: 'http://test', showDevCodes: true };
   const server = http.createServer(createApp({ db, config }));
@@ -187,12 +189,14 @@ test('end-to-end: admin creates supplier, supplier submits, admin reviews and an
   assert.equal(bad.status, 422);
   assert.match(bad.text, /required/);
   const reg = await req(base, 'POST', '/register', { cookie: regCookie, form: {
-    name: 'Ningbo Happy Baby', contact_name: 'Lily Chen', email: 'lily@example.com', phone: '+86 138', address: 'Ningbo', country: 'China',
+    name: 'Ningbo Happy Baby', phone: '+86 138', address: 'Ningbo', country: 'China',
     user_name: 'Lily Chen', password: 'correct horse battery', password2: 'correct horse battery' } });
   assert.equal(reg.location, '/portal');
   let scookie = reg.cookies.filter((c) => c.startsWith('lb_sup=')).map((c) => c.split(';')[0]).join('; ');
   assert.ok(scookie);
   assert.equal(db.tables.suppliers[0].name, 'Ningbo Happy Baby');
+  assert.equal(db.tables.suppliers[0].contact_name, 'Lily Chen');
+  assert.equal(db.tables.suppliers[0].email, 'lily@example.com');
   assert.ok(db.tables.suppliers[0].registered_at);
   assert.equal(db.tables.supplier_users[0].status, 'active');
   assert.equal(db.tables.supplier_users[0].invite_token_hash, null);

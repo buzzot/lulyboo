@@ -13,6 +13,7 @@ const { saveProductImages } = require('../src/images');
   const db = seedDb();
   const config = { ...buildConfig({ ...process.env, ADMIN_PASSWORD: 'demo', SESSION_SECRET: 'demo', SUPABASE_URL: '' }), showDevCodes: true };
   delete process.env.RESEND_API_KEY;
+  process.env.EMAIL_DEV_LOG = 'true';
   // Serve stored images locally in demo mode
   db.storage.signedUrls = async (paths) => Object.fromEntries(paths.filter(Boolean).map((p) => [p, `data:image/webp;base64,${(db.files.get(p) || Buffer.alloc(0)).toString('base64')}`]));
 

@@ -9,10 +9,12 @@ const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
 const { page } = require('../views/layout');
 const { SUPPLIER_FIELDS, cleanSupplier } = require('../fields');
 const A = require('../auth');
-const { sendEmail, inviteEmail } = require('../email');
+const { sendEmail, inviteEmail, emailConfigured } = require('../email');
 
 const INVITE_DAYS = 14;
-const REG_REQUIRED = ['name', 'contact_name', 'phone', 'address', 'country'];
+const REG_REQUIRED = ['name', 'phone', 'address', 'country'];
+// Contact person = the registering user; company email = their login email (editable later on the Company page).
+const REG_SKIP = ['contact_name', 'email'];
 
 /** Creates (or refreshes) an invite for a user. Returns { link }. Sends the email when asked. */
 async function createInvite(db, config, user, { send = false, companyName } = {}) {
@@ -23,7 +25,7 @@ async function createInvite(db, config, user, { send = false, companyName } = {}
   });
   const link = `${config.publicUrl}/s/${token}`;
   let emailed = false;
-  if (send) { const r = await sendEmail(config, { to: user.email, ...inviteEmail({ link, companyName, days: INVITE_DAYS }) }); emailed = !r.dev; }
+  if (send && emailConfigured()) { await sendEmail(config, { to: user.email, ...inviteEmail({ link, companyName, days: INVITE_DAYS }) }); emailed = true; }
   return { link, emailed };
 }
 
@@ -111,14 +113,14 @@ module.exports = function supplierAuthRoutes(router, { db, config }) {
       <form method="post" action="/register">
         ${joining ? html`<input type="hidden" name="joining" value="1">` : html`
         <h2>Company details · 公司信息</h2>
-        <div class="grid">${SUPPLIER_FIELDS.map((f) => {
+        <div class="grid two">${SUPPLIER_FIELDS.filter((f) => !REG_SKIP.includes(f.key)).sort((a, b) => (a.type === 'textarea') - (b.type === 'textarea')).map((f) => {
           const req = REG_REQUIRED.includes(f.key);
           return html`<label class="${f.type === 'textarea' ? 'span2' : ''}"><span class="lbl">${f.en}${req ? html`<b class="req">*</b>` : ''}<span class="cn">${f.cn}</span></span>
             ${f.type === 'textarea' ? html`<textarea name="${f.key}" rows="2" ${req ? raw('required') : ''}>${v(f.key)}</textarea>`
-              : html`<input name="${f.key}" value="${v(f.key)}" ${req ? raw('required') : ''} ${f.type === 'url' ? raw('type="url" placeholder="https://"') : ''}>`}</label>`;
+              : html`<input name="${f.key}" value="${v(f.key)}" ${req ? raw('required') : ''} ${f.type === 'url' ? raw('inputmode="url" autocapitalize="off" spellcheck="false" placeholder="www.example.com"') : ''}>`}</label>`;
         })}</div>`}
         <h2>Your account · 您的账号</h2>
-        <div class="grid">
+        <div class="grid two">
           <label><span class="lbl">Your name<b class="req">*</b><span class="cn">您的姓名</span></span><input name="user_name" value="${values.user_name ?? u.name ?? ''}" required autocomplete="name"></label>
           <label><span class="lbl">Login email<span class="cn">登录邮箱</span></span><input value="${u.email}" readonly autocomplete="username"></label>
           <label><span class="lbl">Password<b class="req">*</b><span class="cn">密码（至少 ${A.MIN_PASSWORD} 位）</span></span><input type="password" name="password" minlength="${A.MIN_PASSWORD}" required autocomplete="new-password"></label>
@@ -152,7 +154,7 @@ module.exports = function supplierAuthRoutes(router, { db, config }) {
     if (pwErr) errors.push(pwErr);
     if (errors.length) return res.html(page({ title: 'Registration', flash: { type: 'error', msg: errors.join(' · ') }, body: regForm(u, s, fields) }), 422);
 
-    if (row) await db.update('suppliers', { id: s.id }, { ...row, registered_at: new Date().toISOString() });
+    if (row) await db.update('suppliers', { id: s.id }, { ...row, contact_name: userName, email: s.email || u.email, registered_at: new Date().toISOString() });
     const now = new Date().toISOString();
     const [updated] = await db.update('supplier_users', { id: u.id }, {
       name: userName, password_hash: await A.hashPassword(fields.password), status: 'active',
@@ -224,6 +226,9 @@ module.exports = function supplierAuthRoutes(router, { db, config }) {
     const { fields } = await parseForm(req);
     const email = A.normEmail(fields.email);
     A.limit(`forgot-ip:${ip(req)}`, 10, 15 * 60_000);
+    if (!emailConfigured() && process.env.EMAIL_DEV_LOG !== 'true') {
+      throw new HttpError(503, 'Email is not set up on this portal yet. Please contact Lulyboo to reset your password. 平台邮件功能尚未开通，请联系 Lulyboo 重置密码。');
+    }
     const rows = await db.list('supplier_users', { filters: { email }, limit: 1 });
     const u = rows[0];
     let note = '';

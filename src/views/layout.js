@@ -1,6 +1,6 @@
 'use strict';
 const { html, raw, fmt } = require('../lib/html');
-const { PRODUCT_FIELDS, GROUPS } = require('../fields');
+const { PRODUCT_FIELDS, GROUPS, PACKING_ROWS } = require('../fields');
 
 function page({ title, body, nav = null, flash = null, wide = false }) {
   return html`<!doctype html>
@@ -48,7 +48,7 @@ function input(f, value, { categories } = {}) {
     case 'number': return html`<input id="${id}" name="${f.key}" type="number" step="any" min="0" inputmode="decimal" value="${v}"${req}>`;
     case 'int': return html`<input id="${id}" name="${f.key}" type="number" step="1" min="0" inputmode="numeric" value="${v}"${req}>`;
     case 'date': return html`<input id="${id}" name="${f.key}" type="date" value="${v ? String(v).slice(0, 10) : ''}"${req}>`;
-    case 'url': return html`<input id="${id}" name="${f.key}" type="url" placeholder="https://" value="${v}"${req}>`;
+    case 'url': return html`<input id="${id}" name="${f.key}" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="www.example.com" value="${v}"${req}>`;
     case 'select': {
       const opts = f.key === 'category' && categories?.length ? categories : f.options;
       const list = v && !opts.includes(v) ? [...opts, v] : opts;
@@ -62,18 +62,35 @@ function input(f, value, { categories } = {}) {
 }
 
 /** The bilingual product form body (supplier fields only). */
+const FIELD = Object.fromEntries(PRODUCT_FIELDS.map((f) => [f.key, f]));
+
+function packingRows(product, opts) {
+  return PACKING_ROWS.map((row) => html`
+    <div class="field-row">
+      <div class="row-title">${row.en}<span class="cn">${row.cn}</span></div>
+      <div class="row-inputs cols-${row.keys.length}">
+        ${row.keys.map((k, i) => { const f = FIELD[k]; return html`
+          ${row.sep && i > 0 ? html`<span class="sep">${row.sep}</span>` : ''}
+          <label>
+            <span class="lbl">${f.short ? f.short[0] : f.en}<span class="cn">${f.short ? f.short[1] : f.cn}</span></span>
+            ${input(f, product[f.key], opts)}
+          </label>`; })}
+      </div>
+    </div>`);
+}
+
 function productFields(product = {}, { categories } = {}) {
   return GROUPS.map((g) => html`
     <fieldset class="group">
       <legend>${g.en}<span class="cn">${g.cn}</span></legend>
-      <div class="grid">
+      ${g.id === 'packing' ? packingRows(product, { categories }) : html`<div class="grid">
         ${PRODUCT_FIELDS.filter((f) => f.group === g.id).map((f) => html`
           <label class="${f.type === 'textarea' ? 'span2' : ''}">
             <span class="lbl">${f.en}${f.required ? html`<b class="req">*</b>` : ''}<span class="cn">${f.cn}</span></span>
             ${input(f, product[f.key], { categories })}
             ${f.help ? html`<small>${f.help}</small>` : ''}
           </label>`)}
-      </div>
+      </div>`}
       ${g.id === 'packing' ? html`<div class="calc-box" data-live-fit>
         <strong>Container fit (auto)</strong><span class="cn">装柜数量（自动计算）</span>
         <div class="live-fit">Enter carton size and units per carton to see how many fit.</div>
