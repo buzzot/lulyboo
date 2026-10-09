@@ -32,7 +32,8 @@ function createSupabaseDb({ url, key }) {
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       const err = new Error(`Supabase ${method} ${path.split('?')[0]} failed: ${res.status} ${text.slice(0, 300)}`);
-      err.status = res.status;
+      err.status = 500;          // never show database details to visitors; full text goes to the server log
+      err.upstreamStatus = res.status;
       throw err;
     }
     if (raw) return res;

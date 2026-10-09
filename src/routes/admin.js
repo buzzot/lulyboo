@@ -517,7 +517,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       title: s.name, nav: adminNav('suppliers'), wide: true,
       flash: fl && fl.type !== 'link' ? fl : null,
       body: html`
-      ${fl?.type === 'link' ? html`<div class="flash link"><strong>${fl.msg.split('|||')[0]}</strong> The link is shown only once.<input class="copy" readonly value="${fl.msg.split('|||')[1] || ''}" data-copy><button class="btn small" type="button" data-copybtn>Copy</button></div>` : ''}
+      ${fl?.type === 'link' ? html`<div class="flash invite"><strong>${fl.msg.split('|||')[0]}</strong> The link is shown only once.<input class="copy" readonly value="${fl.msg.split('|||')[1] || ''}" data-copy><button class="btn small" type="button" data-copybtn>Copy</button></div>` : ''}
       <div class="head-row"><div><h1>${s.name}</h1><p class="muted">${s.crm_status}${s.country ? ` · ${s.country}` : ''}${s.rating ? ` · ${'★'.repeat(s.rating)}` : ''}${s.registered_at ? ` · registered ${fmt.date(s.registered_at)}` : ' · not registered yet'}</p></div>
         <div class="actions">
           <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>

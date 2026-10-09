@@ -59,8 +59,8 @@ body.busy { cursor: progress; }
 .flash.ok { background: var(--ok-soft); border-color: #b8e0c9; }
 .flash.warn, .flash.info { background: var(--warn-soft); border-color: #f0d7a6; }
 .flash.error { background: var(--err-soft); border-color: #f1c2bc; }
-.flash.link { background: var(--brand-soft); border-color: #f0c9c1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.flash.link .copy { flex: 1 1 320px; font-family: ui-monospace, monospace; font-size: .85rem; }
+.flash.invite { background: var(--brand-soft); border-color: #f0c9c1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.flash.invite .copy { flex: 1 1 320px; font-family: ui-monospace, monospace; font-size: .85rem; }
 .ok-card { border-left: 4px solid var(--ok); }
 .warn-card { border-left: 4px solid var(--warn); }
 .errors li { color: var(--err); }

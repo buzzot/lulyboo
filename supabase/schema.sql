@@ -251,6 +251,16 @@ alter table public.ai_analyses         enable row level security;
 alter table public.supplier_users      enable row level security;
 alter table public.auth_codes          enable row level security;
 
+-- Newer Supabase projects don't expose SQL-created tables to the API automatically.
+-- Grant access to the server's secret (service_role) key only; anon/authenticated get nothing.
+grant usage on schema public to service_role;
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+grant execute on all functions in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant execute on functions to service_role;
+
 -- ───────────────────────── Storage bucket ─────────────────────────
 -- Private bucket; the server hands out short-lived signed URLs.
 do $$
