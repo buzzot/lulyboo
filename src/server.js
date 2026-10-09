@@ -1,0 +1,99 @@
+'use strict';
+const http = require('node:http');
+const path = require('node:path');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+
+// Load .env for local development (Railway injects variables directly).
+const envFile = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envFile)) {
+  for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+}
+
+const { Router, HttpError, decorate, serveStatic } = require('./lib/http');
+const { html } = require('./lib/html');
+const { page, errorPage } = require('./views/layout');
+
+function buildConfig(env = process.env) {
+  const publicUrl = (env.PUBLIC_URL || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : `http://localhost:${env.PORT || 3000}`)).replace(/\/$/, '');
+  return {
+    port: Number(env.PORT || 3000),
+    publicUrl,
+    adminPassword: env.ADMIN_PASSWORD || '',
+    sessionSecret: env.SESSION_SECRET || crypto.createHash('sha256').update('lb:' + (env.ADMIN_PASSWORD || 'dev')).digest('hex'),
+    maxUploadBytes: Number(env.MAX_UPLOAD_MB || 80) * 1024 * 1024,
+    storagePlanGb: Number(env.STORAGE_PLAN_GB || 1),
+    supabaseUrl: env.SUPABASE_URL || '',
+    secureCookies: publicUrl.startsWith('https://'),
+    showDevCodes: env.EMAIL_DEV_SHOW_CODES === 'true' && !env.RESEND_API_KEY,
+  };
+}
+
+function createApp({ db, config }) {
+  const router = new Router();
+  const publicDir = path.join(__dirname, '..', 'public');
+
+  router.get('/', async (req, res) => res.html(page({
+    title: 'Supplier Portal',
+    body: html`<section class="card narrow"><h1>Lulyboo Supplier Portal</h1><p class="lead">Lulyboo 供应商平台</p>
+      <p>Submit your products, quotations and photos to Lulyboo.<br>向 Lulyboo 提交您的产品、报价和图片。</p>
+      <p><a class="btn" href="/login">Supplier sign in · 供应商登录</a></p>
+      <p class="muted small">New supplier? Register with the invitation link Lulyboo emailed you. 新供应商请通过 Lulyboo 发送的邀请链接注册。</p>
+      <p class="muted small"><a href="/admin">Lulyboo team</a></p></section>`,
+  })));
+  router.get('/health', async (req, res) => res.json({ ok: true }));
+
+  require('./routes/supplier-auth')(router, { db, config });
+  require('./routes/supplier')(router, { db, config });
+  require('./routes/admin')(router, { db, config });
+  require('./routes/admin-tools')(router, { db, config });
+
+  const imgOrigin = config.supabaseUrl ? new URL(config.supabaseUrl).origin : '';
+
+  return async function handler(req, res) {
+    decorate(req, res, { secureCookies: config.secureCookies });
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'same-origin'); // invite tokens never sent to other sites; keeps Origin on form posts
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    res.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' data: ${imgOrigin}; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
+    try {
+      // Reject cross-site form posts (CSRF): browsers send Origin on POST.
+      if (req.method === 'POST' && req.headers.origin) {
+        const host = req.headers['x-forwarded-host'] || req.headers.host;
+        let ok = false; try { ok = new URL(req.headers.origin).host === host; } catch { /* bad origin */ }
+        if (!ok) throw new HttpError(403, 'Cross-site request blocked');
+      }
+      if (req.pathname.startsWith('/static/') && (req.method === 'GET' || req.method === 'HEAD')) {
+        if (serveStatic(publicDir, req, res)) return;
+        throw new HttpError(404, 'File not found');
+      }
+      const m = router.match(req.method, req.pathname);
+      if (!m) throw new HttpError(404, 'Page not found');
+      req.params = m.params;
+      for (const h of m.handlers) { await h(req, res); if (res.writableEnded) break; }
+    } catch (err) {
+      const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
+      if (status >= 500) console.error(new Date().toISOString(), req.method, req.pathname.replace(/\/s\/[^/]+/, '/s/***'), err);
+      if (res.headersSent) { res.end(); return; }
+      const msg = status >= 500 && !(err instanceof HttpError) ? 'Something went wrong. Please try again. 出现错误，请重试。' : err.message;
+      res.html(errorPage(status, msg), status);
+    }
+  };
+}
+
+if (require.main === module) {
+  const config = buildConfig();
+  const { createSupabaseDb } = require('./db');
+  const db = createSupabaseDb({ url: config.supabaseUrl, key: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY });
+  if (!config.adminPassword) console.warn('ADMIN_PASSWORD is not set; admin login is disabled.');
+  if (!process.env.SESSION_SECRET) console.warn('SESSION_SECRET is not set; using a value derived from ADMIN_PASSWORD.');
+  const server = http.createServer(createApp({ db, config }));
+  server.requestTimeout = 5 * 60_000; // AI calls and large uploads
+  server.listen(config.port, () => console.log(`Lulyboo portal on :${config.port} (${config.publicUrl})`));
+}
+
+module.exports = { createApp, buildConfig };

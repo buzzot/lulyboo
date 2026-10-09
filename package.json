@@ -1,0 +1,20 @@
+{
+  "name": "lulyboo-supplier-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Supplier product & pricing portal for Lulyboo (Node.js + Supabase + Claude)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "demo": "node scripts/demo.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  }
+}
