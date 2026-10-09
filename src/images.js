@@ -1,4 +1,5 @@
 'use strict';
+const m = (en, zh) => `⟪${en}⟫⟦${zh}⟧`; // bilingual message (see lib/html.js)
 // Image processing: every upload is auto-rotated, stripped of metadata and stored as
 //   • full-size WebP, longest side ≤ 1600 px (~150–400 KB)
 //   • thumbnail WebP, longest side ≤ 400 px  (~15–40 KB)
@@ -33,10 +34,10 @@ async function saveProductImages(db, { supplierId, productId, files, existingCou
   let saved = 0;
   let sort = existingCount;
   for (const f of files || []) {
-    if (sort >= maxImages) { errors.push(`Max ${maxImages} images per product: skipped ${f.name}`); continue; }
-    if (f.type && !ACCEPT.test(f.type)) { errors.push(`${f.name}: not a supported image type`); continue; }
+    if (sort >= maxImages) { errors.push(m(`Max ${maxImages} images per product: skipped ${f.name}`, `每个产品最多 ${maxImages} 张图片，已跳过 ${f.name}`)); continue; }
+    if (f.type && !ACCEPT.test(f.type)) { errors.push(m(`${f.name}: not a supported image type`, `${f.name}：不支持的图片格式`)); continue; }
     let out;
-    try { out = await processImage(f.buffer); } catch (e) { errors.push(`${f.name}: could not read image (${e.message.split('\n')[0]})`); continue; }
+    try { out = await processImage(f.buffer); } catch (e) { errors.push(m(`${f.name}: could not read image`, `${f.name}：无法读取该图片`)); continue; }
     const id = crypto.randomUUID();
     const path = `${supplierId}/${productId}/${id}.webp`;
     const thumbPath = `${supplierId}/${productId}/${id}_t.webp`;

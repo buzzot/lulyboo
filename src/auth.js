@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { sign, unsign, HttpError } = require('./lib/http');
 const { sendEmail, codeEmail } = require('./email');
+const { m } = require('./lib/html');
 
 const scrypt = promisify(crypto.scrypt);
 const CODE_TTL_MIN = 10;
@@ -31,9 +32,9 @@ async function verifyPassword(pw, stored) {
   return crypto.timingSafeEqual(got, expected);
 }
 function passwordProblem(pw, confirm) {
-  if (!pw || String(pw).length < MIN_PASSWORD) return `Password must be at least ${MIN_PASSWORD} characters · 密码至少 ${MIN_PASSWORD} 位`;
-  if (String(pw).length > 200) return 'Password is too long';
-  if (confirm !== undefined && pw !== confirm) return 'Passwords do not match · 两次输入的密码不一致';
+  if (!pw || String(pw).length < MIN_PASSWORD) return m(`Password must be at least ${MIN_PASSWORD} characters`, `密码至少 ${MIN_PASSWORD} 位`);
+  if (String(pw).length > 200) return m('Password is too long', '密码过长');
+  if (confirm !== undefined && pw !== confirm) return m('Passwords do not match', '两次输入的密码不一致');
   return null;
 }
 
@@ -45,7 +46,7 @@ function limit(key, max, windowMs) {
   if (now - b.t > windowMs) { b.n = 0; b.t = now; }
   b.n++;
   buckets.set(key, b);
-  if (b.n > max) throw new HttpError(429, 'Too many attempts. Please wait 15 minutes and try again. 尝试次数过多，请 15 分钟后再试。');
+  if (b.n > max) throw new HttpError(429, m('Too many attempts. Please wait 15 minutes and try again.', '尝试次数过多，请 15 分钟后再试。'));
 }
 function resetLimit(key) { buckets.delete(key); }
 
@@ -55,9 +56,9 @@ const codeHash = (userId, code, secret) => sha256(`${secret}:${userId}:${code}`)
 async function issueCode(db, config, user, purpose) {
   const recent = await db.list('auth_codes', { filters: { user_id: user.id, purpose, created_at: ['gt', new Date(Date.now() - 3600_000).toISOString()] }, order: 'created_at.desc' });
   if (recent[0] && Date.now() - new Date(recent[0].created_at).getTime() < RESEND_WAIT_SEC * 1000) {
-    throw new HttpError(429, `Please wait a minute before requesting another code. 请稍等一分钟后再获取验证码。`);
+    throw new HttpError(429, m('Please wait a minute before requesting another code.', '请稍等一分钟后再获取验证码。'));
   }
-  if (recent.length >= CODES_PER_HOUR) throw new HttpError(429, 'Too many codes requested. Try again in an hour. 获取验证码次数过多，请一小时后再试。');
+  if (recent.length >= CODES_PER_HOUR) throw new HttpError(429, m('Too many codes requested. Try again in an hour.', '获取验证码次数过多，请一小时后再试。'));
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
   await db.update('auth_codes', { user_id: user.id, purpose, used: false }, { used: true }); // invalidate older codes
   await db.insert('auth_codes', {
@@ -85,9 +86,9 @@ async function checkCode(db, config, user, purpose, code) {
   return { ok: true };
 }
 const codeError = (r) => ({
-  expired: 'The code has expired. Request a new one. 验证码已过期，请重新获取。',
-  locked: 'Too many wrong codes. Request a new one. 错误次数过多，请重新获取验证码。',
-  wrong: 'Wrong code. Check the email and try again. 验证码错误，请检查邮件后重试。',
+  expired: m('The code has expired. Request a new one.', '验证码已过期，请重新获取。'),
+  locked: m('Too many wrong codes. Request a new one.', '错误次数过多，请重新获取验证码。'),
+  wrong: m('Wrong code. Check the email and try again.', '验证码错误，请检查邮件后重试。'),
 }[r.reason]);
 
 // ── Short-lived signed cookies (registration / reset steps) ───

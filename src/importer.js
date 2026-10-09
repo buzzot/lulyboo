@@ -1,4 +1,5 @@
 'use strict';
+const m = (en, zh) => `⟪${en}⟫⟦${zh}⟧`; // bilingual message (see lib/html.js)
 // Bulk import: CSV or XLSX in the Lulyboo template layout → clean product rows.
 // No external libraries: a small RFC-4180 CSV parser and a minimal XLSX (zip + XML) reader.
 
@@ -48,12 +49,12 @@ function unzip(buf) {
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
     if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
   }
-  if (eocd < 0) throw new Error('Not a valid .xlsx file');
+  if (eocd < 0) throw new Error(m('Not a valid .xlsx file', '不是有效的 .xlsx 文件'));
   const count = buf.readUInt16LE(eocd + 10);
   let p = buf.readUInt32LE(eocd + 16);
   const files = {};
   for (let k = 0; k < count; k++) {
-    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('Corrupt .xlsx (central directory)');
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error(m('The .xlsx file is damaged', '.xlsx 文件已损坏'));
     const method = buf.readUInt16LE(p + 10);
     const csize = buf.readUInt32LE(p + 20);
     const nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32);
@@ -87,7 +88,7 @@ function colIndex(ref) {
 function parseXlsx(buf) {
   const files = unzip(buf);
   const wb = files['xl/workbook.xml'];
-  if (!wb) throw new Error('Not a valid .xlsx file (no workbook)');
+  if (!wb) throw new Error(m('Not a valid .xlsx file', '不是有效的 .xlsx 文件'));
   const sheets = [...wb.matchAll(/<sheet\b[^>]*?name="([^"]*)"[^>]*?r:id="([^"]+)"/g)].map((m) => ({ name: xmlDecode(m[1]), rid: m[2] }));
   const target = sheets.find((s) => /^products?$/i.test(s.name)) || sheets[0];
   const rels = files['xl/_rels/workbook.xml.rels'] || '';
@@ -95,7 +96,7 @@ function parseXlsx(buf) {
   let sheetPath = rel ? rel.match(/Target="([^"]+)"/)[1] : 'worksheets/sheet1.xml';
   sheetPath = sheetPath.replace(/^\/?(xl\/)?/, 'xl/');
   const xml = files[sheetPath];
-  if (!xml) throw new Error('Worksheet not found in .xlsx');
+  if (!xml) throw new Error(m('No worksheet found in the .xlsx file', '.xlsx 文件中没有工作表'));
   const shared = files['xl/sharedStrings.xml'] ? [...files['xl/sharedStrings.xml'].matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1])) : [];
   const rows = [];
   for (const rm of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
@@ -216,7 +217,7 @@ function mapRows(rows) {
     if (table.length >= 3 && (keys.includes('product_name') || (keys.includes('description') && keys.includes('unit_price')))) { headerIdx = i; colKeys = keys; break; }
   }
   if (headerIdx < 0) {
-    return { products: [], errors: [{ rowNumber: 1, messages: ['Could not find the header row. Use the Lulyboo template (first row must include "Product Name").'] }], unknownColumns: [], skipped: 0 };
+    return { products: [], errors: [{ rowNumber: 1, messages: [m('Could not find the header row. Use the Lulyboo template (the first row must include "Product Name").', '找不到标题行。请使用 Lulyboo 模板（第一行须包含 “Product Name”）。')] }], unknownColumns: [], skipped: 0 };
   }
   const terms = readTerms(rows, headerIdx);
   const unknownColumns = rows[headerIdx]
@@ -242,7 +243,7 @@ function mapRows(rows) {
       if (d) input.product_name = d.slice(0, 120);
     }
     if (/^\s*(example|示例|例)\s*[:：]/i.test(String(input.product_name || ''))) { skipped++; continue; }
-    if (products.length + errors.length >= MAX_ROWS) { errors.push({ rowNumber, messages: [`Only the first ${MAX_ROWS} rows are imported per file`] }); break; }
+    if (products.length + errors.length >= MAX_ROWS) { errors.push({ rowNumber, messages: [m(`Only the first ${MAX_ROWS} rows are imported per file`, `每个文件最多导入 ${MAX_ROWS} 行`)] }); break; }
     const { row, errors: errs } = cleanProduct(input);
     if (errs.length) errors.push({ rowNumber, messages: errs, name: input.product_name });
     else products.push({ rowNumber, row });
@@ -254,7 +255,7 @@ function parseUpload(file) {
   const name = (file.name || '').toLowerCase();
   const isZip = file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
   if (name.endsWith('.xlsx') || isZip) return mapRows(parseXlsx(file.buffer));
-  if (name.endsWith('.xls')) throw new Error('Old .xls format is not supported. Save as .xlsx or CSV UTF-8.');
+  if (name.endsWith('.xls')) throw new Error(m('Old .xls format is not supported. Save as .xlsx or CSV UTF-8.', '不支持旧版 .xls 格式，请另存为 .xlsx 或 CSV UTF-8。'));
   return mapRows(parseCsv(decodeText(file.buffer)));
 }
 

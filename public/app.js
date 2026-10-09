@@ -1,9 +1,27 @@
 // Small progressive enhancements. Everything works without JS.
 (function () {
+  var root = document.documentElement;
+  var isZh = function () { return root.classList.contains('zh'); };
+  // Bilingual snippet for text built in the browser (CSS shows the active language)
+  var L = function (en, zh) { return '<span class="i-en">' + en + '</span><span class="i-zh" lang="zh-CN">' + zh + '</span>'; };
+
+  // Language switch: no reload. Remembered in a cookie (read by the server on the next page) and localStorage.
+  document.querySelectorAll('.lang-switch [data-lang]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var zh = b.getAttribute('data-lang') === 'zh';
+      root.classList.toggle('zh', zh);
+      root.setAttribute('lang', zh ? 'zh-CN' : 'en');
+      document.querySelectorAll('.lang-switch [data-lang]').forEach(function (x) { x.setAttribute('aria-pressed', String((x.getAttribute('data-lang') === 'zh') === zh)); });
+      document.cookie = 'lb_lang=' + (zh ? 'zh' : 'en') + '; path=/; max-age=31536000; SameSite=Lax';
+      try { localStorage.setItem('lb_lang', zh ? 'zh' : 'en'); } catch (e) { /* storage unavailable */ }
+    });
+  });
+
   // Confirm before destructive submits
   document.addEventListener('submit', function (e) {
     var f = e.target;
-    var msg = (e.submitter && e.submitter.getAttribute('data-confirm')) || f.getAttribute('data-confirm');
+    var src = e.submitter && e.submitter.hasAttribute('data-confirm') ? e.submitter : f;
+    var msg = (isZh() && src.getAttribute('data-confirm-zh')) || src.getAttribute('data-confirm');
     if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
     var btn = e.submitter;
     if (btn && btn.hasAttribute('data-busy')) {
@@ -50,14 +68,15 @@
     };
     var update = function () {
       var l = val('f_carton_l_cm'), w = val('f_carton_w_cm'), h = val('f_carton_h_cm'), gw = val('f_carton_gw_kg'), upc = val('f_units_per_carton');
-      if (!(l > 0 && w > 0 && h > 0)) { box.textContent = 'Enter carton size and units per carton to see how many fit. 请输入外箱尺寸和装箱数。'; return; }
+      if (!(l > 0 && w > 0 && h > 0)) { box.innerHTML = L('Enter the carton size and units per carton to see how many fit.', '请输入外箱尺寸和装箱数，系统将计算装柜数量。'); return; }
       var cbm = l * w * h / 1e6;
-      var parts = ['Carton ' + cbm.toFixed(4) + ' CBM'];
+      var en = ['Carton ' + cbm.toFixed(4) + ' CBM'], zh = ['外箱 ' + cbm.toFixed(4) + ' 立方米'];
       Object.keys(C).forEach(function (k) {
         var n = fit(l, w, h, gw, C[k]);
-        parts.push(k + ': ' + n.toLocaleString() + ' ctns' + (upc > 0 ? ' = ' + (n * upc).toLocaleString() + ' pcs' : ''));
+        en.push(k + ': ' + n.toLocaleString() + ' ctns' + (upc > 0 ? ' = ' + (n * upc).toLocaleString() + ' pcs' : ''));
+        zh.push(k + '：' + n.toLocaleString() + ' 箱' + (upc > 0 ? ' = ' + (n * upc).toLocaleString() + ' 件' : ''));
       });
-      box.textContent = parts.join(' · ');
+      box.innerHTML = L(en.join(' · '), zh.join(' · '));
     };
     ['f_carton_l_cm', 'f_carton_w_cm', 'f_carton_h_cm', 'f_carton_gw_kg', 'f_units_per_carton'].forEach(function (id) {
       var el = document.getElementById(id); if (el) el.addEventListener('input', update);
@@ -79,14 +98,15 @@
       var skipped = [];
       var have = {}; Array.prototype.forEach.call(dt.files, function (f) { have[key(f)] = 1; });
       Array.prototype.forEach.call(list, function (f) {
-        if (!/^image\//.test(f.type)) { skipped.push(f.name + ' (not an image)'); return; }
-        if (f.size > MAX_BYTES) { skipped.push(f.name + ' (over 20 MB)'); return; }
+        if (!/^image\//.test(f.type)) { skipped.push([f.name + ' (not an image)', f.name + '（不是图片）']); return; }
+        if (f.size > MAX_BYTES) { skipped.push([f.name + ' (over 20 MB)', f.name + '（超过 20 MB）']); return; }
         if (have[key(f)]) return;
-        if (dt.files.length >= max) { skipped.push(f.name + ' (limit ' + max + ')'); return; }
+        if (dt.files.length >= max) { skipped.push([f.name + ' (limit ' + max + ')', f.name + '（超过 ' + max + ' 张上限）']); return; }
         dt.items.add(f); have[key(f)] = 1;
       });
       input.files = dt.files;
-      note.textContent = skipped.length ? 'Skipped · 已跳过: ' + skipped.join(', ') : '';
+      var esc = function (x) { return x.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+      note.innerHTML = skipped.length ? L('Skipped: ' + esc(skipped.map(function (x) { return x[0]; }).join(', ')), '已跳过：' + esc(skipped.map(function (x) { return x[1]; }).join('，'))) : '';
       render();
     };
     var render = function () {
@@ -105,7 +125,10 @@
       });
       zone.classList.toggle('has-files', dt.files.length > 0);
       var main = zone.querySelector('.dz-main');
-      main.innerHTML = dt.files.length ? dt.files.length + ' photo' + (dt.files.length > 1 ? 's' : '') + ' ready, click Save to upload · 已选择 ' + dt.files.length + ' 张，点击保存上传. <u>Add more</u>' : 'Drag &amp; drop photos here, or <u>choose files</u>';
+      var n = dt.files.length;
+      main.innerHTML = n
+        ? L(n + ' photo' + (n > 1 ? 's' : '') + ' ready, click Save to upload. <u>Add more</u>', '已选择 ' + n + ' 张图片，点击保存即可上传。<u>继续添加</u>')
+        : L('Drag &amp; drop photos here, or <u>choose files</u>', '将图片拖到此处，或<u>点击选择文件</u>');
     };
     input.addEventListener('change', function () {
       var picked = Array.prototype.slice.call(input.files);

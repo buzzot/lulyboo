@@ -14,7 +14,7 @@ if (fs.existsSync(envFile)) {
 }
 
 const { Router, HttpError, decorate, serveStatic } = require('./lib/http');
-const { html } = require('./lib/html');
+const { html, t, m } = require('./lib/html');
 const { page, errorPage } = require('./views/layout');
 
 function buildConfig(env = process.env) {
@@ -37,11 +37,11 @@ function createApp({ db, config }) {
   const publicDir = path.join(__dirname, '..', 'public');
 
   router.get('/', async (req, res) => res.html(page({
-    title: 'Supplier Portal',
-    body: html`<section class="card narrow"><h1>Lulyboo Supplier Portal</h1><p class="lead">Lulyboo 供应商平台</p>
-      <p>Submit your products, quotations and photos to Lulyboo.<br>向 Lulyboo 提交您的产品、报价和图片。</p>
-      <p><a class="btn" href="/login">Supplier sign in · 供应商登录</a></p>
-      <p class="muted small">New supplier? Register with the invitation link Lulyboo emailed you. 新供应商请通过 Lulyboo 发送的邀请链接注册。</p>
+    title: 'Supplier Portal', req,
+    body: html`<section class="card narrow"><h1>${t('Lulyboo Supplier Portal', 'Lulyboo 供应商平台')}</h1>
+      <p>${t('Submit your products, quotations and photos to Lulyboo.', '向 Lulyboo 提交您的产品、报价和图片。')}</p>
+      <p><a class="btn" href="/login">${t('Supplier sign in', '供应商登录')}</a></p>
+      <p class="muted small">${t('New supplier? Register with the invitation link Lulyboo emailed you.', '新供应商请通过 Lulyboo 发送的邀请链接注册。')}</p>
       <p class="muted small"><a href="/admin">Lulyboo team</a></p></section>`,
   })));
   router.get('/health', async (req, res) => res.json({ ok: true }));
@@ -71,16 +71,16 @@ function createApp({ db, config }) {
         if (serveStatic(publicDir, req, res)) return;
         throw new HttpError(404, 'File not found');
       }
-      const m = router.match(req.method, req.pathname);
-      if (!m) throw new HttpError(404, 'Page not found');
-      req.params = m.params;
-      for (const h of m.handlers) { await h(req, res); if (res.writableEnded) break; }
+      const route = router.match(req.method, req.pathname);
+      if (!route) throw new HttpError(404, m('Page not found', '页面不存在'));
+      req.params = route.params;
+      for (const h of route.handlers) { await h(req, res); if (res.writableEnded) break; }
     } catch (err) {
       const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
       if (status >= 500) console.error(new Date().toISOString(), req.method, req.pathname.replace(/\/s\/[^/]+/, '/s/***'), err);
       if (res.headersSent) { res.end(); return; }
-      const msg = status >= 500 && !(err instanceof HttpError) ? 'Something went wrong. Please try again. 出现错误，请重试。' : err.message;
-      res.html(errorPage(status, msg), status);
+      const msg = status >= 500 && !(err instanceof HttpError) && !err.message.includes('⟪') ? m('Something went wrong. Please try again.', '出现错误，请重试。') : err.message;
+      res.html(errorPage(status, msg, req), status);
     }
   };
 }

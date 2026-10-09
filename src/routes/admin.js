@@ -76,9 +76,9 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   // ── Login
   router.get('/admin/login', async (req, res) => {
-    if (!config.adminPassword) return res.html(page({ title: 'Admin', body: html`<section class="card narrow"><h1>Admin not configured</h1><p>Set the <code>ADMIN_PASSWORD</code> environment variable and restart.</p></section>` }), 503);
+    if (!config.adminPassword) return res.html(page({ title: 'Admin', admin: true, body: html`<section class="card narrow"><h1>Admin not configured</h1><p>Set the <code>ADMIN_PASSWORD</code> environment variable and restart.</p></section>` }), 503);
     res.html(page({
-      title: 'Admin login', flash: takeFlash(req, res),
+      title: 'Admin login', admin: true, flash: takeFlash(req, res),
       body: html`<section class="card narrow"><h1>Admin login</h1>
       <form method="post" action="/admin/login"><input type="hidden" name="next" value="${req.query.next || '/admin'}">
       <label><span class="lbl">Password</span><input type="password" name="password" autofocus required></label>

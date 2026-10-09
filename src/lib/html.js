@@ -19,6 +19,17 @@ function html(strings, ...vals) {
   return new Raw(out);
 }
 
+// ── Bilingual UI (English default, Chinese via the header switch; no reload) ──
+// t(en, zh): markup with both languages; CSS shows one based on <html class="zh">.
+const t = (en, zh) => html`<span class="i-en">${en}</span><span class="i-zh" lang="zh-CN">${zh ?? en}</span>`;
+// m(en, zh): a bilingual plain-text message (for flash/error strings); render with biText().
+const m = (en, zh) => `⟪${en}⟫⟦${zh}⟧`;
+const enOf = (s) => String(s ?? '').replace(/⟪([^⟫]*)⟫⟦[^⟧]*⟧/g, '$1');
+const zhOf = (s) => String(s ?? '').replace(/⟪[^⟫]*⟫⟦([^⟧]*)⟧/g, '$1');
+const biText = (s) => (String(s ?? '').includes('⟪') ? t(enOf(s), zhOf(s)) : s);
+// Attribute pair for confirm dialogs: data-confirm + data-confirm-zh
+const confirmAttr = (en, zh) => raw(` data-confirm="${esc(en)}" data-confirm-zh="${esc(zh)}"`);
+
 // Formatting helpers
 const fmt = {
   money(n, cur = 'USD', digits = 2) {
@@ -40,4 +51,4 @@ const fmt = {
   },
 };
 
-module.exports = { html, raw, esc, Raw, fmt };
+module.exports = { html, raw, esc, Raw, fmt, t, m, biText, enOf, zhOf, confirmAttr };

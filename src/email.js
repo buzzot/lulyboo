@@ -3,6 +3,7 @@
 // Without RESEND_API_KEY nothing is sent. Emails (which contain codes and links) are written to the
 // server log ONLY when EMAIL_DEV_LOG=true is set explicitly, for local testing. Never enable it in production.
 
+const m = (en, zh) => `⟪${en}⟫⟦${zh}⟧`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const emailConfigured = () => !!process.env.RESEND_API_KEY;
@@ -14,7 +15,7 @@ async function sendEmail(config, { to, subject, text, html }) {
       console.log(`[email:dev] to=${to} subject="${subject}"\n${text}`);
       return { dev: true };
     }
-    const err = new Error('Email is not set up on this portal yet, so we cannot send your code. Please contact Lulyboo. 平台邮件功能尚未开通，无法发送验证码，请联系 Lulyboo。');
+    const err = new Error(m('Email is not set up on this portal yet, so we cannot send your code. Please contact Lulyboo.', '平台邮件功能尚未开通，无法发送验证码，请联系 Lulyboo。'));
     err.status = 503;
     throw err;
   }
@@ -26,7 +27,7 @@ async function sendEmail(config, { to, subject, text, html }) {
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     console.error('Email send failed', res.status, t.slice(0, 300));
-    const err = new Error('We could not send the email. Please try again later. 邮件发送失败，请稍后再试。');
+    const err = new Error(m('We could not send the email. Please try again later.', '邮件发送失败，请稍后再试。'));
     err.status = 502;
     throw err;
   }

@@ -245,3 +245,11 @@ td.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .photo-link input { max-width: 520px; }
 .thumbs button.link { font-size: .8rem; margin-top: 2px; }
 .photo-link small { display: block; margin-top: 4px; }
+
+/* Language switch: both languages are in the page; <html class="zh"> picks Chinese */
+.i-zh { display: none; }
+html.zh .i-zh { display: inline; }
+html.zh .i-en { display: none; }
+.lang-switch { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; background: #fff; }
+.lang-switch button { border: 0; background: none; font: inherit; font-size: .8rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer; color: var(--muted); }
+.lang-switch button[aria-pressed="true"] { background: var(--ink); color: #fff; }

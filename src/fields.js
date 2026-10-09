@@ -1,4 +1,5 @@
 'use strict';
+const m = (en, zh) => `⟪${en}⟫⟦${zh}⟧`; // bilingual message (see lib/html.js)
 // Single source of truth for product fields: DB column, bilingual labels,
 // form input type and the bulk-template column header.
 
@@ -25,7 +26,7 @@ const PRODUCT_FIELDS = [
   { key: 'certifications', group: 'product', en: 'Certifications', cn: '认证（如 CPSIA, ASTM, OEKO-TEX）', type: 'text', csv: 'Certifications' },
   { key: 'hs_code', group: 'product', en: 'HS Code', cn: 'HS 编码', type: 'text', csv: 'HS Code' },
   { key: 'country_of_origin', group: 'product', en: 'Country of Origin', cn: '原产国', type: 'text', csv: 'Country of Origin' },
-  { key: 'dangerous_goods', group: 'product', en: 'Contains Battery / Magnet / Liquid', cn: '是否含电池 / 磁铁 / 液体', type: 'text', csv: 'Contains Battery / Magnet / Liquid', help: 'No, or describe' },
+  { key: 'dangerous_goods', group: 'product', en: 'Contains Battery / Magnet / Liquid', cn: '是否含电池 / 磁铁 / 液体', type: 'text', csv: 'Contains Battery / Magnet / Liquid', help: ['No, or describe', '无，或请说明'] },
 
   // ── Pricing & terms
   { key: 'currency', group: 'pricing', en: 'Currency', cn: '币种', type: 'select', options: CURRENCIES, csv: 'Currency', default: 'USD' },
@@ -39,16 +40,16 @@ const PRODUCT_FIELDS = [
   { key: 'quote_valid_until', group: 'pricing', en: 'Quote Valid Until', cn: '报价有效期至', type: 'date', csv: 'Quote Valid Until' },
 
   // ── Packing & carton
-  { key: 'units_per_inner', group: 'packing', en: 'Units per Inner Pack', cn: '内盒装数（件）', type: 'int', csv: 'Units per Inner Pack' },
-  { key: 'units_per_carton', group: 'packing', en: 'Units per Master Carton', cn: '外箱装数（件/箱）', type: 'int', csv: 'Units per Master Carton', logistics: true },
-  { key: 'carton_l_cm', group: 'packing', en: 'Carton Length (cm)', cn: '外箱长（cm）', short: ['Length', '长'], type: 'number', csv: 'Carton Length (cm)', logistics: true },
-  { key: 'carton_w_cm', group: 'packing', en: 'Carton Width (cm)', cn: '外箱宽（cm）', short: ['Width', '宽'], type: 'number', csv: 'Carton Width (cm)', logistics: true },
-  { key: 'carton_h_cm', group: 'packing', en: 'Carton Height (cm)', cn: '外箱高（cm）', short: ['Height', '高'], type: 'number', csv: 'Carton Height (cm)', logistics: true },
-  { key: 'carton_nw_kg', group: 'packing', en: 'Carton Net Weight (kg)', cn: '外箱净重（kg）', short: ['Net weight', '净重'], type: 'number', csv: 'Carton Net Weight (kg)' },
-  { key: 'carton_gw_kg', group: 'packing', en: 'Carton Gross Weight (kg)', cn: '外箱毛重（kg）', short: ['Gross weight', '毛重'], type: 'number', csv: 'Carton Gross Weight (kg)', logistics: true },
-  { key: 'supplier_qty_20gp', group: 'packing', en: 'Qty per 20GP (units, optional)', cn: '20GP 装柜数量（件，选填）', short: ['20GP', ''], type: 'int', csv: 'Qty per 20GP (units)' },
-  { key: 'supplier_qty_40gp', group: 'packing', en: 'Qty per 40GP (units, optional)', cn: '40GP 装柜数量（件，选填）', short: ['40GP', ''], type: 'int', csv: 'Qty per 40GP (units)' },
-  { key: 'supplier_qty_40hq', group: 'packing', en: 'Qty per 40HQ (units, optional)', cn: '40HQ 装柜数量（件，选填）', short: ['40HQ', ''], type: 'int', csv: 'Qty per 40HQ (units)' },
+  { key: 'units_per_inner', group: 'packing', en: 'Units per Inner Pack', cn: '内盒装数（件）', short: ['Inner pack (pcs)', '内盒（件）'], type: 'int', csv: 'Units per Inner Pack' },
+  { key: 'units_per_carton', group: 'packing', en: 'Units per Master Carton', cn: '外箱装数（件/箱）', short: ['Master carton (pcs)', '外箱（件）'], type: 'int', csv: 'Units per Master Carton', logistics: true },
+  { key: 'carton_l_cm', group: 'packing', en: 'Carton Length (cm)', cn: '外箱长（cm）', short: ['Length (cm)', '长（厘米）'], type: 'number', csv: 'Carton Length (cm)', logistics: true },
+  { key: 'carton_w_cm', group: 'packing', en: 'Carton Width (cm)', cn: '外箱宽（cm）', short: ['Width (cm)', '宽（厘米）'], type: 'number', csv: 'Carton Width (cm)', logistics: true },
+  { key: 'carton_h_cm', group: 'packing', en: 'Carton Height (cm)', cn: '外箱高（cm）', short: ['Height (cm)', '高（厘米）'], type: 'number', csv: 'Carton Height (cm)', logistics: true },
+  { key: 'carton_nw_kg', group: 'packing', en: 'Carton Net Weight (kg)', cn: '外箱净重（kg）', short: ['Net weight (kg)', '净重（千克）'], type: 'number', csv: 'Carton Net Weight (kg)' },
+  { key: 'carton_gw_kg', group: 'packing', en: 'Carton Gross Weight (kg)', cn: '外箱毛重（kg）', short: ['Gross weight (kg)', '毛重（千克）'], type: 'number', csv: 'Carton Gross Weight (kg)', logistics: true },
+  { key: 'supplier_qty_20gp', group: 'packing', en: 'Qty per 20GP (units, optional)', cn: '20GP 装柜数量（件，选填）', short: ['20GP (pcs)', '20GP（件）'], type: 'int', csv: 'Qty per 20GP (units)' },
+  { key: 'supplier_qty_40gp', group: 'packing', en: 'Qty per 40GP (units, optional)', cn: '40GP 装柜数量（件，选填）', short: ['40GP (pcs)', '40GP（件）'], type: 'int', csv: 'Qty per 40GP (units)' },
+  { key: 'supplier_qty_40hq', group: 'packing', en: 'Qty per 40HQ (units, optional)', cn: '40HQ 装柜数量（件，选填）', short: ['40HQ (pcs)', '40HQ（件）'], type: 'int', csv: 'Qty per 40HQ (units)' },
 
   // ── Other
   { key: 'photo_link', group: 'photos', en: 'Photo / Catalog Link', cn: '图片 / 目录链接', type: 'url', csv: 'Photo Link' },
@@ -67,7 +68,7 @@ const PACKING_ROWS = [
   { en: 'Quantity per carton', cn: '装箱数量', keys: ['units_per_inner', 'units_per_carton'] },
   { en: 'Master carton size (cm)', cn: '外箱尺寸（厘米）', keys: ['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], sep: '×' },
   { en: 'Master carton weight (kg)', cn: '外箱重量（千克）', keys: ['carton_nw_kg', 'carton_gw_kg'] },
-  { en: 'Units per container (optional, we also calculate it)', cn: '装柜数量（选填，系统会自动计算）', keys: ['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'] },
+  { en: 'Units per container (optional)', cn: '装柜数量（选填）', keys: ['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'] },
 ];
 
 // Template-only columns that are not stored on the product row.
@@ -141,11 +142,11 @@ function cleanProduct(input, { partial = false } = {}) {
     if (v !== null) {
       if (f.type === 'number' || f.type === 'int') {
         const n = parseNumber(v);
-        if (Number.isNaN(n) || (n !== null && n < 0)) { errors.push(`${f.en}: "${input[f.key]}" is not a valid number`); v = null; }
+        if (Number.isNaN(n) || (n !== null && n < 0)) { errors.push(m(`${f.en}: "${input[f.key]}" is not a valid number`, `${f.cn}：“${input[f.key]}”不是有效数字`)); v = null; }
         else v = f.type === 'int' && n !== null ? Math.round(n) : n;
       } else if (f.type === 'date') {
         const d = parseDate(v);
-        if (Number.isNaN(d)) { errors.push(`${f.en}: "${input[f.key]}" is not a valid date (use YYYY-MM-DD)`); v = null; }
+        if (Number.isNaN(d)) { errors.push(m(`${f.en}: "${input[f.key]}" is not a valid date (use YYYY-MM-DD)`, `${f.cn}：“${input[f.key]}”不是有效日期（格式 YYYY-MM-DD）`)); v = null; }
         else v = d;
       } else {
         v = String(v).slice(0, f.type === 'textarea' ? 5000 : 500);
@@ -158,7 +159,7 @@ function cleanProduct(input, { partial = false } = {}) {
     row[f.key] = v;
   }
   for (const f of PRODUCT_FIELDS) {
-    if (f.required && !partial && !row[f.key]) errors.push(`${f.en} is required`);
+    if (f.required && !partial && !row[f.key]) errors.push(m(`${f.en} is required`, `请填写${f.cn}`));
   }
   return { row, errors };
 }
@@ -171,7 +172,7 @@ function cleanSupplier(input) {
     v = typeof v === 'string' ? v.trim().slice(0, 1000) : null;
     if (v && f.type === 'url' && !/^https?:\/\//i.test(v)) v = `https://${v}`;
     row[f.key] = v || null;
-    if (f.required && !row[f.key]) errors.push(`${f.en} is required`);
+    if (f.required && !row[f.key]) errors.push(m(`${f.en} is required`, `请填写${f.cn}`));
   }
   return { row, errors };
 }
