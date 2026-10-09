@@ -439,3 +439,4 @@ body:not(.has-shell) .top-in { padding: 12px 20px; }
 .ai-check .link { font-weight: 600; }
 label[for="f_description"] { display: flex; justify-content: space-between; align-items: center; }
 .ai-inline { float: none; margin-top: 0; }
+table.product-table td { vertical-align: middle; }

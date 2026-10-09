@@ -378,7 +378,7 @@ function importPage(base) {
     <ol class="steps">
       <li>${t('Download the template:', '下载模板：')} <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Lulyboo_Supplier_Product_Template.xlsx</a></li>
       <li>${t('Fill in your factory details and terms once at the top, then one row per product.', '在顶部填写一次工厂信息和条款，然后每个产品填写一行。')}</li>
-      <li>${t('Upload the file below, then open each product to add photos.', '上传文件后，再逐个产品添加图片。')}</li>
+      <li>${t('Put each product photo in the Photo column of its row (Excel: Insert → Pictures → Place in Cell). Upload the .xlsx below: products and photos are imported together.', '请把每个产品的照片放在该行的“照片”列（Excel：插入 → 图片 → 放入单元格）。在下方上传 .xlsx 文件，产品和照片会一起导入。')}</li>
     </ol>
     <form method="post" enctype="multipart/form-data" action="${base}/import" class="inline-form">
       <input type="file" name="file" accept=".xlsx,.csv,text/csv" required>
@@ -390,24 +390,39 @@ function importPage(base) {
 function importResult(r, base) {
   return html`<section class="card ${r.inserted ? 'ok-card' : 'warn-card'}">
     <h2>${t('Import result', '导入结果')}</h2>
-    <p>${t(html`<strong>${r.inserted}</strong> products added${r.skipped ? ` · ${r.skipped} example/header rows skipped` : ''}`, html`已添加 <strong>${r.inserted}</strong> 个产品${r.skipped ? `，跳过 ${r.skipped} 行示例/标题` : ''}`)}</p>
+    <p>${t(html`<strong>${r.inserted}</strong> products added${r.photos ? ` · ${r.photos} photos imported` : ''}${r.skipped ? ` · ${r.skipped} example/header rows skipped` : ''}`, html`已添加 <strong>${r.inserted}</strong> 个产品${r.photos ? `，导入 ${r.photos} 张照片` : ''}${r.skipped ? `，跳过 ${r.skipped} 行示例/标题` : ''}`)}</p>
     ${r.unknownColumns?.length ? html`<p class="muted">${t('Columns not recognised (ignored):', '无法识别的列（已忽略）：')} ${r.unknownColumns.join(', ')}</p>` : ''}
-    ${r.errors.length ? html`<h3>${t('Rows with problems', '有问题的行')}</h3><ul class="errors">${r.errors.map((e) => html`<li>${t('Row', '第')} ${e.rowNumber}${t('', ' 行')}${e.name ? ` (${e.name})` : ''}: ${biText(e.messages.join('; '))}</li>`)}</ul>` : ''}
+    ${r.errors.length ? html`<h3>${t('Rows with problems', '有问题的行')}</h3><ul class="errors">${r.errors.map((e) => html`<li>${e.rowNumber ? html`${t('Row', '第')} ${e.rowNumber}${t('', ' 行')}${e.name ? ` (${e.name})` : ''}: ` : ''}${biText(e.messages.join('; '))}</li>`)}</ul>` : ''}
     ${base ? html`<p><a href="${base}">${t('View my products', '查看我的产品')} →</a></p>` : ''}
   </section>`;
 }
 
 async function runImport(db, file, supplierId) {
   let parsed;
-  try { parsed = parseUpload(file); } catch (e) { return { inserted: 0, skipped: 0, errors: [{ rowNumber: 0, messages: [e.message] }] }; }
-  let inserted = 0;
+  try { parsed = parseUpload(file); } catch (e) { return { inserted: 0, skipped: 0, photos: 0, errors: [{ rowNumber: 0, messages: [e.message] }] }; }
+  let inserted = 0; let photos = 0;
+  const errors = [...parsed.errors];
   const rows = parsed.products.map((p) => ({ ...p.row, supplier_id: supplierId, source: 'import' }));
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
-    await db.insert('products', chunk);
+    const saved = await db.insert('products', chunk);
     inserted += chunk.length;
+    // Pictures that were embedded in the spreadsheet row go with the product they sit on.
+    for (let k = 0; k < chunk.length; k++) {
+      const src = parsed.products[i + k];
+      if (!src.images || !src.images.length || !saved[k]) continue;
+      try {
+        const r = await saveProductImages(db, { supplierId, productId: saved[k].id, files: src.images, maxImages: MAX_IMAGES });
+        photos += r.saved;
+        if (r.errors.length) errors.push({ rowNumber: src.rowNumber, name: src.row.product_name, messages: r.errors });
+      } catch (e) {
+        errors.push({ rowNumber: src.rowNumber, name: src.row.product_name, messages: [m('Photos could not be saved. Add them on the product page.', '照片保存失败，请在产品页面重新添加。')] });
+      }
+    }
   }
-  return { inserted, skipped: parsed.skipped, errors: parsed.errors, unknownColumns: parsed.unknownColumns };
+  if (parsed.photosUnmatched) errors.push({ rowNumber: 0, messages: [m(`${parsed.photosUnmatched} picture(s) were not on a product row and were ignored.`, `有 ${parsed.photosUnmatched} 张图片不在产品行内，已忽略。`)] });
+  if (parsed.photosUnsupported) errors.push({ rowNumber: 0, messages: [m(`${parsed.photosUnsupported} picture(s) are in an unsupported format (e.g. EMF/WMF) and were ignored. Use JPG or PNG.`, `有 ${parsed.photosUnsupported} 张图片格式不受支持（如 EMF/WMF），已忽略。请使用 JPG 或 PNG。`)] });
+  return { inserted, photos, skipped: parsed.skipped, errors, unknownColumns: parsed.unknownColumns };
 }
 
 module.exports.runImport = runImport;

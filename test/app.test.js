@@ -374,3 +374,30 @@ test('AI helpers on the wizard are gated when AI is off', async () => {
   assert.match(src, /\/portal\/ai\/:what/);
   assert.equal(AI.enabled(), false);
 });
+
+// ── Photos embedded in the bulk template ──────────────────────
+for (const kind of ['floating', 'incell', 'wps']) {
+  test(`bulk template: ${kind} pictures are matched to their product rows`, async () => {
+    const { runImport } = require('../src/routes/supplier');
+    const buffer = fs.readFileSync(path.join(FIX, `template_photos_${kind}.xlsx`));
+    const parsed = parseUpload({ name: 'x.xlsx', buffer });
+    assert.deepEqual(parsed.errors, []);
+    assert.equal(parsed.products.length, 3);
+    assert.equal(parsed.photosFound, kind === 'floating' ? 3 : 2);
+    const byName = Object.fromEntries(parsed.products.map((p) => [p.row.product_name, (p.images || []).length]));
+    assert.equal(byName['Silicone bib'], 1);
+    assert.equal(byName['Pet bowl'], kind === 'floating' ? 2 : 1);
+    assert.equal(byName['No photo item'], 0);
+    assert.deepEqual(parsed.unknownColumns, []);
+
+    const db = seedDb();
+    const sid = (await db.insert('suppliers', { name: 'Test Factory' })).id;
+    const before = (db.tables.product_images ||= []).length;
+    const res = await runImport(db, { name: 'x.xlsx', buffer }, sid);
+    assert.equal(res.inserted, 3);
+    assert.equal(res.photos, kind === 'floating' ? 3 : 2);
+    assert.equal(db.tables.product_images.length - before, res.photos);
+    const bib = db.tables.products.find((p) => p.product_name === 'Silicone bib');
+    assert.equal(db.tables.product_images.filter((i) => i.product_id === bib.id).length, 1);
+  });
+}

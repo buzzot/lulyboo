@@ -44,7 +44,9 @@ function decodeText(buf) {
 }
 
 // ── XLSX ──────────────────────────────────────────────────────
-function unzip(buf) {
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+/** Read selected zip entries as Buffers. pred(name) decides which entries to inflate. */
+function unzipEntries(buf, pred, { maxTotal = 400 * 1024 * 1024 } = {}) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
     if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
@@ -52,7 +54,7 @@ function unzip(buf) {
   if (eocd < 0) throw new Error(m('Not a valid .xlsx file', '不是有效的 .xlsx 文件'));
   const count = buf.readUInt16LE(eocd + 10);
   let p = buf.readUInt32LE(eocd + 16);
-  const files = {};
+  const files = {}; let total = 0;
   for (let k = 0; k < count; k++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error(m('The .xlsx file is damaged', '.xlsx 文件已损坏'));
     const method = buf.readUInt16LE(p + 10);
@@ -61,16 +63,23 @@ function unzip(buf) {
     const off = buf.readUInt32LE(p + 42);
     const name = buf.slice(p + 46, p + 46 + nlen).toString('utf8');
     p += 46 + nlen + xlen + clen;
-    if (!/^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/[^/]+\.xml)$/.test(name)) continue;
+    if (!pred(name)) continue;
     const lnlen = buf.readUInt16LE(off + 26), lxlen = buf.readUInt16LE(off + 28);
     const data = buf.slice(off + 30 + lnlen + lxlen, off + 30 + lnlen + lxlen + csize);
-    if (method === 0) files[name] = data.toString('utf8');
-    else if (method === 8) {
-      const out = zlib.inflateRawSync(data, { maxOutputLength: 64 * 1024 * 1024 });
-      files[name] = out.toString('utf8');
-    }
+    let out;
+    if (method === 0) out = data;
+    else if (method === 8) out = zlib.inflateRawSync(data, { maxOutputLength: MAX_ENTRY_BYTES });
+    else continue;
+    total += out.length;
+    if (total > maxTotal) throw new Error(m('The .xlsx file is too large to read', '.xlsx 文件过大，无法读取'));
+    files[name] = out;
   }
   return files;
+}
+const TEXT_PARTS = /^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/[^/]+\.xml)$/;
+function unzip(buf) {
+  const raw = unzipEntries(buf, (n) => TEXT_PARTS.test(n));
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v.toString('utf8')]));
 }
 const xmlDecode = (s) => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e) => {
   const map = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
@@ -84,17 +93,24 @@ function colIndex(ref) {
   return n - 1;
 }
 
+/** Path of the worksheet we import: the one named "Products", else the first. */
+function targetSheetPath(files) {
+  const wb = files['xl/workbook.xml'];
+  if (!wb) throw new Error(m('Not a valid .xlsx file', '不是有效的 .xlsx 文件'));
+  const sheets = [...wb.matchAll(/<sheet\b[^>]*?name="([^"]*)"[^>]*?r:id="([^"]+)"/g)].map((mm) => ({ name: xmlDecode(mm[1]), rid: mm[2] }));
+  const target = sheets.find((x) => /^products?$/i.test(x.name)) || sheets[0];
+  const rels = files['xl/_rels/workbook.xml.rels'] || '';
+  const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].map((mm) => mm[0]).find((t) => t.includes(`Id="${target.rid}"`));
+  const sheetPath = rel ? rel.match(/Target="([^"]+)"/)[1] : 'worksheets/sheet1.xml';
+  return sheetPath.replace(/^\/?(xl\/)?/, 'xl/');
+}
+
 /** Read the first worksheet (or the one named "Products") into a 2-D array. */
 function parseXlsx(buf) {
   const files = unzip(buf);
   const wb = files['xl/workbook.xml'];
   if (!wb) throw new Error(m('Not a valid .xlsx file', '不是有效的 .xlsx 文件'));
-  const sheets = [...wb.matchAll(/<sheet\b[^>]*?name="([^"]*)"[^>]*?r:id="([^"]+)"/g)].map((m) => ({ name: xmlDecode(m[1]), rid: m[2] }));
-  const target = sheets.find((s) => /^products?$/i.test(s.name)) || sheets[0];
-  const rels = files['xl/_rels/workbook.xml.rels'] || '';
-  const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].map((m) => m[0]).find((t) => t.includes(`Id="${target.rid}"`));
-  let sheetPath = rel ? rel.match(/Target="([^"]+)"/)[1] : 'worksheets/sheet1.xml';
-  sheetPath = sheetPath.replace(/^\/?(xl\/)?/, 'xl/');
+  const sheetPath = targetSheetPath(files);
   const xml = files[sheetPath];
   if (!xml) throw new Error(m('No worksheet found in the .xlsx file', '.xlsx 文件中没有工作表'));
   const shared = files['xl/sharedStrings.xml'] ? [...files['xl/sharedStrings.xml'].matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1])) : [];
@@ -121,6 +137,126 @@ function parseXlsx(buf) {
     rows.push(row);
   }
   return rows;
+}
+
+
+// ── Pictures embedded in the workbook ────────────────────────
+// Three ways a factory can put a picture "in" a product row, all supported:
+//   1. Floating picture (Insert → Picture, then sized over the cell): xl/drawings/*.xml, anchored to cells.
+//   2. Excel 365 "Place in Cell" pictures: cell has vm="n" → xl/metadata.xml → xl/richData/*.
+//   3. WPS Office pictures in cells: =DISPIMG("ID_…",1) → xl/cellimages.xml.
+// Result: [{ row (0-based), col (0-based), y, name, buffer }]
+const RASTER = /\.(png|jpe?g|gif|webp|bmp|tiff?|avif|heic)$/i;
+const MAX_SHEET_PICTURES = 500;
+const posix = require('node:path').posix;
+const attrOf = (tag, name) => { const mm = new RegExp(`\\b${name}="([^"]*)"`).exec(tag); return mm ? xmlDecode(mm[1]) : undefined; };
+const relMap = (xml) => {
+  const out = {};
+  for (const mm of String(xml || '').matchAll(/<Relationship\b[^>]*>/g)) { const id = attrOf(mm[0], 'Id'); const tg = attrOf(mm[0], 'Target'); if (id && tg) out[id] = { target: tg, type: attrOf(mm[0], 'Type') || '' }; }
+  return out;
+};
+const resolveTarget = (fromDir, target) => (target.startsWith('/') ? target.slice(1) : posix.normalize(posix.join(fromDir, target)));
+const tagNum = (xml, tag) => { const mm = new RegExp(`<(?:\\w+:)?${tag}>\\s*(-?\\d+)\\s*<`).exec(xml); return mm ? Number(mm[1]) : 0; };
+
+function extractXlsxImages(buf) {
+  const entries = unzipEntries(buf, (n) => /^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|metadata\.xml|cellimages\.xml|_rels\/cellimages\.xml\.rels|worksheets\/[^/]+\.xml|worksheets\/_rels\/[^/]+\.rels|drawings\/[^/]+\.xml|drawings\/_rels\/[^/]+\.rels|richData\/[^/]+\.xml|richData\/_rels\/[^/]+\.rels|media\/[^/]+)$/.test(n));
+  const text = (n) => (entries[n] ? entries[n].toString('utf8') : '');
+  const sheetPath = targetSheetPath({ 'xl/workbook.xml': text('xl/workbook.xml'), 'xl/_rels/workbook.xml.rels': text('xl/_rels/workbook.xml.rels') });
+  const sheet = text(sheetPath);
+  if (!sheet) return { pictures: [], unsupported: 0 };
+  const pictures = []; let unsupported = 0;
+  const media = (path, meta) => {
+    if (!path || !entries[path]) return;
+    if (!RASTER.test(path)) { unsupported++; return; }
+    if (pictures.length < MAX_SHEET_PICTURES) pictures.push({ ...meta, name: posix.basename(path), buffer: entries[path] });
+  };
+
+  // Row geometry (EMU) for floating pictures
+  const defH = Number((/<sheetFormatPr\b[^>]*\bdefaultRowHeight="([\d.]+)"/.exec(sheet) || [])[1]) || 15;
+  const heights = new Map();
+  for (const rm of sheet.matchAll(/<row\b[^>]*>/g)) {
+    const r = Number(attrOf(rm[0], 'r')); const ht = Number(attrOf(rm[0], 'ht'));
+    if (r && ht) heights.set(r - 1, ht * 12700);
+  }
+  const rowH = (i) => heights.get(i) ?? defH * 12700;
+  const rowTop = (i) => { let y = 0; for (let k = 0; k < i; k++) y += rowH(k); return y; };
+  const rowAt = (y) => { let k = 0; while (k < 20000 && y >= rowH(k)) { y -= rowH(k); k++; } return k; };
+
+  // 1) Floating pictures
+  const sheetDir = posix.dirname(sheetPath);
+  const sheetRels = relMap(text(`${sheetDir}/_rels/${posix.basename(sheetPath)}.rels`));
+  for (const rel of Object.values(sheetRels)) {
+    if (!/\/drawing$/.test(rel.type)) continue;
+    const dPath = resolveTarget(sheetDir, rel.target);
+    const dRels = relMap(text(`${posix.dirname(dPath)}/_rels/${posix.basename(dPath)}.rels`));
+    for (const am of text(dPath).matchAll(/<(?:\w+:)?(twoCellAnchor|oneCellAnchor)\b[^>]*>([\s\S]*?)<\/(?:\w+:)?\1>/g)) {
+      const body = am[2];
+      if (!/<(?:\w+:)?pic\b/.test(body)) continue;
+      const embed = (/<(?:\w+:)?blip\b[^>]*\br:embed="([^"]+)"/.exec(body) || [])[1];
+      const from = /<(?:\w+:)?from>([\s\S]*?)<\/(?:\w+:)?from>/.exec(body);
+      if (!embed || !from || !dRels[embed]) continue;
+      const fRow = tagNum(from[1], 'row'), fCol = tagNum(from[1], 'col');
+      const top = rowTop(fRow) + tagNum(from[1], 'rowOff');
+      let bottom = top;
+      if (am[1] === 'twoCellAnchor') {
+        const to = /<(?:\w+:)?to>([\s\S]*?)<\/(?:\w+:)?to>/.exec(body);
+        if (to) bottom = rowTop(tagNum(to[1], 'row')) + tagNum(to[1], 'rowOff');
+      } else {
+        const ext = /<(?:\w+:)?ext\b[^>]*\bcy="(\d+)"/.exec(body);
+        if (ext) bottom = top + Number(ext[1]);
+      }
+      const y = Math.max(top, (top + bottom) / 2);
+      media(resolveTarget(posix.dirname(dPath), dRels[embed].target), { row: rowAt(y), col: fCol, y });
+    }
+  }
+
+  // Cells that hold pictures (2 and 3)
+  const cells = [];
+  for (const cm of sheet.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    const ref = /\br="([A-Z]+)(\d+)"/.exec(cm[1]);
+    if (!ref) continue;
+    const vm = (/\bvm="(\d+)"/.exec(cm[1]) || [])[1];
+    const dispimg = /DISPIMG\(\s*(?:&quot;|")(ID_[A-Za-z0-9]+)(?:&quot;|")/.exec(cm[2] || '');
+    if (vm || dispimg) cells.push({ col: colIndex(ref[1] + '1'), row: Number(ref[2]) - 1, vm: vm ? Number(vm) : 0, dispimg: dispimg ? dispimg[1] : null });
+  }
+
+  // 2) Excel "Place in Cell": vm → metadata.xml → rich value → richValueRel → media
+  if (cells.some((c) => c.vm)) {
+    const meta = text('xl/metadata.xml');
+    const fut = /<futureMetadata\b[^>]*name="XLRICHVALUE"[^>]*>([\s\S]*?)<\/futureMetadata>/.exec(meta);
+    const futureRvb = fut ? [...fut[1].matchAll(/<bk>([\s\S]*?)<\/bk>/g)].map((b) => Number((/<(?:\w+:)?rvb\b[^>]*\bi="(\d+)"/.exec(b[1]) || [])[1])) : [];
+    const vmeta = /<valueMetadata\b[^>]*>([\s\S]*?)<\/valueMetadata>/.exec(meta);
+    const valueBks = vmeta ? [...vmeta[1].matchAll(/<bk>([\s\S]*?)<\/bk>/g)].map((b) => Number((/<rc\b[^>]*\bv="(\d+)"/.exec(b[1]) || [])[1])) : [];
+    const structs = [...text('xl/richData/rdrichvaluestructure.xml').matchAll(/<s\b[^>]*>([\s\S]*?)<\/s>/g)]
+      .map((b) => [...b[1].matchAll(/<k\b[^>]*\bn="([^"]*)"/g)].map((k) => k[1]));
+    const rvs = [...text('xl/richData/rdrichvalue.xml').matchAll(/<rv\b([^>]*)>([\s\S]*?)<\/rv>/g)]
+      .map((b) => ({ s: Number(attrOf(b[1], 's')) || 0, v: [...b[2].matchAll(/<v\b[^>]*>([\s\S]*?)<\/v>/g)].map((x) => x[1]) }));
+    const relIds = [...text('xl/richData/richValueRel.xml').matchAll(/<rel\b[^>]*\br:id="([^"]+)"/g)].map((x) => x[1]);
+    const rvRels = relMap(text('xl/richData/_rels/richValueRel.xml.rels'));
+    for (const c of cells.filter((x) => x.vm)) {
+      const rv = rvs[futureRvb[valueBks[c.vm - 1]]];
+      if (!rv) continue;
+      const keyIdx = (structs[rv.s] || []).findIndex((k) => /LocalImageIdentifier/i.test(k));
+      const relIdx = Number(rv.v[keyIdx < 0 ? 0 : keyIdx]);
+      const rel = rvRels[relIds[relIdx]];
+      if (rel) media(resolveTarget('xl/richData', rel.target), { row: c.row, col: c.col, y: 0 });
+    }
+  }
+
+  // 3) WPS =DISPIMG("ID_…")
+  if (cells.some((c) => c.dispimg)) {
+    const ci = text('xl/cellimages.xml');
+    const ciRels = relMap(text('xl/_rels/cellimages.xml.rels'));
+    const byId = {};
+    for (const pm of ci.matchAll(/<(?:\w+:)?pic\b[\s\S]*?<\/(?:\w+:)?pic>/g)) {
+      const id = (/<(?:\w+:)?cNvPr\b[^>]*\bname="([^"]+)"/.exec(pm[0]) || [])[1];
+      const emb = (/<(?:\w+:)?blip\b[^>]*\br:embed="([^"]+)"/.exec(pm[0]) || [])[1];
+      if (id && emb && ciRels[emb]) byId[id] = ciRels[emb].target;
+    }
+    for (const c of cells.filter((x) => x.dispimg)) if (byId[c.dispimg]) media(resolveTarget('xl', byId[c.dispimg]), { row: c.row, col: c.col, y: 0 });
+  }
+  pictures.sort((a, b) => a.row - b.row || a.col - b.col || a.y - b.y);
+  return { pictures, unsupported };
 }
 
 // ── Mapping ───────────────────────────────────────────────────
@@ -226,7 +362,7 @@ function mapRows(rows) {
   }
   const terms = readTerms(rows, headerIdx);
   const unknownColumns = rows[headerIdx]
-    .filter((h, i) => String(h).trim() && !colKeys[i] && !IGNORED.has(norm(h)) && !/picture|image|photo|图片/i.test(h))
+    .filter((h, i) => String(h).trim() && !colKeys[i] && !IGNORED.has(norm(h)) && !/picture|image|photo|图片|照片/i.test(h))
     .map(String);
 
   const products = []; const errors = []; let skipped = 0;
@@ -256,12 +392,34 @@ function mapRows(rows) {
   return { products, errors, unknownColumns, skipped };
 }
 
+/** Attach pictures found in the workbook to the product rows they sit on (rowNumber = spreadsheet row). */
+function attachPictures(res, buf) {
+  res.photosFound = 0; res.photosUnmatched = 0; res.photosUnsupported = 0;
+  if (!res.products.length) return;
+  let found;
+  try { found = extractXlsxImages(buf); } catch { return; } // pictures are optional: never fail the import over them
+  res.photosUnsupported = found.unsupported;
+  const byRow = new Map();
+  for (const pic of found.pictures) { const k = pic.row + 1; (byRow.get(k) || byRow.set(k, []).get(k)).push(pic); }
+  const first = Math.min(...res.products.map((p) => p.rowNumber));
+  for (const p of res.products) {
+    const pics = byRow.get(p.rowNumber) || [];
+    if (pics.length) p.images = pics.map((x, i) => ({ name: `row${p.rowNumber}-${i + 1}-${x.name}`, type: '', buffer: x.buffer }));
+    res.photosFound += pics.length; byRow.delete(p.rowNumber);
+  }
+  for (const [k, list] of byRow) if (k > first) res.photosUnmatched += list.length; // pictures placed outside any product row
+}
+
 function parseUpload(file) {
   const name = (file.name || '').toLowerCase();
   const isZip = file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
-  if (name.endsWith('.xlsx') || isZip) return mapRows(parseXlsx(file.buffer));
+  if (name.endsWith('.xlsx') || isZip) {
+    const res = mapRows(parseXlsx(file.buffer));
+    attachPictures(res, file.buffer);
+    return res;
+  }
   if (name.endsWith('.xls')) throw new Error(m('Old .xls format is not supported. Save as .xlsx or CSV UTF-8.', '不支持旧版 .xls 格式，请另存为 .xlsx 或 CSV UTF-8。'));
   return mapRows(parseCsv(decodeText(file.buffer)));
 }
 
-module.exports = { parseCsv, parseXlsx, mapRows, parseUpload, decodeText };
+module.exports = { parseCsv, parseXlsx, extractXlsxImages, mapRows, parseUpload, decodeText };
