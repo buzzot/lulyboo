@@ -245,4 +245,17 @@ async function matchCategory({ category, items }) {
   return callTool({ tool: CATEGORY_TOOL, content, maxTokens: 6000 });
 }
 
-module.exports = { enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };
+async function draftDescription({ fields }) {
+  const tool = { name: 'draft_description', description: 'Write a factual product description for a wholesale catalog.',
+    input_schema: { type: 'object', properties: { description: { type: 'string', description: '2-4 plain sentences, no marketing fluff, no invented specs' } }, required: ['description'] } };
+  const { result } = await callTool({ tool, maxTokens: 600, content: `Draft a short factual product description from only these supplier-provided details. Do not invent specifications.\n${JSON.stringify(fields)}` });
+  return String(result.description || '').trim();
+}
+async function checkListing({ fields, photos }) {
+  const tool = { name: 'listing_check', description: 'Pre-submission check of a factory quotation.',
+    input_schema: { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' }, description: 'Concrete missing/inconsistent items the factory should fix, max 6' }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] } };
+  const { result } = await callTool({ tool, maxTokens: 800, content: `Check this quotation before submission (missing data, inconsistent carton/weight numbers, unrealistic prices, missing compliance info). Photos uploaded: ${photos}.\n${JSON.stringify(fields)}` });
+  return { ok: !!result.ok, issues: (result.issues || []).slice(0, 6).map(String) };
+}
+
+module.exports = { draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };

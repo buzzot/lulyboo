@@ -2,12 +2,14 @@
 // Supplier-facing pages under /portal. Requires a signed-in supplier user (see supplier-auth.js).
 const { html, raw, fmt, t, m, biText, confirmAttr } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
+const { icon } = require('../views/icons');
 const { page, productFields, groupFields, photoSection } = require('../views/layout');
 const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = require('../fields');
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
 const { saveProductImages, deleteImages } = require('../images');
 const { parseUpload } = require('../importer');
+const ai = require('../ai');
 
 const LOCKED = ['Selected', 'Rejected'];
 const MAX_IMAGES = 10;
@@ -17,12 +19,12 @@ function nav(active) {
   return {
     home: b, label: t('Supplier Portal', '供应商平台'), lang: true,
     items: [
-      { href: b, label: t('My products', '我的产品'), active: active === 'home' },
-      { href: `${b}/products/new`, label: t('Add product', '新增产品'), active: active === 'new' },
-      { href: `${b}/import`, label: t('Bulk upload', '批量上传'), active: active === 'import' },
-      { href: `${b}/profile`, label: t('Company', '公司信息'), active: active === 'profile' },
-      { href: `${b}/account`, label: t('Account', '账号'), active: active === 'account' },
-      { href: '/logout', label: t('Sign out', '退出') },
+      { href: b, icon: 'package', label: t('My products', '我的产品'), active: active === 'home' },
+      { href: `${b}/products/new`, icon: 'plus', label: t('Add product', '新增产品'), active: active === 'new' },
+      { href: `${b}/import`, icon: 'upload', label: t('Bulk upload', '批量上传'), active: active === 'import' },
+      { href: `${b}/profile`, icon: 'building', label: t('Company', '公司信息'), active: active === 'profile' },
+      { href: `${b}/account`, icon: 'user', label: t('Account', '账号'), active: active === 'account' },
+      { href: '/logout', out: true, label: t('Sign out', '退出') },
     ],
   };
 }
@@ -50,29 +52,67 @@ module.exports = function supplierRoutes(router, { db, config }) {
   }
   const strip = (p) => Object.fromEntries(Object.entries(p).filter(([k]) => SUPPLIER_COLUMNS.includes(k)));
 
-  // ── Dashboard
+  // ── Dashboard: product catalog (stats, status tabs, search, category filter)
+  const COMPLETE_KEYS = ['product_name', 'category', 'description', 'materials', 'unit_price', 'moq', 'production_lead_days', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg'];
+  const stateOf = (p) => (p.is_draft ? 'draft' : p.status === 'Selected' ? 'selected' : p.status === 'Rejected' ? 'closed' : p.status === 'New' || !p.status ? 'submitted' : 'review');
+  const STATE_LABEL = { draft: ['Draft', '草稿'], submitted: ['Submitted', '已提交'], review: ['Under review', '审核中'], selected: ['Selected', '已选中'], closed: ['Closed', '已关闭'] };
+  const stateIcon = { draft: 'filePen', submitted: 'check', review: 'clock', selected: 'checkCheck', closed: 'x' };
+  const badge = (st) => html`<span class="status-badge st-${st}">${icon(stateIcon[st], 12)}${t(STATE_LABEL[st][0], STATE_LABEL[st][1])}</span>`;
+  const pctOf = (p, nImgs) => Math.round(((COMPLETE_KEYS.filter((k) => p[k] !== null && p[k] !== undefined && String(p[k]).trim() !== '').length + (nImgs || p.photo_link ? 1 : 0)) / (COMPLETE_KEYS.length + 1)) * 100);
+
   router.get('/portal', A(async (req, res) => {
-    const products = await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc', select: 'id,product_name,supplier_sku,category,unit_price,currency,moq,created_at,updated_at,status,is_draft' });
-    const imgs = await imagesFor(db, products.map((p) => p.id));
-    const urls = await db.storage.signedUrls(products.map((p) => imgs[p.id]?.[0]?.thumb_path));
+    const all = await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc' });
+    const imgs = await imagesFor(db, all.map((p) => p.id));
+    const rows = all.map((p) => ({ ...p, st: stateOf(p), pct: pctOf(p, imgs[p.id]?.length) }));
+    const count = (k) => rows.filter((r) => r.st === k).length;
+    const tab = ['draft', 'submitted', 'review', 'selected'].includes(req.query.status) ? req.query.status : 'all';
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const cat = String(req.query.category || '');
+    const shown = rows.filter((r) => (tab === 'all' || r.st === tab) && (!cat || r.category === cat) && (!q || `${r.product_name} ${r.supplier_sku || ''} ${r.category || ''}`.toLowerCase().includes(q)));
+    const cats = [...new Set(rows.map((r) => r.category).filter(Boolean))].sort();
+    const urls = await db.storage.signedUrls(shown.map((p) => imgs[p.id]?.[0]?.thumb_path));
+    const avg = rows.length ? Math.round(rows.reduce((a, r) => a + r.pct, 0) / rows.length) : 0;
+    const tabHref = (k) => { const u = new URLSearchParams(); if (k !== 'all') u.set('status', k); if (q) u.set('q', q); if (cat) u.set('category', cat); const x = u.toString(); return `${req.base}${x ? `?${x}` : ''}`; };
+    const TABS = [['all', 'All', '全部', rows.length], ['draft', 'Drafts', '草稿', count('draft')], ['submitted', 'Submitted', '已提交', count('submitted')], ['review', 'Under review', '审核中', count('review')], ['selected', 'Selected', '已选中', count('selected')]];
     res.html(page({
       title: 'My products', nav: nav('home'), flash: takeFlash(req, res), req,
       body: html`
-      <section class="head-row">
-        <div><h1>${req.supplier.name}</h1><p class="muted">${t('Submit your products and prices to Lulyboo.', '向 Lulyboo 提交您的产品和报价。')}</p></div>
-        <div class="actions"><a class="btn" href="${req.base}/products/new">+ ${t('Add product', '新增产品')}</a><a class="btn ghost" href="${req.base}/import">${t('Bulk upload', '批量上传')}</a></div>
-      </section>
-      ${products.length ? html`<div class="table-wrap"><table class="list">
-        <thead><tr><th></th><th>${t('Product', '产品')}</th><th>SKU</th><th>${t('Category', '类别')}</th><th class="r">${t('Price', '单价')}</th><th class="r">MOQ</th><th>${t('Updated', '更新')}</th></tr></thead>
-        <tbody>${products.map((p) => html`<tr>
-          <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="">` : html`<span class="noimg">${t('No photo', '无图')}</span>`}</td>
-          <td><a href="${req.base}/products/${p.id}">${p.product_name}</a>${p.is_draft ? html` <span class="pill s-draft">${t('Draft', '草稿')}</span>` : ''}</td>
-          <td>${p.supplier_sku || '—'}</td><td>${p.category || '—'}</td>
-          <td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.num(p.moq)}</td>
-          <td>${fmt.date(p.updated_at)}</td></tr>`)}</tbody></table></div>`
-        : html`<section class="card empty"><h2>${t('No products yet', '暂无产品')}</h2>
+      <div class="page-heading">
+        <div><div class="eyebrow">${t('Product catalog', '产品目录')}</div><h1>${t('My products', '我的产品')}</h1>
+          <p class="muted">${t('Submit your products and prices to Lulyboo.', '向 Lulyboo 提交您的产品和报价。')}</p></div>
+        <div class="actions"><a class="btn ghost" href="${req.base}/import">${icon('upload', 16)}${t('Bulk upload', '批量上传')}</a><a class="btn" href="${req.base}/products/new">${icon('plus', 16)}${t('Add product', '新增产品')}</a></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><span class="stat-ico">${icon('package', 18)}</span><div><b>${rows.length}</b><small>${t('Total products', '产品总数')}</small></div></div>
+        <div class="stat-card"><span class="stat-ico amber">${icon('filePen', 18)}</span><div><b>${count('draft')}</b><small>${t('Drafts', '草稿')}</small></div></div>
+        <div class="stat-card"><span class="stat-ico blue">${icon('clock', 18)}</span><div><b>${count('submitted') + count('review')}</b><small>${t('Submitted / in review', '已提交 / 审核中')}</small></div></div>
+        <div class="stat-card"><span class="stat-ico green">${icon('checkCheck', 18)}</span><div><b>${count('selected')}</b><small>${t('Selected by Lulyboo', '已被选中')}</small></div></div>
+      </div>
+      ${rows.length ? html`
+      <section class="catalog-section">
+        <div class="catalog-tabs">${TABS.map(([k, en, zh, n]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'on' : ''}">${t(en, zh)}<em>${n}</em></a>`)}</div>
+        <form class="catalog-tools" method="get" action="${req.base}">
+          ${tab !== 'all' ? html`<input type="hidden" name="status" value="${tab}">` : ''}
+          <label class="search">${icon('search', 16)}<input type="search" name="q" value="${req.query.q || ''}" placeholder="Search name or SKU…" aria-label="Search"></label>
+          <select name="category" aria-label="Category" data-autosubmit><option value="">${'All categories'}</option>${cats.map((c) => html`<option ${c === cat ? raw('selected') : ''}>${c}</option>`)}</select>
+          <button class="btn ghost small" type="submit">${t('Search', '搜索')}</button>
+          <span class="avg">${t('Avg. completeness', '平均完整度')} <b>${avg}%</b></span>
+        </form>
+        ${shown.length ? html`<div class="table-wrap"><table class="list product-table">
+          <thead><tr><th></th><th>${t('Product', '产品')}</th><th>${t('Category', '类别')}</th><th class="r">${t('Price', '单价')}</th><th class="r">MOQ</th><th>${t('Status', '状态')}</th><th>${t('Completeness', '完整度')}</th><th>${t('Updated', '更新')}</th></tr></thead>
+          <tbody>${shown.map((p) => html`<tr>
+            <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="">` : html`<span class="noimg">${icon('camera', 18)}</span>`}</td>
+            <td><a class="pname" href="${req.base}/products/${p.id}">${p.product_name}</a><div class="sub">${p.supplier_sku || ''}</div></td>
+            <td>${p.category || '—'}</td>
+            <td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.num(p.moq)}</td>
+            <td>${badge(p.st)}</td>
+            <td><div class="meter" title="${p.pct}%"><i style="width:${p.pct}%"></i></div><span class="sub">${p.pct}%</span></td>
+            <td>${fmt.date(p.updated_at)}</td></tr>`)}</tbody></table></div>`
+          : html`<div class="empty-sm">${t('No products match this filter.', '没有符合条件的产品。')}</div>`}
+      </section>`
+        : html`<section class="card empty">${icon('package', 30)}<h2>${t('No products yet', '暂无产品')}</h2>
           <p>${t('Add products one at a time with photos, or upload our Excel template with many products at once.', '可逐个添加产品（含图片），或使用 Excel 模板批量上传。')}</p>
-          <p><a class="btn" href="${req.base}/products/new">${t('Add product', '新增产品')}</a> <a class="btn ghost" href="/static/Lulyboo_Supplier_Product_Template.xlsx">${t('Download template', '下载模板')}</a></p></section>`}`,
+          <p><a class="btn" href="${req.base}/products/new">${icon('plus', 16)}${t('Add product', '新增产品')}</a> <a class="btn ghost" href="/static/Lulyboo_Supplier_Product_Template.xlsx">${icon('download', 16)}${t('Download template', '下载模板')}</a></p></section>`}`,
     }));
   }));
 
@@ -126,7 +166,8 @@ module.exports = function supplierRoutes(router, { db, config }) {
         <section class="wstep" data-step="0" aria-label="Photos">
           ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, deleteAction: (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
         </section>
-        <section class="wstep" data-step="1">${groupFields(product, 'product', opts)}</section>
+        <section class="wstep" data-step="1">${groupFields(product, 'product', opts)}
+          <button type="button" class="btn ghost sm ai-btn" data-ai="describe" hidden>${icon('filePen', 14)} <span class="i-en">Draft with AI</span><span class="i-zh">AI 生成描述</span></button></section>
         <section class="wstep" data-step="2">${groupFields(product, 'pricing', opts)}</section>
         <section class="wstep" data-step="3">${groupFields(product, 'packing', opts)}</section>
         <section class="wstep" data-step="4">
@@ -134,6 +175,7 @@ module.exports = function supplierRoutes(router, { db, config }) {
           <div class="review-box" data-review data-photos="${images.length}">
             <h2>${t('Ready for review?', '准备好提交了吗？')}</h2>
             <ul class="checklist" data-checklist></ul>
+            <div class="ai-check"><button type="button" class="link" data-ai="check" hidden><span class="i-en">Check with AI ↗</span><span class="i-zh">AI 检查 ↗</span></button><ul class="checklist" data-ai-result></ul></div>
             <dl class="summary">
               <div><dt>${t('Product', '产品')}</dt><dd data-sum="product_name">—</dd></div>
               <div><dt>${t('Category', '类别')}</dt><dd data-sum="category">—</dd></div>
@@ -170,6 +212,35 @@ module.exports = function supplierRoutes(router, { db, config }) {
     return { action, row, errors: errs };
   }
   const stepOf = (fields) => Math.min(Math.max(Number(fields.step) || 0, 0), 4);
+
+  // AI helpers used by the wizard ("Draft with AI", "Check with AI"). Per-user hourly cap.
+  const aiHits = new Map();
+  function aiGate(req) {
+    if (!ai.enabled()) throw new HttpError(503, m('AI is not enabled yet.', 'AI 功能尚未启用。'));
+    const k = req.user.id, now = Date.now();
+    const arr = (aiHits.get(k) || []).filter((x) => now - x < 3600_000);
+    if (arr.length >= 30) throw new HttpError(429, m('Too many AI requests. Try again later.', 'AI 请求过多，请稍后再试。'));
+    arr.push(now); aiHits.set(k, arr);
+  }
+  const AI_KEYS = ['product_name', 'supplier_sku', 'category', 'subcategory', 'description', 'materials', 'product_size_cm', 'unit_net_weight_kg', 'packaging_type', 'certifications', 'hs_code', 'country_of_origin', 'brand', 'currency', 'unit_price', 'incoterm', 'moq', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_nw_kg', 'carton_gw_kg'];
+  const aiFields = (f) => Object.fromEntries(AI_KEYS.filter((k) => f[k] && String(f[k]).trim()).map((k) => [k, String(f[k]).slice(0, 500)]));
+  router.post('/portal/ai/:what', A(async (req, res) => {
+    const f = (await parseForm(req, { limitBytes: 200_000 }).catch(() => ({ fields: {} }))).fields;
+    const fields = aiFields(f);
+    try {
+      aiGate(req);
+      if (req.params.what === 'describe') {
+        if (!fields.product_name) throw new HttpError(400, m('Enter a product name first.', '请先填写产品名称。'));
+        return res.json({ ok: true, description: await ai.draftDescription({ fields }) });
+      }
+      if (req.params.what === 'check') { const r = await ai.checkListing({ fields, photos: Number(f.photos) || 0 }); return res.json({ ok: true, issues: r.issues }); }
+    } catch (e) {
+      if (!(e instanceof HttpError)) console.error('AI helper failed:', e.message);
+      const st = e instanceof HttpError ? e.status : 502;
+      return res.json({ ok: false, message: e instanceof HttpError ? e.message : m('AI is unavailable right now. Please try again.', 'AI 暂时不可用，请稍后重试。') }, st);
+    }
+    throw new HttpError(404, 'Not found');
+  }));
 
   router.get('/portal/products/new', A(async (req, res) => {
     const ctx = await getCtx(db);

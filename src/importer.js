@@ -137,7 +137,7 @@ function buildHeaderMap() {
     'unitpriceusd': 'unit_price', 'price': 'unit_price', 'fobprice': 'unit_price', '单价usd': 'unit_price',
     'material': 'materials', 'productsizecm': 'product_size_cm', 'packingpcsctn': 'units_per_carton', 'pcsctn': 'units_per_carton',
     'cartonsizel': 'carton_l_cm', 'productionleadtimedays': 'production_lead_days', 'qtyper40hqpcs': 'supplier_qty_40hq',
-    'casepack': 'units_per_carton', 'moq': 'moq', 'description': 'description', 'factorynotes': 'factory_notes',
+    'casepack': 'units_per_carton', 'moq': 'moq', 'description': 'description', 'brand': 'brand', '品牌': 'brand', 'factorynotes': 'factory_notes',
     // Lulyboo Factory Quotation Request form (EN / 中文 sheets)
     'productsize': 'product_size_cm', 'packing': 'units_per_carton', 'hscode': 'hs_code', 'qtyper40hq': 'supplier_qty_40hq',
     '货号sku': 'supplier_sku', '产品尺寸cm': 'product_size_cm', '产品描述': 'description', '材质': 'materials', '生产交期天': 'production_lead_days',

@@ -4,6 +4,7 @@ const { PRODUCT_FIELDS, GROUPS, PACKING_ROWS } = require('../fields');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { icon } = require('./icons');
 
 // Version stamp for CSS/JS: changes whenever those files change, so browsers fetch the new version after a deploy.
 const ASSET_V = crypto.createHash('sha1')
@@ -17,23 +18,61 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
   const isAdmin = admin || !!nav?.admin;
   const zh = !isAdmin && langOf(req) === 'zh';
   const showSwitch = !isAdmin;
-  return html`<!doctype html>
-<html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  const sw = showSwitch ? html`<div class="lang-switch" role="group" aria-label="Language / 语言">
+    <button type="button" data-lang="en" aria-pressed="${zh ? 'false' : 'true'}">EN</button><button type="button" data-lang="zh" aria-pressed="${zh ? 'true' : 'false'}">中文</button>
+  </div>` : '';
+  const head = html`<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · Lulyboo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap">
 <link rel="stylesheet" href="/static/style.css?v=${ASSET_V}">
-<script src="/static/app.js?v=${ASSET_V}" defer></script>
-</head><body>
+<script src="/static/app.js?v=${ASSET_V}" defer></script>`;
+  const flashHtml = flash ? html`<div class="flash ${flash.type}">${biText(flash.msg)}</div>` : '';
+
+  // Supplier portal: sidebar + topbar shell
+  if (nav && !isAdmin && req?.supplier) {
+    const main = nav.items.filter((i) => !i.out);
+    const out = nav.items.find((i) => i.out);
+    const co = req.supplier.name || 'Lulyboo';
+    const initial = String(co).trim().charAt(0).toUpperCase() || 'L';
+    const who = req.user?.name || req.user?.email || '';
+    return html`<!doctype html>
+<html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>${head}</head><body class="has-shell">
+<div class="portal-layout">
+  <aside class="portal-sidebar">
+    <a class="sb-brand" href="${nav.home}"><span class="sb-logo">L</span><span><b>Lulyboo</b><small>${t('SUPPLIER PORTAL', '供应商平台')}</small></span></a>
+    <div class="sb-workspace"><span class="sb-avatar">${initial}</span><span class="sb-co"><b>${co}</b><small>${t('Company account', '公司账号')}</small></span></div>
+    <nav class="sb-nav">
+      ${main.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.icon ? icon(i.icon, 17) : ''}<span>${i.label}</span></a>`)}
+    </nav>
+    <div class="sb-foot">
+      <div class="sb-user"><span class="sb-avatar sm">${String(who).charAt(0).toUpperCase() || 'U'}</span><span class="sb-co"><b>${req.user?.name || '—'}</b><small>${req.user?.email || ''}</small></span></div>
+      ${out ? html`<a class="sb-out" href="${out.href}">${icon('logout', 16)}<span>${out.label}</span></a>` : ''}
+    </div>
+  </aside>
+  <div class="portal-main">
+    <header class="topbar">
+      <div class="crumbs"><span>${co}</span>${icon('chevronRight', 14)}<b>${nav.items.find((i) => i.active)?.label || title}</b></div>
+      ${sw}
+    </header>
+    <main class="page-content">
+      ${flashHtml}
+      ${body}
+    </main>
+  </div>
+</div></body></html>`;
+  }
+
+  return html`<!doctype html>
+<html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>${head}</head><body>
 <header class="top"><div class="top-in ${wide ? 'wide' : ''}">
-  <a class="brand" href="${nav?.home || '/'}">Lulyboo <span>${nav?.label || t('Supplier Portal', '供应商平台')}</span></a>
+  <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo <span>${nav?.label || t('Supplier Portal', '供应商平台')}</span></a>
   ${nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
-  ${showSwitch ? html`<div class="lang-switch" role="group" aria-label="Language / 语言">
-    <button type="button" data-lang="en" aria-pressed="${zh ? 'false' : 'true'}">EN</button><button type="button" data-lang="zh" aria-pressed="${zh ? 'true' : 'false'}">中文</button>
-  </div>` : ''}
+  ${sw}
 </div></header>
 <main class="${wide ? 'wide' : ''}">
-${flash ? html`<div class="flash ${flash.type}">${biText(flash.msg)}</div>` : ''}
+${flashHtml}
 ${body}
 </main>
 </body></html>`;

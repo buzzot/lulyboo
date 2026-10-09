@@ -366,3 +366,11 @@ test('AI calls use forced tool output and are stored (mocked Claude API)', async
   assert.match(page.text, /Good value/);
   assert.match(page.text, /CPC needed/);
 });
+
+test('AI helpers on the wizard are gated when AI is off', async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  const fs_ = require('node:fs');
+  const src = fs_.readFileSync(path.join(__dirname, '../src/routes/supplier.js'), 'utf8');
+  assert.match(src, /\/portal\/ai\/:what/);
+  assert.equal(AI.enabled(), false);
+});

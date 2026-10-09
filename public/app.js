@@ -17,6 +17,9 @@
     });
   });
 
+  // Auto-submit filter selects
+  document.querySelectorAll('select[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form.submit(); }); });
+
   // Confirm before destructive submits
   document.addEventListener('submit', function (e) {
     var f = e.target;
@@ -227,6 +230,48 @@
         e.preventDefault(); if (valid(cur)) show(cur + 1, true);
       }
     });
+    // AI helpers (buttons stay hidden if the server has no AI key: first call reports it)
+    var aiBody = function () {
+      var p = new URLSearchParams();
+      Array.prototype.forEach.call(wiz.querySelectorAll('input:not([type=file]):not([type=hidden]), select, textarea'), function (el) { if (el.name && el.value) p.append(el.name, el.value); });
+      var box = wiz.querySelector('[data-review]');
+      var files = wiz.querySelector('input[name=images]');
+      p.append('photos', String((box ? parseInt(box.getAttribute('data-photos'), 10) || 0 : 0) + (files && files.files ? files.files.length : 0)));
+      return p.toString();
+    };
+    var aiCall = function (what, btn) {
+      btn.disabled = true; btn.classList.add('busy');
+      return fetch('/portal/ai/' + what, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: aiBody(), credentials: 'same-origin' })
+        .then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+        .catch(function () { return { ok: false }; })
+        .then(function (d) { btn.disabled = false; btn.classList.remove('busy'); return d; });
+    };
+    var PL = function (en, zh) { return document.documentElement.classList.contains('zh') ? zh : en; };
+    var bi = function (m) { var mm = /⟪([\s\S]*?)⟫⟦([\s\S]*?)⟧/.exec(m || ''); return mm ? PL(mm[1], mm[2]) : m; };
+    var msgOf = function (d) { return d && d.message ? bi(d.message) : PL('AI is unavailable right now.', 'AI 暂时不可用。'); };
+    var desc = wiz.querySelector('#f_description');
+    var dBtn = wiz.querySelector('[data-ai="describe"]');
+    if (desc && dBtn) {
+      var lab = wiz.querySelector('label[for="f_description"]');
+      (lab || desc).insertAdjacentElement(lab ? 'beforeend' : 'beforebegin', dBtn); dBtn.hidden = false; dBtn.classList.add('ai-inline');
+      dBtn.addEventListener('click', function () {
+        aiCall('describe', dBtn).then(function (d) {
+          if (d && d.ok && d.description) { if (!desc.value || confirm(PL('Replace the current description?', '替换当前描述？'))) desc.value = d.description; }
+          else alert(msgOf(d));
+        });
+      });
+    }
+    var cBtn = wiz.querySelector('[data-ai="check"]');
+    if (cBtn) {
+      cBtn.hidden = false;
+      cBtn.addEventListener('click', function () {
+        var out = wiz.querySelector('[data-ai-result]');
+        aiCall('check', cBtn).then(function (d) {
+          if (!d || !d.ok) { out.innerHTML = '<li class="miss">' + esc(msgOf(d)) + '</li>'; return; }
+          out.innerHTML = d.issues.length ? d.issues.map(function (x) { return '<li class="miss">' + esc(x) + '</li>'; }).join('') : '<li class="ok">' + L('AI found nothing to fix.', 'AI 未发现需要修改的地方。') + '</li>';
+        });
+      });
+    }
     show(parseInt(wiz.getAttribute('data-start'), 10) || 0);
   }
 })();

@@ -158,6 +158,10 @@ drop trigger if exists products_touch on public.products;
 create trigger products_touch before update on public.products
 for each row execute function public.touch_updated_at();
 
+alter table public.products add column if not exists brand text;
+alter table public.products add column if not exists is_draft boolean not null default false;
+alter table public.products add column if not exists submitted_at timestamptz;
+
 -- ───────────────────────── Images ─────────────────────────
 create table if not exists public.product_images (
   id           uuid primary key default gen_random_uuid(),

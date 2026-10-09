@@ -26,6 +26,7 @@ const PRODUCT_FIELDS = [
   { key: 'certifications', group: 'product', en: 'Certifications', cn: '认证（如 CPSIA, ASTM, OEKO-TEX）', type: 'text', csv: 'Certifications' },
   { key: 'hs_code', group: 'product', en: 'HS Code', cn: 'HS 编码', type: 'text', csv: 'HS Code' },
   { key: 'country_of_origin', group: 'product', en: 'Country of Origin', cn: '原产国', type: 'text', csv: 'Country of Origin' },
+  { key: 'brand', group: 'product', en: 'Brand (optional)', cn: '品牌（选填）', type: 'text', csv: 'Brand' },
   { key: 'dangerous_goods', group: 'product', en: 'Contains Battery / Magnet / Liquid', cn: '是否含电池 / 磁铁 / 液体', type: 'text', csv: 'Contains Battery / Magnet / Liquid', help: ['No, or describe', '无，或请说明'] },
 
   // ── Pricing & terms
