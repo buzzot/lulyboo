@@ -39,7 +39,8 @@ async function imagesFor(db, productIds) {
 }
 
 /** All products with supplier names and analysis. Fine for thousands of rows. */
-async function loadAnalyzed(db, { filters = {} } = {}) {
+async function loadAnalyzed(db, { filters = {}, includeDrafts = false } = {}) {
+  if (!includeDrafts) filters = { ...filters, is_draft: false };
   const [ctx, products, suppliers] = await Promise.all([
     getCtx(db),
     db.list('products', { filters, order: 'created_at.desc' }),

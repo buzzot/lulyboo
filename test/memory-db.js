@@ -33,7 +33,7 @@ function createMemoryDb(seed = {}) {
   };
   const defaults = {
     suppliers: () => ({ crm_status: 'Prospect', active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
-    products: () => ({ status: 'New', target_stores: [], currency: 'USD', source: 'form', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+    products: () => ({ status: 'New', is_draft: false, target_stores: [], currency: 'USD', source: 'form', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
     supplier_activities: () => ({ done: false, type: 'Note', activity_date: new Date().toISOString().slice(0, 10), created_at: new Date().toISOString() }),
     product_images: () => ({ sort: 0, created_at: new Date().toISOString() }),
     ai_analyses: () => ({ created_at: new Date().toISOString(), product_ids: [] }),

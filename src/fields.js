@@ -86,7 +86,7 @@ const SUPPLIER_FIELDS = [
 
 const REVIEW_FIELDS = ['status', 'target_stores', 'our_wholesale_usd', 'our_retail_usd', 'duty_rate_pct', 'score', 'review_notes'];
 
-const SUPPLIER_COLUMNS = ['id', 'supplier_id', 'created_at', 'updated_at', 'source', ...PRODUCT_FIELDS.map((f) => f.key)];
+const SUPPLIER_COLUMNS = ['id', 'supplier_id', 'created_at', 'updated_at', 'source', 'is_draft', 'submitted_at', ...PRODUCT_FIELDS.map((f) => f.key)];
 
 // ── Value parsing ──────────────────────────────────────────────
 

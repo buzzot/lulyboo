@@ -148,6 +148,9 @@ create table if not exists public.products (
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now()
 );
+-- Drafts: saved by the supplier but not yet submitted; hidden from the admin views until submitted.
+alter table public.products add column if not exists is_draft boolean not null default false;
+alter table public.products add column if not exists submitted_at timestamptz;
 create index if not exists products_supplier_idx on public.products(supplier_id);
 create index if not exists products_status_idx   on public.products(status);
 create index if not exists products_category_idx on public.products(category);

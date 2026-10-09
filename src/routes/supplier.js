@@ -2,7 +2,7 @@
 // Supplier-facing pages under /portal. Requires a signed-in supplier user (see supplier-auth.js).
 const { html, raw, fmt, t, m, biText, confirmAttr } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
-const { page, productFields, photoSection } = require('../views/layout');
+const { page, productFields, groupFields, photoSection } = require('../views/layout');
 const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = require('../fields');
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
@@ -27,6 +27,8 @@ function nav(active) {
   };
 }
 const photosMsg = (n, plus) => (n ? ` (${plus ? '+' : ''}${n} ${n > 1 ? 'photos' : 'photo'})` : '');
+const draftMsg = (r) => m(`Draft saved${photosMsg(r.saved)}. Finish and submit it when ready.`, `草稿已保存${r.saved ? `（${r.saved} 张图片）` : ''}，完成后请提交审核。`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
+const submittedMsg = (r) => m(`Submitted for review${photosMsg(r.saved)}. Thank you!`, `已提交审核${r.saved ? `（${r.saved} 张图片）` : ''}，谢谢！`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 const savedMsg = (r, plus) => m(`Saved${photosMsg(r.saved, plus)}`, `已保存${r.saved ? `（${plus ? '新增' : ''}${r.saved} 张图片）` : ''}`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 
 module.exports = function supplierRoutes(router, { db, config }) {
@@ -50,7 +52,7 @@ module.exports = function supplierRoutes(router, { db, config }) {
 
   // ── Dashboard
   router.get('/portal', A(async (req, res) => {
-    const products = await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc', select: 'id,product_name,supplier_sku,category,unit_price,currency,moq,created_at,updated_at,status' });
+    const products = await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc', select: 'id,product_name,supplier_sku,category,unit_price,currency,moq,created_at,updated_at,status,is_draft' });
     const imgs = await imagesFor(db, products.map((p) => p.id));
     const urls = await db.storage.signedUrls(products.map((p) => imgs[p.id]?.[0]?.thumb_path));
     res.html(page({
@@ -64,7 +66,7 @@ module.exports = function supplierRoutes(router, { db, config }) {
         <thead><tr><th></th><th>${t('Product', '产品')}</th><th>SKU</th><th>${t('Category', '类别')}</th><th class="r">${t('Price', '单价')}</th><th class="r">MOQ</th><th>${t('Updated', '更新')}</th></tr></thead>
         <tbody>${products.map((p) => html`<tr>
           <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="">` : html`<span class="noimg">${t('No photo', '无图')}</span>`}</td>
-          <td><a href="${req.base}/products/${p.id}">${p.product_name}</a></td>
+          <td><a href="${req.base}/products/${p.id}">${p.product_name}</a>${p.is_draft ? html` <span class="pill s-draft">${t('Draft', '草稿')}</span>` : ''}</td>
           <td>${p.supplier_sku || '—'}</td><td>${p.category || '—'}</td>
           <td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.num(p.moq)}</td>
           <td>${fmt.date(p.updated_at)}</td></tr>`)}</tbody></table></div>`
@@ -74,37 +76,118 @@ module.exports = function supplierRoutes(router, { db, config }) {
     }));
   }));
 
-  // ── Product form
-  function form(req, product, images = [], urls = {}, ctx) {
+  // ── Product form: 5-step wizard (Photos → Product → Pricing → Packing → Review).
+  // Without JavaScript all steps show one after another; with it, one step at a time.
+  const ICON = {
+    photos: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    product: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+    pricing: '<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .8 3 2-1.3 2-3 2c-1.4 0-2.6-.6-3-1.6M12 6.5v11"/>',
+    packing: '<path d="M8.5 6.5 12 4.5l3.5 2v4L12 12.5l-3.5-2zM4.5 13l3.5-2 3.5 2v4L8 19l-3.5-2zM12.5 13l3.5-2 3.5 2v4L16 19l-3.5-2z"/>',
+    review: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  };
+  const svg = (k) => raw(`<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`);
+  const STEPS = [
+    { id: 'photos', en: 'Photos', zh: '图片' },
+    { id: 'product', en: 'Product', zh: '产品信息' },
+    { id: 'pricing', en: 'Pricing & terms', zh: '价格与条款' },
+    { id: 'packing', en: 'Packing & carton', zh: '包装与外箱' },
+    { id: 'review', en: 'Review', zh: '确认提交' },
+  ];
+
+  function form(req, product, images = [], urls = {}, ctx, startStep = 0) {
     const isNew = !product.id;
     const locked = !isNew && LOCKED.includes(product.status);
-    return html`
-      <h1>${isNew ? t('Add product', '新增产品') : product.product_name}</h1>
-      ${locked ? html`<div class="flash info">${biText(LOCKED_MSG)}</div>` : ''}
-      <form method="post" enctype="multipart/form-data" action="${isNew ? `${req.base}/products` : `${req.base}/products/${product.id}`}" class="product-form">
-        ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, disabled: locked, deleteAction: (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
-        ${locked ? html`<fieldset disabled>${productFields(product, { categories: ctx.categoryNames })}</fieldset>` : productFields(product, { categories: ctx.categoryNames })}
-        ${locked ? '' : html`<div class="form-actions"><button class="btn" type="submit">${t('Save', '保存')}</button><a class="btn ghost" href="${req.base}">${t('Cancel', '取消')}</a></div>`}
+    const isDraft = isNew || product.is_draft;
+    const opts = { categories: ctx.categoryNames };
+    const action = isNew ? `${req.base}/products` : `${req.base}/products/${product.id}`;
+    const step = Math.min(Math.max(Number(startStep) || 0, 0), STEPS.length - 1);
+    const heading = html`<div class="wiz-head">
+        <div><div class="eyebrow">${isNew ? t('New catalog entry', '新增产品') : isDraft ? t('Draft', '草稿') : t('Submitted product', '已提交的产品')}</div>
+        <h1>${isNew ? t('Add product', '新增产品') : product.product_name}</h1></div>
+        <a class="wiz-close" href="${req.base}" aria-label="Close">×</a></div>`;
+
+    if (locked) {
+      return html`${heading}<div class="flash info">${biText(LOCKED_MSG)}</div>
+        <form class="product-form"><fieldset disabled>
+          ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, disabled: true })}
+          ${productFields(product, opts)}
+        </fieldset></form>`;
+    }
+
+    return html`${heading}
+      <form method="post" enctype="multipart/form-data" action="${action}" class="product-form wizard" data-wizard data-start="${step}">
+        <input type="hidden" name="step" value="${step}" data-step-input>
+        <nav class="stepper" aria-label="Steps">
+          ${STEPS.map((s, i) => html`<button type="button" class="step-tab" data-goto="${i}">
+            <span class="step-ico">${svg(s.id)}</span><span class="step-check" aria-hidden="true">✓</span>
+            <span class="step-name">${t(s.en, s.zh)}</span></button>`)}
+        </nav>
+
+        <section class="wstep" data-step="0" aria-label="Photos">
+          ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, deleteAction: (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
+        </section>
+        <section class="wstep" data-step="1">${groupFields(product, 'product', opts)}</section>
+        <section class="wstep" data-step="2">${groupFields(product, 'pricing', opts)}</section>
+        <section class="wstep" data-step="3">${groupFields(product, 'packing', opts)}</section>
+        <section class="wstep" data-step="4">
+          ${groupFields(product, 'other', opts)}
+          <div class="review-box" data-review data-photos="${images.length}">
+            <h2>${t('Ready for review?', '准备好提交了吗？')}</h2>
+            <ul class="checklist" data-checklist></ul>
+            <dl class="summary">
+              <div><dt>${t('Product', '产品')}</dt><dd data-sum="product_name">—</dd></div>
+              <div><dt>${t('Category', '类别')}</dt><dd data-sum="category">—</dd></div>
+              <div><dt>${t('Price', '价格')}</dt><dd data-sum="price">—</dd></div>
+              <div><dt>${t('MOQ', '起订量')}</dt><dd data-sum="moq">—</dd></div>
+              <div><dt>${t('Master carton', '外箱')}</dt><dd data-sum="carton">—</dd></div>
+              <div><dt>${t('Photos', '图片')}</dt><dd data-sum="photos">${images.length}</dd></div>
+            </dl>
+          </div>
+        </section>
+
+        <div class="wiz-foot">
+          ${isDraft
+            ? html`<button class="btn ghost" type="submit" name="action" value="draft" formnovalidate>${t('Save draft', '保存草稿')}</button>`
+            : html`<button class="btn ghost" type="submit" name="action" value="save">${t('Save changes', '保存修改')}</button>`}
+          <span class="spacer"></span>
+          <button class="btn ghost" type="button" data-back>‹ ${t('Back', '上一步')}</button>
+          <button class="btn" type="button" data-next>${t('Continue', '继续')} ›</button>
+          <button class="btn" type="submit" name="action" value="${isDraft ? 'submit' : 'save'}" data-finish>${isDraft ? t('Submit for review', '提交审核') : t('Save changes', '保存修改')}</button>
+        </div>
       </form>
-      ${!isNew && !locked ? html`<form method="post" action="${req.base}/products/${product.id}/delete"${confirmAttr('Delete this product?', '确定删除该产品？')} class="danger-zone"><button class="link danger">${t('Delete product', '删除产品')}</button></form>` : ''}`;
+      ${!isNew ? html`<form method="post" action="${req.base}/products/${product.id}/delete"${confirmAttr('Delete this product?', '确定删除该产品？')} class="danger-zone"><button class="link danger">${t('Delete product', '删除产品')}</button></form>` : ''}`;
   }
+
+  // Draft saves don't need a name yet; everything else does.
+  function cleanForAction(fields) {
+    const action = ['draft', 'submit', 'save'].includes(fields.action) ? fields.action : 'save';
+    const { row, errors } = cleanProduct(fields);
+    let errs = errors;
+    if (action === 'draft') {
+      errs = errors.filter((e) => !/is required/.test(e));
+      if (!row.product_name) row.product_name = 'Untitled draft';
+    }
+    return { action, row, errors: errs };
+  }
+  const stepOf = (fields) => Math.min(Math.max(Number(fields.step) || 0, 0), 4);
 
   router.get('/portal/products/new', A(async (req, res) => {
     const ctx = await getCtx(db);
-    res.html(page({ title: 'Add product', nav: nav('new'), req, body: form(req, {}, [], {}, ctx) }));
+    res.html(page({ title: 'Add product', nav: nav('new'), req, body: form(req, {}, [], {}, ctx, 0) }));
   }));
 
   router.post('/portal/products', A(async (req, res) => {
     const { fields, files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
-    const { row, errors } = cleanProduct(fields);
+    const { action, row, errors } = cleanForAction(fields);
     const ctx = await getCtx(db);
     if (errors.length) {
-      return res.html(page({ title: 'Add product', nav: nav('new'), req, flash: { type: 'error', msg: errors.join(' · ') }, body: form(req, row, [], {}, ctx) }), 422);
+      return res.html(page({ title: 'Add product', nav: nav('new'), req, flash: { type: 'error', msg: errors.join(' · ') }, body: form(req, row, [], {}, ctx, stepOf(fields)) }), 422);
     }
-    const product = await db.insert('products', { ...row, supplier_id: req.supplier.id, source: 'form' });
+    const draft = action === 'draft';
+    const product = await db.insert('products', { ...row, supplier_id: req.supplier.id, source: 'form', is_draft: draft, submitted_at: draft ? null : new Date().toISOString() });
     const r = await saveProductImages(db, { supplierId: req.supplier.id, productId: product.id, files: files.images, maxImages: MAX_IMAGES });
-    flash(res, r.errors.length ? 'warn' : 'ok', savedMsg(r, false));
-    res.redirect(`${req.base}/products/${product.id}`);
+    flash(res, r.errors.length ? 'warn' : 'ok', draft ? draftMsg(r) : submittedMsg(r));
+    res.redirect(draft ? `${req.base}/products/${product.id}?step=${stepOf(fields)}` : req.base);
   }));
 
   router.get('/portal/products/:id', A(async (req, res) => {
@@ -112,23 +195,27 @@ module.exports = function supplierRoutes(router, { db, config }) {
     const ctx = await getCtx(db);
     const imgs = (await imagesFor(db, [p.id]))[p.id] || [];
     const urls = await db.storage.signedUrls(imgs.flatMap((i) => [i.path, i.thumb_path]));
-    res.html(page({ title: p.product_name, nav: nav(''), req, flash: takeFlash(req, res), body: form(req, { ...strip(p), status: p.status }, imgs, urls, ctx) }));
+    res.html(page({ title: p.product_name, nav: nav(''), req, flash: takeFlash(req, res), body: form(req, { ...strip(p), status: p.status }, imgs, urls, ctx, req.query.step) }));
   }));
 
   router.post('/portal/products/:id', A(async (req, res) => {
     const p = await ownProduct(req);
     if (LOCKED.includes(p.status)) throw new HttpError(403, LOCKED_MSG);
     const { fields, files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
-    const { row, errors } = cleanProduct(fields);
+    const { action, row, errors } = cleanForAction(fields);
     if (errors.length) {
       flash(res, 'error', errors.join(' · '));
-      return res.redirect(`${req.base}/products/${p.id}`);
+      return res.redirect(`${req.base}/products/${p.id}?step=${stepOf(fields)}`);
     }
-    await db.update('products', { id: p.id }, row);
+    // A submitted product never goes back to draft; a draft becomes submitted on "Submit for review".
+    const patch = { ...row };
+    if (p.is_draft && action === 'submit') { patch.is_draft = false; patch.submitted_at = new Date().toISOString(); }
+    await db.update('products', { id: p.id }, patch);
     const existing = (await imagesFor(db, [p.id]))[p.id] || [];
     const r = await saveProductImages(db, { supplierId: req.supplier.id, productId: p.id, files: files.images, existingCount: existing.length, maxImages: MAX_IMAGES });
-    flash(res, r.errors.length ? 'warn' : 'ok', savedMsg(r, true));
-    res.redirect(`${req.base}/products/${p.id}`);
+    const submitted = p.is_draft && action === 'submit';
+    flash(res, r.errors.length ? 'warn' : 'ok', submitted ? submittedMsg(r) : action === 'draft' ? draftMsg(r) : savedMsg(r, true));
+    res.redirect(submitted ? req.base : `${req.base}/products/${p.id}?step=${stepOf(fields)}`);
   }));
 
   router.post('/portal/products/:id/delete', A(async (req, res) => {

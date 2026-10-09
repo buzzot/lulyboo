@@ -97,8 +97,13 @@ function packingRows(product, opts) {
 }
 
 function productFields(product = {}, { categories } = {}) {
-  return GROUPS.map((g) => html`
-    <fieldset class="group">
+  return GROUPS.map((g) => groupFields(product, g.id, { categories }));
+}
+
+/** One field group (product / pricing / packing / other) as a fieldset. */
+function groupFields(product = {}, groupId, { categories } = {}) {
+  return [GROUPS.find((x) => x.id === groupId)].map((g) => html`
+    <fieldset class="group" data-group="${g.id}">
       <legend>${t(g.en, g.cn)}</legend>
       ${g.id === 'packing' ? packingRows(product, { categories }) : html`<div class="grid">
         ${PRODUCT_FIELDS.filter((f) => f.group === g.id).map((f) => html`
@@ -166,4 +171,4 @@ function errorPage(status, message, req = null) {
   return page({ title: `Error ${status}`, req, body: html`<section class="card narrow"><h1>${head}</h1><p>${biText(message)}</p></section>` });
 }
 
-module.exports = { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, errorPage, bi, input };
+module.exports = { page, adminNav, productFields, groupFields, imageGrid, photoSection, pager, statusPill, errorPage, bi, input };

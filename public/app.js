@@ -127,7 +127,7 @@
       var main = zone.querySelector('.dz-main');
       var n = dt.files.length;
       main.innerHTML = n
-        ? L(n + ' photo' + (n > 1 ? 's' : '') + ' ready, click Save to upload. <u>Add more</u>', '已选择 ' + n + ' 张图片，点击保存即可上传。<u>继续添加</u>')
+        ? L(n + ' photo' + (n > 1 ? 's' : '') + ' selected. They upload when you save. <u>Add more</u>', '已选择 ' + n + ' 张图片，保存时上传。<u>继续添加</u>')
         : L('Drag &amp; drop photos here, or <u>choose files</u>', '将图片拖到此处，或<u>点击选择文件</u>');
     };
     input.addEventListener('change', function () {
@@ -145,5 +145,88 @@
       var files = e.clipboardData && e.clipboardData.files;
       if (files && files.length) { e.preventDefault(); add(files); }
     });
+  }
+
+  // Step-by-step product wizard: one step at a time, validated before moving on. No reloads.
+  var wiz = document.querySelector('[data-wizard]');
+  if (wiz) {
+    var steps = Array.prototype.slice.call(wiz.querySelectorAll('.wstep'));
+    var tabs = Array.prototype.slice.call(wiz.querySelectorAll('[data-goto]'));
+    var back = wiz.querySelector('[data-back]'), next = wiz.querySelector('[data-next]'), fin = wiz.querySelector('[data-finish]');
+    var stepInput = wiz.querySelector('[data-step-input]');
+    var cur = 0;
+    wiz.classList.add('js');
+    var fieldsOf = function (i) { return Array.prototype.slice.call(steps[i].querySelectorAll('input, select, textarea')); };
+    var valid = function (i) {
+      var bad = fieldsOf(i).filter(function (el) { return !el.disabled && el.willValidate && !el.checkValidity(); })[0];
+      if (bad) { show(i); bad.reportValidity(); return false; }
+      return true;
+    };
+    var val = function (id) { var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var review = function () {
+      var box = wiz.querySelector('[data-review]');
+      if (!box) return;
+      var files = wiz.querySelector('input[name=images]');
+      var photos = (parseInt(box.getAttribute('data-photos'), 10) || 0) + (files && files.files ? files.files.length : 0);
+      var price = val('f_unit_price'), cur$ = val('f_currency');
+      var dims = [val('f_carton_l_cm'), val('f_carton_w_cm'), val('f_carton_h_cm')];
+      var hasDims = dims.every(function (d) { return d !== ''; });
+      var set = function (k, v) { var el = box.querySelector('[data-sum="' + k + '"]'); if (el) el.innerHTML = v === '' ? '—' : esc(v); };
+      set('product_name', val('f_product_name'));
+      set('category', val('f_category'));
+      set('price', price ? price + ' ' + cur$ + (val('f_incoterm') ? ' ' + val('f_incoterm') : '') : '');
+      set('moq', val('f_moq'));
+      set('carton', hasDims ? dims.join(' × ') + ' cm' + (val('f_units_per_carton') ? ' · ' + val('f_units_per_carton') + ' pcs' : '') : '');
+      set('photos', String(photos));
+      var checks = [
+        [!!val('f_product_name'), 'Product name', '产品名称', 1],
+        [!!price, 'Unit price', '单价', 2],
+        [photos > 0 || !!val('f_photo_link'), 'Photos or a photo link', '图片或图片链接', 0],
+        [hasDims && !!val('f_units_per_carton'), 'Carton size and units per carton', '外箱尺寸和装箱数', 3],
+        [!!val('f_carton_gw_kg'), 'Carton gross weight', '外箱毛重', 3],
+      ];
+      var missing = checks.filter(function (c) { return !c[0]; });
+      box.querySelector('[data-checklist]').innerHTML = (missing.length
+        ? '<li class="hint">' + L('Missing (you can still submit, but complete quotes are reviewed first):', '尚未填写（仍可提交，但信息完整的报价会优先审核）：') + '</li>'
+        : '<li class="ok">' + L('All key information is filled in.', '关键信息已填写完整。') + '</li>')
+        + missing.map(function (c) { return '<li class="miss"><button type="button" class="link" data-jump="' + c[3] + '">' + L(c[1], c[2]) + '</button></li>'; }).join('');
+    };
+    var show = function (i, scroll) {
+      cur = Math.max(0, Math.min(steps.length - 1, i));
+      steps.forEach(function (s, j) { s.classList.toggle('on', j === cur); });
+      tabs.forEach(function (b, j) {
+        b.classList.toggle('on', j === cur); b.classList.toggle('done', j < cur);
+        if (j === cur) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+      });
+      back.hidden = cur === 0; next.hidden = cur === steps.length - 1; fin.hidden = cur !== steps.length - 1;
+      stepInput.value = cur;
+      if (cur === steps.length - 1) review();
+      if (scroll) wiz.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    next.addEventListener('click', function () { if (valid(cur)) show(cur + 1, true); });
+    back.addEventListener('click', function () { show(cur - 1, true); });
+    tabs.forEach(function (b, j) {
+      b.addEventListener('click', function () {
+        for (var k = cur; k < j; k++) if (!valid(k)) return;
+        show(j, true);
+      });
+    });
+    wiz.addEventListener('click', function (e) {
+      var j = e.target.closest && e.target.closest('[data-jump]');
+      if (j) show(parseInt(j.getAttribute('data-jump'), 10), true);
+    });
+    // Browser validation on submit: jump to the step that holds the problem field
+    wiz.addEventListener('invalid', function (e) {
+      var s = e.target.closest('.wstep');
+      if (s && steps.indexOf(s) !== cur) show(steps.indexOf(s));
+    }, true);
+    // Enter moves to the next step instead of submitting (except in text areas)
+    wiz.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'submit' && cur < steps.length - 1) {
+        e.preventDefault(); if (valid(cur)) show(cur + 1, true);
+      }
+    });
+    show(parseInt(wiz.getAttribute('data-start'), 10) || 0);
   }
 })();
