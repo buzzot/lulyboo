@@ -51,7 +51,7 @@ const PRODUCT_FIELDS = [
   { key: 'supplier_qty_40hq', group: 'packing', en: 'Qty per 40HQ (units, optional)', cn: '40HQ 装柜数量（件，选填）', short: ['40HQ', ''], type: 'int', csv: 'Qty per 40HQ (units)' },
 
   // ── Other
-  { key: 'photo_link', group: 'other', en: 'Photo / Catalog Link', cn: '图片 / 目录链接', type: 'url', csv: 'Photo Link' },
+  { key: 'photo_link', group: 'photos', en: 'Photo / Catalog Link', cn: '图片 / 目录链接', type: 'url', csv: 'Photo Link' },
   { key: 'factory_notes', group: 'other', en: 'Factory Notes', cn: '工厂备注', type: 'textarea', csv: 'Factory Notes' },
 ];
 

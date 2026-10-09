@@ -3,7 +3,7 @@
   // Confirm before destructive submits
   document.addEventListener('submit', function (e) {
     var f = e.target;
-    var msg = f.getAttribute('data-confirm');
+    var msg = (e.submitter && e.submitter.getAttribute('data-confirm')) || f.getAttribute('data-confirm');
     if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
     var btn = e.submitter;
     if (btn && btn.hasAttribute('data-busy')) {
@@ -63,5 +63,64 @@
       var el = document.getElementById(id); if (el) el.addEventListener('input', update);
     });
     update();
+  }
+
+  // Photo drop zone: drag & drop, choose, or paste images; previews with remove.
+  var zone = document.querySelector('[data-dropzone]');
+  if (zone && window.DataTransfer) {
+    var input = zone.querySelector('input[type=file]');
+    var previews = document.querySelector('[data-previews]');
+    var max = parseInt(zone.getAttribute('data-max'), 10) || 10;
+    var MAX_BYTES = 20 * 1024 * 1024;
+    var dt = new DataTransfer();
+    var note = document.createElement('p'); note.className = 'dz-note'; previews.after(note);
+    var key = function (f) { return f.name + '|' + f.size + '|' + f.lastModified; };
+    var add = function (list) {
+      var skipped = [];
+      var have = {}; Array.prototype.forEach.call(dt.files, function (f) { have[key(f)] = 1; });
+      Array.prototype.forEach.call(list, function (f) {
+        if (!/^image\//.test(f.type)) { skipped.push(f.name + ' (not an image)'); return; }
+        if (f.size > MAX_BYTES) { skipped.push(f.name + ' (over 20 MB)'); return; }
+        if (have[key(f)]) return;
+        if (dt.files.length >= max) { skipped.push(f.name + ' (limit ' + max + ')'); return; }
+        dt.items.add(f); have[key(f)] = 1;
+      });
+      input.files = dt.files;
+      note.textContent = skipped.length ? 'Skipped · 已跳过: ' + skipped.join(', ') : '';
+      render();
+    };
+    var render = function () {
+      previews.innerHTML = '';
+      Array.prototype.forEach.call(dt.files, function (f, i) {
+        var fig = document.createElement('figure');
+        var img = document.createElement('img'); img.src = URL.createObjectURL(f); img.alt = '';
+        var cap = document.createElement('figcaption'); cap.textContent = f.size >= 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(f.size / 1024)) + ' KB';
+        var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'dz-remove'; rm.setAttribute('aria-label', 'Remove'); rm.textContent = '×';
+        rm.addEventListener('click', function () {
+          var next = new DataTransfer();
+          Array.prototype.forEach.call(dt.files, function (g, j) { if (j !== i) next.items.add(g); });
+          dt = next; input.files = dt.files; render();
+        });
+        fig.appendChild(img); fig.appendChild(cap); fig.appendChild(rm); previews.appendChild(fig);
+      });
+      zone.classList.toggle('has-files', dt.files.length > 0);
+      var main = zone.querySelector('.dz-main');
+      main.innerHTML = dt.files.length ? dt.files.length + ' photo' + (dt.files.length > 1 ? 's' : '') + ' ready, click Save to upload · 已选择 ' + dt.files.length + ' 张，点击保存上传. <u>Add more</u>' : 'Drag &amp; drop photos here, or <u>choose files</u>';
+    };
+    input.addEventListener('change', function () {
+      var picked = Array.prototype.slice.call(input.files);
+      input.files = dt.files; // keep earlier picks
+      add(picked);
+    });
+    ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('over'); }); });
+    ['dragleave', 'dragend'].forEach(function (ev) { zone.addEventListener(ev, function () { zone.classList.remove('over'); }); });
+    zone.addEventListener('drop', function (e) { e.preventDefault(); zone.classList.remove('over'); add(e.dataTransfer.files); });
+    // Don't let a near-miss drop open the image in the browser tab
+    window.addEventListener('dragover', function (e) { e.preventDefault(); });
+    window.addEventListener('drop', function (e) { if (!zone.contains(e.target)) { e.preventDefault(); add(e.dataTransfer.files); } });
+    document.addEventListener('paste', function (e) {
+      var files = e.clipboardData && e.clipboardData.files;
+      if (files && files.length) { e.preventDefault(); add(files); }
+    });
   }
 })();

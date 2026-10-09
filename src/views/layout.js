@@ -1,6 +1,14 @@
 'use strict';
 const { html, raw, fmt } = require('../lib/html');
 const { PRODUCT_FIELDS, GROUPS, PACKING_ROWS } = require('../fields');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+// Version stamp for CSS/JS: changes whenever those files change, so browsers fetch the new version after a deploy.
+const ASSET_V = crypto.createHash('sha1')
+  .update(['style.css', 'app.js'].map((f) => { try { return fs.readFileSync(path.join(__dirname, '..', '..', 'public', f)); } catch { return ''; } }).join('|'))
+  .digest('hex').slice(0, 10);
 
 function page({ title, body, nav = null, flash = null, wide = false }) {
   return html`<!doctype html>
@@ -8,8 +16,8 @@ function page({ title, body, nav = null, flash = null, wide = false }) {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · Lulyboo</title>
-<link rel="stylesheet" href="/static/style.css">
-<script src="/static/app.js" defer></script>
+<link rel="stylesheet" href="/static/style.css?v=${ASSET_V}">
+<script src="/static/app.js?v=${ASSET_V}" defer></script>
 </head><body>
 <header class="top"><div class="top-in ${wide ? 'wide' : ''}">
   <a class="brand" href="${nav?.home || '/'}">Lulyboo <span>${nav?.label || 'Supplier Portal'}</span></a>
@@ -98,13 +106,38 @@ function productFields(product = {}, { categories } = {}) {
     </fieldset>`);
 }
 
+// Delete buttons use formaction, so the grid can sit inside another form (nested forms are invalid HTML).
 function imageGrid(images, urls, { deleteAction } = {}) {
-  if (!images?.length) return html`<p class="muted">No photos yet.</p>`;
+  if (!images?.length) return '';
   return html`<div class="thumbs">${images.map((im) => html`
     <figure>
       <a href="${urls[im.path] || '#'}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path] || ''}" alt="" loading="lazy"></a>
-      ${deleteAction ? html`<form method="post" action="${deleteAction(im)}" data-confirm="Delete this photo?"><button class="link danger" type="submit">Delete</button></form>` : ''}
+      ${deleteAction ? html`<button class="link danger" type="submit" formaction="${deleteAction(im)}" formmethod="post" formenctype="application/x-www-form-urlencoded" formnovalidate data-confirm="Delete this photo? 确定删除该图片？">Delete · 删除</button>` : ''}
     </figure>`)}</div>`;
+}
+
+/** Photos block: drag & drop / choose / paste first, link as the fallback. Must sit inside a multipart form. */
+function photoSection({ images = [], urls = {}, deleteAction = null, product = {}, maxImages = 10, disabled = false }) {
+  const linkField = PRODUCT_FIELDS.find((f) => f.key === 'photo_link');
+  const left = Math.max(0, maxImages - images.length);
+  return html`<fieldset class="group photos" ${disabled ? raw('disabled') : ''}>
+    <legend>Photos<span class="cn">产品图片</span></legend>
+    ${imageGrid(images, urls, { deleteAction: disabled ? null : deleteAction })}
+    ${left > 0 ? html`
+    <label class="dropzone" data-dropzone data-max="${left}">
+      <input type="file" name="images" accept="image/*" multiple>
+      <span class="dz-icon" aria-hidden="true">⬆</span>
+      <span class="dz-main">Drag &amp; drop photos here, or <u>choose files</u></span>
+      <span class="dz-cn">将图片拖到此处，或点击选择文件</span>
+      <span class="dz-hint">JPG, PNG or WebP · up to ${left} more · max 20 MB each · you can also paste (Ctrl/⌘+V)<br>最多再上传 ${left} 张，每张不超过 20 MB，也可直接粘贴</span>
+    </label>
+    <div class="dz-previews" data-previews></div>` : html`<p class="muted">Maximum ${maxImages} photos reached. Delete one to add another. 已达图片上限。</p>`}
+    <div class="photo-link">
+      <span class="lbl">No photos to upload? Add a link instead<span class="cn">没有图片可上传？请填写图片或产品目录链接</span></span>
+      ${input(linkField, product.photo_link)}
+      <small>Google Drive, Dropbox, Alibaba product page, WeTransfer, Baidu Pan…</small>
+    </div>
+  </fieldset>`;
 }
 
 function pager({ total, page, perPage, baseQuery }) {
@@ -124,4 +157,4 @@ function errorPage(status, message) {
   return page({ title: `Error ${status}`, body: html`<section class="card narrow"><h1>${status === 404 ? 'Not found' : 'Something went wrong'}</h1><p>${message}</p></section>` });
 }
 
-module.exports = { page, adminNav, productFields, imageGrid, pager, statusPill, errorPage, bi, input };
+module.exports = { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, errorPage, bi, input };

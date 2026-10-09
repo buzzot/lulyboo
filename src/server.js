@@ -59,7 +59,7 @@ function createApp({ db, config }) {
     res.setHeader('Referrer-Policy', 'same-origin'); // invite tokens never sent to other sites; keeps Origin on form posts
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-    res.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' data: ${imgOrigin}; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
+    res.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' data: blob: ${imgOrigin}; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
     try {
       // Reject cross-site form posts (CSRF): browsers send Origin on POST.
       if (req.method === 'POST' && req.headers.origin) {

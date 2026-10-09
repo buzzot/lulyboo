@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { html, raw, fmt } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash, sign, unsign } = require('../lib/http');
-const { page, adminNav, productFields, imageGrid, pager, statusPill } = require('../views/layout');
+const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill } = require('../views/layout');
 const F = require('../fields');
 const { analyzeProduct } = require('../calc');
 const S = require('../services');
@@ -367,7 +367,7 @@ module.exports = function adminRoutes(router, { db, config }) {
 
       <section class="card">
         <h2>Photos</h2>
-        ${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}
+        ${imgs.length ? html`<form method="post">${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}</form>` : html`<p class="muted">No photos yet.</p>`}
         ${p.photo_link ? html`<p>Supplier link: <a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">${p.photo_link}</a></p>` : ''}
       </section>
 
@@ -376,7 +376,7 @@ module.exports = function adminRoutes(router, { db, config }) {
 
       <details class="card"><summary><h2 class="inline">Supplier data (edit)</h2></summary>
         <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form">
-          <fieldset class="group"><legend>Add photos</legend><input type="file" name="images" accept="image/*" multiple></fieldset>
+          ${photoSection({ images: [], product: p, maxImages: 20 })}
           ${productFields(p, { categories: ctx.categoryNames })}
           <div class="form-actions"><button class="btn">Save product</button></div>
         </form>

@@ -2,7 +2,7 @@
 // Supplier-facing pages under /portal. Requires a signed-in supplier user (see supplier-auth.js).
 const { html, fmt } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
-const { page, productFields, imageGrid } = require('../views/layout');
+const { page, productFields, photoSection } = require('../views/layout');
 const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = require('../fields');
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
@@ -78,13 +78,7 @@ module.exports = function supplierRoutes(router, { db, config }) {
       <h1>${isNew ? 'Add product · 新增产品' : product.product_name}</h1>
       ${locked ? html`<div class="flash info">This quotation is locked for review. Contact Lulyboo to change it. 该报价已锁定，如需修改请联系 Lulyboo。</div>` : ''}
       <form method="post" enctype="multipart/form-data" action="${isNew ? `${req.base}/products` : `${req.base}/products/${product.id}`}" class="product-form">
-        <fieldset class="group" ${locked ? 'disabled' : ''}>
-          <legend>Photos<span class="cn">产品图片</span></legend>
-          ${imageGrid(images, urls, { deleteAction: locked ? null : (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
-          <label class="upload"><span class="lbl">Add photos (JPG/PNG/WebP, up to ${MAX_IMAGES} per product, max 20 MB each)<span class="cn">上传图片（最多 ${MAX_IMAGES} 张，每张不超过 20 MB）</span></span>
-            <input type="file" name="images" accept="image/*" multiple></label>
-          <small>Photos are resized automatically. 图片会自动压缩。</small>
-        </fieldset>
+        ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, disabled: locked, deleteAction: (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
         ${locked ? html`<fieldset disabled>${productFields(product, { categories: ctx.categoryNames })}</fieldset>` : productFields(product, { categories: ctx.categoryNames })}
         ${locked ? '' : html`<div class="form-actions"><button class="btn" type="submit">Save · 保存</button><a class="btn ghost" href="${req.base}">Cancel · 取消</a></div>`}
       </form>

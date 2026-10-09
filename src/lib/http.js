@@ -149,7 +149,8 @@ function serveStatic(root, req, res) {
   if (!st.isFile()) return false;
   res.setHeader('Content-Type', MIME[path.extname(file)] || 'application/octet-stream');
   res.setHeader('Content-Length', st.size);
-  res.setHeader('Cache-Control', 'public, max-age=3600');
+  // Versioned URLs (?v=…) can be cached long; anything else must be revalidated.
+  res.setHeader('Cache-Control', req.query && req.query.v ? 'public, max-age=31536000, immutable' : 'no-cache');
   if (req.method === 'HEAD') { res.end(); return true; }
   fs.createReadStream(file).pipe(res);
   return true;
