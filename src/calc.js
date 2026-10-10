@@ -155,8 +155,9 @@ function analyzeProduct(p, ctx) {
     issues.push(`Factory says ${supplierQ.toLocaleString()} units per 40HQ; calculated ${fits['40HQ'].units.toLocaleString()}`);
   }
 
-  const dutyPct = n(p.duty_rate_pct) ?? n(cat?.default_duty_pct) ?? n(settings.default_duty_pct) ?? 0;
-  const dutySource = n(p.duty_rate_pct) !== null ? 'product' : n(cat?.default_duty_pct) !== null ? 'category' : 'default';
+  // Duty precedence: admin's manual override > AI/USITC research > category default > global default.
+  const dutyPct = n(p.duty_rate_pct) ?? n(p.duty_ai_pct) ?? n(cat?.default_duty_pct) ?? n(settings.default_duty_pct) ?? 0;
+  const dutySource = n(p.duty_rate_pct) !== null ? 'manual' : n(p.duty_ai_pct) !== null ? 'AI / USITC' : n(cat?.default_duty_pct) !== null ? 'category' : 'default';
   const targetMarginPct = n(cat?.target_margin_pct) ?? n(settings.default_target_margin_pct) ?? 40;
   const insurancePct = n(settings.insurance_pct) ?? 0;
   const qtyExplicit = n(p.planned_qty);

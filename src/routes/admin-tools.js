@@ -7,6 +7,7 @@ const { renderAnalysis } = require('../views/ai');
 const F = require('../fields');
 const { MODES, analyzeProduct } = require('../calc');
 const S = require('../services');
+const Duty = require('../duty');
 const AI = require('../ai');
 const { guard, applyFilters, filterBar } = require('./admin');
 
@@ -227,6 +228,36 @@ module.exports = function toolRoutes(router, { db, config }) {
     });
   }
   function needAi() { if (!AI.enabled()) throw new HttpError(400, 'AI is not configured. Add ANTHROPIC_API_KEY in Railway variables.'); }
+
+  // ── Duty & HTS (USITC + AI); manual override and test mode live in admin.js / calc.js
+  router.post('/admin/products/:id/duty/research', G(async (req, res) => {
+    needAi();
+    const { fields } = await parseForm(req);
+    const p = await db.get('products', req.params.id);
+    if (!p) throw new HttpError(404, 'Product not found');
+    try {
+      const r = await Duty.researchDuty(p, { hts: fields.hts });
+      await db.update('products', { id: p.id }, Duty.productPatch(r));
+      flash(res, r.total_pct === null ? 'warn' : 'ok', r.total_pct === null ? 'HTS found but no percentage rate could be read: enter the duty manually.' : `Duty researched: ${r.total_pct}% for ${r.hts_code}. Review the notes below.`);
+    } catch (e) {
+      console.error('Duty research failed:', e.message);
+      flash(res, 'error', `Duty research failed: ${e.message}`);
+    }
+    res.redirect(`/admin/products/${p.id}#duty`);
+  }));
+  router.post('/admin/products/:id/duty/apply-override', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const n = F.parseNumber(fields.duty);
+    if (n === null || Number.isNaN(n) || n < 0 || n > 500) { flash(res, 'error', 'Enter a duty % between 0 and 500'); return res.redirect(`/admin/products/${req.params.id}#duty`); }
+    await db.update('products', { id: req.params.id }, { duty_rate_pct: n });
+    flash(res, 'ok', `Manual duty override set to ${n}%`);
+    res.redirect(`/admin/products/${req.params.id}#duty`);
+  }));
+  router.post('/admin/products/:id/duty/clear-override', G(async (req, res) => {
+    await db.update('products', { id: req.params.id }, { duty_rate_pct: null });
+    flash(res, 'ok', 'Manual override cleared');
+    res.redirect(`/admin/products/${req.params.id}#duty`);
+  }));
 
   router.post('/admin/products/:id/ai-review', G(async (req, res) => {
     needAi();

@@ -401,3 +401,83 @@ for (const kind of ['floating', 'incell', 'wps']) {
     assert.equal(db.tables.product_images.filter((i) => i.product_id === bib.id).length, 1);
   });
 }
+
+// ── HTS / duty ────────────────────────────────────────────────
+const Duty = require('../src/duty');
+
+test('parseGeneralRate reads free, percent and mixed rates', () => {
+  assert.equal(Duty.parseGeneralRate('Free').ad_valorem, 0);
+  assert.equal(Duty.parseGeneralRate('3.4%').ad_valorem, 3.4);
+  const mixed = Duty.parseGeneralRate('6.8¢/kg + 10%');
+  assert.equal(mixed.ad_valorem, 10);
+  assert.equal(mixed.specific, true);
+  assert.equal(Duty.parseGeneralRate('').ad_valorem, null);
+});
+
+test('calc duty precedence: manual > AI > category > default', () => {
+  const db = seedDb();
+  const ctx = { settings: db.tables.settings[0], categories: db.tables.categories, options: db.tables.logistics_options };
+  const base = { id: 'd', category: 'Infant/Toddler', unit_price: 5, units_per_carton: 24, carton_l_cm: 50, carton_w_cm: 35, carton_h_cm: 30, carton_gw_kg: 10 };
+  assert.equal(calc.analyzeProduct(base, ctx).duty_pct, 7);
+  assert.equal(calc.analyzeProduct({ ...base, duty_ai_pct: 12.5 }, ctx).duty_pct, 12.5);
+  const m = calc.analyzeProduct({ ...base, duty_ai_pct: 12.5, duty_rate_pct: 3 }, ctx);
+  assert.equal(m.duty_pct, 3);
+  assert.equal(m.duty_source, 'manual');
+});
+
+function mockDutyFetch(t, usitcRows) {
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('https://hts.usitc.gov')) return new Response(JSON.stringify(usitcRows), { status: 200 });
+    if (u.startsWith('https://api.anthropic.com')) {
+      const name = JSON.parse(opts.body).tool_choice.name;
+      const input = name === 'record_duty'
+        ? { hts_code: '3924.10.40', hts_description: 'Tableware', confidence: 'high', summary: 'ok', classification_note: 'n',
+            additional: [
+              { label: 'Section 301', heading: '9903.88.03', rate_pct: 25, applies: true, basis: 'usitc_data' },
+              { label: 'Mystery tariff', rate_pct: 10, applies: true, basis: 'general_knowledge' },
+            ], review_flags: [] }
+        : { codes: ['392410'] };
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; Duty._cache.clear(); });
+  process.env.ANTHROPIC_API_KEY = 'test';
+  Duty._cache.clear();
+}
+const ROWS = [{ htsno: '3924.10.40', description: 'Other tableware', general: '3.4%', footnotes: [{ value: 'See 9903.88.03.' }] }];
+
+test('researchDuty: base from USITC row, only confirmed additions counted', async (t) => {
+  mockDutyFetch(t, ROWS);
+  const r = await Duty.researchDuty({ product_name: 'Bib', hs_code: '3924.10', country_of_origin: 'China' });
+  assert.equal(r.base_rate_pct, 3.4);
+  assert.equal(r.additional_pct, 25);
+  assert.equal(r.total_pct, 28.4);
+  assert.ok(r.review_flags.some((f) => /Mystery tariff/.test(f)));
+  assert.equal(Duty.productPatch(r).duty_ai_pct, 28.4);
+});
+
+test('admin: research duty, test mode, apply and clear manual override', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  mockDutyFetch(t, ROWS);
+  const s = await db.insert('suppliers', { name: 'A' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Bib', hs_code: '3924.10', unit_price: 1, units_per_carton: 50, carton_l_cm: 45, carton_w_cm: 32, carton_h_cm: 28, carton_gw_kg: 7 });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const r = await req(base, 'POST', `/admin/products/${p.id}/duty/research`, { cookie, form: {} });
+  assert.equal(r.status, 303);
+  let row = db.tables.products.find((x) => x.id === p.id);
+  assert.equal(Number(row.duty_ai_pct), 28.4);
+  assert.equal(row.hts_verified_code, '3924.10.40');
+  const test1 = await req(base, 'GET', `/admin/products/${p.id}?test_duty=5`, { cookie });
+  assert.equal(test1.status, 200);
+  assert.match(test1.text, /TEST/);
+  assert.equal(Number(db.tables.products.find((x) => x.id === p.id).duty_rate_pct ?? 0), 0);
+  await req(base, 'POST', `/admin/products/${p.id}/duty/apply-override`, { cookie, form: { duty: '5' } });
+  assert.equal(Number(db.tables.products.find((x) => x.id === p.id).duty_rate_pct), 5);
+  await req(base, 'POST', `/admin/products/${p.id}/duty/clear-override`, { cookie, form: {} });
+  assert.equal(db.tables.products.find((x) => x.id === p.id).duty_rate_pct, null);
+});

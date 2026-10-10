@@ -162,6 +162,12 @@ alter table public.products add column if not exists brand text;
 alter table public.products add column if not exists is_draft boolean not null default false;
 alter table public.products add column if not exists submitted_at timestamptz;
 
+-- Duty research (admin only): USITC HTS lookup + AI. duty_rate_pct stays the admin's manual override and wins over duty_ai_pct.
+alter table public.products add column if not exists hts_verified_code text;
+alter table public.products add column if not exists duty_ai_pct numeric(6,3);
+alter table public.products add column if not exists duty_ai_detail jsonb;
+alter table public.products add column if not exists duty_ai_checked_at timestamptz;
+
 -- ───────────────────────── Images ─────────────────────────
 create table if not exists public.product_images (
   id           uuid primary key default gen_random_uuid(),

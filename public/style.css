@@ -349,8 +349,7 @@ h1 { font-size: 1.7rem; letter-spacing: -.02em; }
 .stat-ico.green { background: var(--ok-soft); color: var(--ok); }
 
 .catalog-section { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-.catalog-tabs { display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.catalog-tabs::-webkit-scrollbar { display: none; }
+.catalog-tabs { display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .catalog-tabs a { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; color: var(--muted); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .catalog-tabs a em { font-style: normal; font-size: .74rem; background: var(--soft); border-radius: 999px; padding: 0 7px; min-width: 20px; text-align: center; }
 .catalog-tabs a.on { color: var(--brand-text); border-color: var(--brand); font-weight: 600; }

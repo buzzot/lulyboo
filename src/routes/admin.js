@@ -19,6 +19,41 @@ const PER_PAGE = 50;
 const today = () => new Date().toISOString().slice(0, 10);
 const avg = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined && Number.isFinite(Number(x))); return v.length ? v.reduce((a, b) => a + Number(b), 0) / v.length : null; };
 
+const usitcLink = (code) => `https://hts.usitc.gov/search?query=${encodeURIComponent(String(code || '').replace(/\D/g, ''))}`;
+function dutyPanel({ p, a, testDuty, aiOn }) {
+  const d = p.duty_ai_detail || null;
+  const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
+  const code = p.hts_verified_code || p.hs_code || '';
+  return html`<section class="card duty-card" id="duty">
+    <h2>Duty &amp; HTS <span class="pill ${a.duty_source === 'manual' ? 's-reviewing' : a.duty_source === 'AI / USITC' ? 's-selected' : ''}">using ${a.duty_pct}% · ${a.duty_source}</span></h2>
+    <p class="muted">Main source: US tariff schedule (USITC) read by AI. A manual override always wins. Supplier's HS code: <strong>${p.hs_code || '—'}</strong> · Origin: <strong>${p.country_of_origin || 'not given (China assumed)'}</strong></p>
+    <form method="post" action="/admin/products/${p.id}/duty/research" class="inline-form">
+      <label><span class="lbl">HTS code to verify</span><input name="hts" value="${code}" placeholder="e.g. 9619.00.60" inputmode="numeric"></label>
+      <button class="btn" data-busy ${aiOn ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check with USITC + AI</button>
+      ${code ? html`<a class="btn ghost" target="_blank" rel="noopener" href="${usitcLink(code)}">Open on hts.usitc.gov ↗</a>` : ''}
+    </form>
+    ${d ? html`
+      <dl class="kv duty-kv">
+        <dt>HTS line</dt><dd><strong>${d.hts_code}</strong> <span class="sub">${d.hts_description || ''}</span></dd>
+        <dt>Base rate (USITC)</dt><dd>${d.base_rate_pct === null ? 'not readable' : `${d.base_rate_pct}%`} <span class="sub">“${d.general_rate_text || ''}”</span></dd>
+        ${(d.additional || []).length ? html`<dt>Additional measures</dt><dd><ul class="plain">${d.additional.map((x) => html`<li>${x.counted ? '✔' : '○'} ${x.label}${x.heading ? ` (${x.heading})` : ''}: <strong>${x.rate_pct === null ? 'rate unknown' : `+${x.rate_pct}%`}</strong> <span class="sub">${x.counted ? 'counted' : x.applies ? 'applies but NOT counted' : 'does not apply'} · ${x.basis}${x.note ? ` · ${x.note}` : ''}</span></li>`)}</ul></dd>` : ''}
+        <dt class="strong">AI total</dt><dd class="strong">${d.total_pct === null ? '—' : `${d.total_pct}%`} <span class="pill ${d.confidence === 'high' ? 's-selected' : d.confidence === 'low' ? 's-rejected' : 's-reviewing'}">${d.confidence} confidence</span> <span class="sub">checked ${fmt.date(d.checked_at)}${d.web_research_used ? ' · with web research' : ''}</span></dd>
+      </dl>
+      <p>${d.summary || ''}</p>
+      ${d.classification_note ? html`<p class="muted">${d.classification_note}</p>` : ''}
+      ${(d.review_flags || []).length ? html`<div class="flash warn"><strong>Verify:</strong><ul class="plain">${d.review_flags.map((f) => html`<li>${f}</li>`)}</ul></div>` : ''}
+      ${(d.alternatives || []).length ? html`<details><summary>Other tariff lines considered (${d.alternatives.length})</summary><ul class="plain">${d.alternatives.map((x) => html`<li><strong>${x.htsno}</strong> ${x.general} <span class="sub">${x.description}</span></li>`)}</ul></details>` : ''}
+    ` : html`<p class="muted">Not researched yet. Enter or confirm the HTS code and press the button.</p>`}
+    <div class="duty-actions">
+      <form method="get" action="/admin/products/${p.id}#duty" class="inline-form">
+        <label><span class="lbl">Test a different duty % (what-if, not saved)</span><input name="test_duty" type="number" step="0.01" min="0" max="500" value="${testDuty ?? ''}" placeholder="${a.duty_pct}"></label>
+        <button class="btn ghost">Test</button>
+      </form>
+      ${manual ? html`<form method="post" action="/admin/products/${p.id}/duty/clear-override" class="inline-form"><span class="sub">Manual override ${p.duty_rate_pct}% is active.</span> <button class="btn ghost small">Clear override${p.duty_ai_pct !== null && p.duty_ai_pct !== undefined ? ` (back to AI ${p.duty_ai_pct}%)` : ''}</button></form>` : ''}
+    </div>
+  </section>`;
+}
+
 // ── Auth ──────────────────────────────────────────────────────
 const loginAttempts = new Map();
 function isAdmin(req, config) {
@@ -298,7 +333,12 @@ module.exports = function adminRoutes(router, { db, config }) {
       db.list('ai_analyses', { filters: { product_ids: ['cs', [p.id]] }, order: 'created_at.desc', limit: 10 }),
     ]);
     p.supplier_name = supplier?.name;
-    const a = analyzeProduct(p, ctx);
+    // Test mode: ?test_duty=12.5 re-costs the product with that duty, nothing is saved.
+    const tdRaw = F.parseNumber(req.query.test_duty);
+    const testDuty = req.query.test_duty !== undefined && req.query.test_duty !== '' && tdRaw !== null && !Number.isNaN(tdRaw) && tdRaw >= 0 && tdRaw <= 500 ? tdRaw : null;
+    const realA = analyzeProduct(p, ctx);
+    const a = testDuty !== null ? analyzeProduct({ ...p, duty_rate_pct: testDuty }, ctx) : realA;
+    if (testDuty !== null) a.duty_source = 'TEST';
     const imgs = imgsMap[p.id] || [];
     const urls = await db.storage.signedUrls(imgs.flatMap((i) => [i.path, i.thumb_path]));
     const activeOpts = ctx.options.filter((o) => o.active !== false);
@@ -314,6 +354,9 @@ module.exports = function adminRoutes(router, { db, config }) {
           <form method="post" action="/admin/products/${p.id}/ai-similar"><button class="btn ghost" data-busy>Find similar (AI)</button></form>
         </div></div>
 
+      ${testDuty !== null ? html`<div class="flash warn test-banner"><strong>TEST MODE</strong> — costs below use a duty of <strong>${testDuty}%</strong>. Nothing is saved. Real landed cost: ${fmt.money(realA.landed_cost)} at ${realA.duty_pct}% (${realA.duty_source}).
+        <form method="post" action="/admin/products/${p.id}/duty/apply-override" class="inline"><input type="hidden" name="duty" value="${testDuty}"><button class="btn small">Apply ${testDuty}% as manual override</button></form>
+        <a class="btn ghost small" href="/admin/products/${p.id}">Exit test mode</a></div>` : ''}
       ${a.issues.length ? html`<div class="flash warn"><strong>Check:</strong> ${a.issues.join(' · ')}</div>` : ''}
 
       <div class="cols">
@@ -350,6 +393,8 @@ module.exports = function adminRoutes(router, { db, config }) {
         </section>
       </div>
 
+
+      ${dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY })}
       <section class="card">
         <h2>Logistics options</h2>
         <div class="table-wrap"><table class="list compact">

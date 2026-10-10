@@ -17,12 +17,12 @@ verified on hts.usitc.gov and note possible Section 301 tariffs for China-origin
 function enabled() { return !!process.env.ANTHROPIC_API_KEY; }
 function model() { return process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5'; }
 
-async function callTool({ tool, content, maxTokens = 4000 }) {
+async function callTool({ tool, content, maxTokens = 4000, system = SYSTEM }) {
   if (!enabled()) throw new Error('AI is not configured: set ANTHROPIC_API_KEY');
   const body = {
     model: model(),
     max_tokens: maxTokens,
-    system: SYSTEM,
+    system,
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content }],
@@ -258,4 +258,4 @@ async function checkListing({ fields, photos }) {
   return { ok: !!result.ok, issues: (result.issues || []).slice(0, 6).map(String) };
 }
 
-module.exports = { draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };
+module.exports = { callTool, draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };
