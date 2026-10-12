@@ -366,7 +366,9 @@ module.exports = function adminRoutes(router, { db, config }) {
             <dt>Factory price</dt><dd>${fmt.money(p.unit_price, p.currency)} ${p.incoterm || ''} ${p.fob_port || ''}</dd>
             ${p.currency !== 'USD' ? html`<dt>In USD</dt><dd>${fmt.money(a.unit_price_usd)} <span class="sub">@ ${ctx.settings.fx_to_usd?.[p.currency] ?? '?'}</span></dd>` : ''}
             <dt>Freight / unit</dt><dd>${fmt.money(a.primary?.freight_per_unit)} <span class="sub">${a.primary?.name || ''}</span></dd>
-            <dt>Duty</dt><dd>${fmt.money(a.primary?.duty_per_unit)} <span class="sub">${a.duty_pct}% (${a.duty_source})</span></dd>
+            <dt>Duty</dt><dd>${fmt.money(a.primary?.duty_per_unit)} <span class="sub">${a.base_duty_pct}% (${a.duty_source})</span></dd>
+            ${a.tariff_pct ? html`<dt>China tariff</dt><dd>${fmt.money(a.primary?.tariff_per_unit)} <span class="sub">${a.tariff_pct}% (Section 301 / other)</span></dd>`
+              : (!p.country_of_origin || /^(china|cn|prc|中国)$/i.test(String(p.country_of_origin).trim())) ? html`<dt>China tariff</dt><dd>${a.duty_source === 'manual' ? html`<span class="sub">included in the manual duty</span>` : p.duty_ai_checked_at ? html`$0.00 <span class="sub">none found</span>` : html`<a href="#duty" class="warn-text">Not researched yet: not in landed cost. Run “Check with USITC + AI” below.</a>`}</dd>` : ''}
             <dt>Customs fees + insurance</dt><dd>${fmt.money((a.primary?.customs_fees_per_unit ?? 0) + (a.primary?.insurance_per_unit ?? 0))}</dd>
             <dt class="strong">Landed cost</dt><dd class="strong">${fmt.money(a.landed_cost)}</dd>
             <dt>Target margin</dt><dd>${a.pricing.target_margin_pct}%</dd>

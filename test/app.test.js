@@ -481,3 +481,37 @@ test('admin: research duty, test mode, apply and clear manual override', async (
   await req(base, 'POST', `/admin/products/${p.id}/duty/clear-override`, { cookie, form: {} });
   assert.equal(db.tables.products.find((x) => x.id === p.id).duty_rate_pct, null);
 });
+
+test('landed cost adds the China tariff from AI/USITC research as its own line', () => {
+  const db = seedDb();
+  const ctx = { settings: db.tables.settings[0], categories: db.tables.categories, options: db.tables.logistics_options };
+  const base = { id: 't', category: 'Infant/Toddler', unit_price: 10, units_per_carton: 24, carton_l_cm: 50, carton_w_cm: 35, carton_h_cm: 30, carton_gw_kg: 10 };
+  const plain = calc.analyzeProduct({ ...base, duty_ai_pct: 3.4, duty_ai_detail: { additional_pct: 0 } }, ctx);
+  const withTariff = calc.analyzeProduct({ ...base, duty_ai_pct: 28.4, duty_ai_detail: { base_rate_pct: 3.4, additional_pct: 25 } }, ctx);
+  assert.equal(withTariff.tariff_pct, 25);
+  assert.equal(withTariff.base_duty_pct, 3.4);
+  assert.equal(withTariff.primary.tariff_per_unit, 2.5);
+  assert.equal(withTariff.primary.duty_per_unit, 0.34);
+  assert.ok(Math.abs(withTariff.landed_cost - plain.landed_cost - 2.5) < 0.001);
+  const manual = calc.analyzeProduct({ ...base, duty_rate_pct: 3.4, duty_ai_pct: 28.4, duty_ai_detail: { additional_pct: 25 } }, ctx);
+  assert.equal(manual.tariff_pct, 0); // manual override is all-in
+});
+
+test('pricing page: bulk-research China products shows the tariff column', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  mockDutyFetch(t, ROWS);
+  const s = await db.insert('suppliers', { name: 'A' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Bib', hs_code: '3924.10', country_of_origin: 'China', is_draft: false, unit_price: 1, units_per_carton: 50, carton_l_cm: 45, carton_w_cm: 32, carton_h_cm: 28, carton_gw_kg: 7 });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  let page = await req(base, 'GET', '/admin/pricing', { cookie });
+  assert.match(page.text, /not researched/);
+  assert.match(page.text, /Research duty &amp; China tariff \(1 product/);
+  const r = await req(base, 'POST', '/admin/pricing/research-duty', { cookie, form: {} });
+  assert.equal(r.status, 303);
+  assert.equal(Number(db.tables.products.find((x) => x.id === p.id).duty_ai_pct), 28.4);
+  page = await req(base, 'GET', '/admin/pricing', { cookie });
+  assert.doesNotMatch(page.text, /not researched/);
+  assert.match(page.text, /25%/);
+});
