@@ -9,7 +9,7 @@ const { MODES, analyzeProduct } = require('../calc');
 const S = require('../services');
 const Duty = require('../duty');
 const AI = require('../ai');
-const { guard, applyFilters, filterBar } = require('./admin');
+const { guard, applyFilters, filterBar, dutyHelp } = require('./admin');
 
 const num = (v) => { const n = F.parseNumber(v); return Number.isNaN(n) ? null : n; };
 const csvCell = (v) => { if (v === null || v === undefined) return ''; const s = Array.isArray(v) ? v.join('; ') : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -184,6 +184,7 @@ module.exports = function toolRoutes(router, { db, config }) {
       title: 'Pricing', nav: adminNav('pricing'), flash: takeFlash(req, res), wide: true,
       body: html`<h1>Pricing</h1>
       <p class="muted">Landed cost uses each product's costing option (or the default). Suggested wholesale = landed ÷ (1 − category target margin). Edit wholesale/retail and save all at once. For products made in China, the duty and any additional China tariff (Section 301 etc.) are read from the US tariff schedule (USITC) by AI and included in landed cost; a manual duty on the product page always wins.</p>
+      <p>${dutyHelp()}</p>
       ${pendingResearch.length ? html`<form method="post" action="/admin/pricing/research-duty" class="inline"><button class="btn">Research duty &amp; China tariff (${pendingResearch.length} product${pendingResearch.length === 1 ? '' : 's'} not checked)</button> <span class="sub">Checks up to 6 at a time with AI. Press again for the rest.</span></form>` : ''}
       ${filterBar(q, ctx, suppliers, '/admin/pricing')}
       <form method="post" action="/admin/pricing"><div class="table-wrap"><table class="list edit">

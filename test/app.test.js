@@ -515,3 +515,16 @@ test('pricing page: bulk-research China products shows the tariff column', async
   assert.doesNotMatch(page.text, /not researched/);
   assert.match(page.text, /25%/);
 });
+
+test('Products page: AI compare button forwards selected products to the AI compare route', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const s = await db.insert('suppliers', { name: 'A' });
+  const a = await db.insert('products', { supplier_id: s.id, product_name: 'A', is_draft: false });
+  const b = await db.insert('products', { supplier_id: s.id, product_name: 'B', is_draft: false });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const r = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'ai_compare'], ['ids', a.id], ['ids', b.id]]) });
+  assert.equal(r.status, 307);
+  assert.equal(r.location, `/admin/ai/compare?ids=${a.id},${b.id}`);
+});

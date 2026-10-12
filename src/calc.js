@@ -158,6 +158,10 @@ function analyzeProduct(p, ctx) {
   // Duty precedence: admin's manual override > AI/USITC research > category default > global default.
   const dutyPct = n(p.duty_rate_pct) ?? n(p.duty_ai_pct) ?? n(cat?.default_duty_pct) ?? n(settings.default_duty_pct) ?? 0;
   const dutySource = n(p.duty_rate_pct) !== null ? 'manual' : n(p.duty_ai_pct) !== null ? 'AI / USITC' : n(cat?.default_duty_pct) !== null ? 'category' : 'default';
+  // Split of the AI/USITC total: ordinary duty vs additional tariffs (Section 301 etc. for China). Other sources are all-in.
+  const aiDetail = dutySource === 'AI / USITC' && p.duty_ai_detail && typeof p.duty_ai_detail === 'object' ? p.duty_ai_detail : null;
+  const tariffPct = aiDetail && n(aiDetail.additional_pct) !== null ? Math.min(n(aiDetail.additional_pct), dutyPct) : 0;
+  const baseDutyPct = Math.round((dutyPct - tariffPct) * 1000) / 1000;
   const targetMarginPct = n(cat?.target_margin_pct) ?? n(settings.default_target_margin_pct) ?? 40;
   const insurancePct = n(settings.insurance_pct) ?? 0;
   const qtyExplicit = n(p.planned_qty);
@@ -183,10 +187,11 @@ function analyzeProduct(p, ctx) {
     const ocean = !!MODES[opt.mode]?.ocean;
     const s = { ...f };
     if (unitPriceUsd !== null && f.freight_per_unit !== null && f.freight_per_unit !== undefined) {
-      s.duty_per_unit = included.duty ? r(unitPriceUsd * dutyPct / 100) : 0;
+      s.duty_per_unit = included.duty ? r(unitPriceUsd * baseDutyPct / 100) : 0;
+      s.tariff_per_unit = included.duty ? r(unitPriceUsd * tariffPct / 100) : 0;
       s.customs_fees_per_unit = included.duty ? r(unitPriceUsd * (MPF_PCT + (ocean ? HMF_PCT : 0)) / 100) : 0;
       s.insurance_per_unit = included.insurance ? r(unitPriceUsd * insurancePct / 100) : 0;
-      s.landed_cost = r(unitPriceUsd + f.freight_per_unit + s.duty_per_unit + s.customs_fees_per_unit + s.insurance_per_unit);
+      s.landed_cost = r(unitPriceUsd + f.freight_per_unit + s.duty_per_unit + s.tariff_per_unit + s.customs_fees_per_unit + s.insurance_per_unit);
     } else {
       s.landed_cost = null;
     }
@@ -220,6 +225,8 @@ function analyzeProduct(p, ctx) {
     unit_cbm: cartonCbm && upc ? r(cartonCbm / upc, 6) : null,
     fits,
     duty_pct: dutyPct,
+    base_duty_pct: baseDutyPct,
+    tariff_pct: tariffPct,
     duty_source: dutySource,
     insurance_pct: insurancePct,
     incoterm,

@@ -20,12 +20,37 @@ const today = () => new Date().toISOString().slice(0, 10);
 const avg = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined && Number.isFinite(Number(x))); return v.length ? v.reduce((a, b) => a + Number(b), 0) / v.length : null; };
 
 const usitcLink = (code) => `https://hts.usitc.gov/search?query=${encodeURIComponent(String(code || '').replace(/\D/g, ''))}`;
+/** "How is duty decided?" help: a ? button that opens a short dialog. Used on the product duty panel and the Pricing page. */
+function dutyHelp() {
+  return html`<button type="button" class="btn ghost small help-btn" data-open-dialog="duty-help" aria-haspopup="dialog">? How duty is calculated</button>
+  <dialog id="duty-help" class="help-dialog">
+    <div class="help-head"><h2>How duty &amp; tariffs are calculated</h2><button type="button" class="btn ghost small" data-close-dialog aria-label="Close">✕</button></div>
+    <ol class="help-steps">
+      <li><strong>HTS code.</strong> Admin-entered code → else the supplier's HS code → else AI suggests one from the product name, materials and category.</li>
+      <li><strong>Base duty.</strong> Read from the US tariff schedule (hts.usitc.gov), "General" column of that code's line. “Free” = 0%. Rates like “6.8¢/kg + 10%”: only the % part is counted (flagged).</li>
+      <li><strong>China additional tariffs</strong> (Section 301 etc., Chapter 99 headings 9903.xx.xx). Added only if the AI confirms they apply to this code <em>and</em> the rate comes from USITC data or web research. Unconfirmed ones are shown but <em>not</em> counted.</li>
+      <li><strong>Total duty</strong> = base + confirmed additional tariffs. Percentages are applied to the factory price (FOB value).</li>
+      <li><strong>Rate used in landed cost</strong>, first one that exists:<br>① Admin manual override (replaces everything, tariff included) → ② AI / USITC total → ③ Category default → ④ Global default (Settings).</li>
+      <li><strong>Also added to landed cost:</strong> MPF 0.3464%, HMF 0.125% (ocean only) and insurance. DDP price: duty is not added; CIF: insurance is not added.</li>
+    </ol>
+    <h3>Quick check by hand</h3>
+    <ol class="help-steps">
+      <li>Open the code on <a href="https://hts.usitc.gov/" target="_blank" rel="noopener">hts.usitc.gov</a>: compare the General rate and read the footnotes for 9903 references.</li>
+      <li>Check China tariff rates on <a href="https://ustr.gov/issue-areas/enforcement/section-301-investigations/tariff-actions" target="_blank" rel="noopener">USTR Section 301 actions</a>. Other measures (e.g. IEEPA) change often, so confirm the current rate on cbp.gov or with your broker.</li>
+      <li>Unsure which code fits? Search similar past rulings on <a href="https://rulings.cbp.gov/" target="_blank" rel="noopener">CBP CROSS</a>.</li>
+      <li>Disagree with the result? Use <strong>② Test a different duty rate</strong> to see the effect, then <strong>Apply as manual override</strong>.</li>
+    </ol>
+    <p class="sub">AI results are a starting point, not customs advice. A wrong HTS code gives a wrong rate, so confirm the code first.</p>
+  </dialog>`;
+}
+
 function dutyPanel({ p, a, testDuty, aiOn }) {
   const d = p.duty_ai_detail || null;
   const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
   const code = p.hts_verified_code || p.hs_code || '';
   return html`<section class="card duty-card" id="duty">
     <h2>Duty &amp; HTS <span class="pill ${a.duty_source === 'manual' ? 's-reviewing' : a.duty_source === 'AI / USITC' ? 's-selected' : ''}">using ${a.duty_pct}% · ${a.duty_source}</span></h2>
+    <p class="muted">${dutyHelp()}</p>
     <p class="muted">Main source: US tariff schedule (USITC) read by AI. A manual override always wins. Supplier's HS code: <strong>${p.hs_code || '—'}</strong> · Origin: <strong>${p.country_of_origin || 'not given (China assumed)'}</strong></p>
     <form method="post" action="/admin/products/${p.id}/duty/research" class="inline-form">
       <label><span class="lbl">① HTS code to verify (the tariff code, e.g. 9503.00.00.73)</span><input name="hts" value="${code}" placeholder="e.g. 9503.00.00.73" inputmode="text" autocomplete="off"></label>
@@ -700,3 +725,4 @@ module.exports = function adminRoutes(router, { db, config }) {
 module.exports.guard = guard;
 module.exports.applyFilters = applyFilters;
 module.exports.filterBar = filterBar;
+module.exports.dutyHelp = dutyHelp;
