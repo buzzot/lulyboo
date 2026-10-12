@@ -528,3 +528,64 @@ test('Products page: AI compare button forwards selected products to the AI comp
   assert.equal(r.status, 307);
   assert.equal(r.location, `/admin/ai/compare?ids=${a.id},${b.id}`);
 });
+
+test('blanket China tariff from Settings is added to landed cost, except on manual duty or non-China origin', async (t) => {
+  const db = seedDb();
+  const ctx = { settings: { ...db.tables.settings[0], china_extra_tariff_pct: 10 }, categories: db.tables.categories, options: db.tables.logistics_options };
+  const base = { id: 'b', category: 'Infant/Toddler', unit_price: 10, units_per_carton: 24, carton_l_cm: 50, carton_w_cm: 35, carton_h_cm: 30, carton_gw_kg: 10 };
+  const china = calc.analyzeProduct({ ...base, country_of_origin: 'China' }, ctx);
+  assert.equal(china.tariff_pct, 10); assert.equal(china.blanket_tariff_pct, 10);
+  assert.equal(china.duty_pct, 17); // 7% category + 10% blanket
+  assert.equal(china.primary.tariff_per_unit, 1);
+  assert.equal(calc.analyzeProduct({ ...base, country_of_origin: 'Vietnam' }, ctx).tariff_pct, 0);
+  assert.equal(calc.analyzeProduct({ ...base, country_of_origin: 'China', duty_rate_pct: 5 }, ctx).duty_pct, 5);
+  const ai = calc.analyzeProduct({ ...base, duty_ai_pct: 28.4, duty_ai_detail: { additional_pct: 25 } }, ctx);
+  assert.equal(ai.tariff_pct, 35); assert.equal(ai.base_duty_pct, 3.4); assert.equal(ai.duty_pct, 38.4);
+});
+
+test('Settings page saves the blanket China tariff', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  assert.match((await req(base, 'GET', '/admin/settings', { cookie })).text, /Blanket extra tariff/);
+  await req(base, 'POST', '/admin/settings', { cookie, form: { default_duty_pct: '0', default_target_margin_pct: '40', insurance_pct: '0.3', china_extra_tariff_pct: '7.5' } });
+  assert.equal(Number(db.tables.settings[0].china_extra_tariff_pct), 7.5);
+});
+
+test('logistics: Check market rate proposes, and only a confirmation changes the rate', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.anthropic.com')) {
+      const body = JSON.parse(opts.body);
+      if (body.tools?.[0]?.type === 'web_search_20250305') {
+        return new Response(JSON.stringify({ model: 'm', stop_reason: 'end_turn', content: [
+          { type: 'web_search_tool_result', content: [{ url: 'https://example.com/wci', title: 'Drewry WCI' }] },
+          { type: 'text', text: 'Shanghai to Los Angeles: $2,450 per 40ft as of 2026-10-08 (Drewry WCI), ocean freight only.' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'propose_rate', input: { rate_usd: 2450, basis: 'index', as_of: '2026-10-08', confidence: 'medium', explanation: 'Drewry WCI Shanghai-LA.', includes_fees: 'ocean only' } }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  process.env.ANTHROPIC_API_KEY = 'test';
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const opt = db.tables.logistics_options.find((o) => o.mode === 'FCL_40HQ');
+  const before = Number(opt.rate_usd);
+  const r = await req(base, 'POST', `/admin/logistics/${opt.id}/check-rate`, { cookie, form: {} });
+  assert.equal(r.status, 200);
+  assert.match(r.text, /2,450|2450/);
+  assert.match(r.text, /Drewry WCI/);
+  assert.equal(Number(db.tables.logistics_options.find((o) => o.id === opt.id).rate_usd), before); // nothing saved yet
+  const ok = await req(base, 'POST', `/admin/logistics/${opt.id}/apply-rate`, { cookie, form: { rate: '2450', source: 'Drewry WCI', as_of: '2026-10-08' } });
+  assert.equal(ok.status, 303);
+  const after = db.tables.logistics_options.find((o) => o.id === opt.id);
+  assert.equal(Number(after.rate_usd), 2450);
+  assert.match(after.notes, /Drewry WCI/);
+  assert.ok(after.valid_until);
+  const bad = await req(base, 'POST', `/admin/logistics/${opt.id}/apply-rate`, { cookie, form: { rate: '-5' } });
+  assert.equal(Number(db.tables.logistics_options.find((o) => o.id === opt.id).rate_usd), 2450);
+});

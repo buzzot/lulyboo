@@ -8,6 +8,7 @@ const F = require('../fields');
 const { MODES, analyzeProduct } = require('../calc');
 const S = require('../services');
 const Duty = require('../duty');
+const Freight = require('../freight');
 const AI = require('../ai');
 const { guard, applyFilters, filterBar, dutyHelp } = require('./admin');
 
@@ -110,7 +111,9 @@ module.exports = function toolRoutes(router, { db, config }) {
             <td><input name="name_${o.id}" value="${o.name}" required></td>
             <td><select name="mode_${o.id}">${modeOpts.map(([k, m]) => html`<option value="${k}" ${k === o.mode ? raw('selected') : ''}>${m.label}</option>`)}</select><div class="sub">${MODES[o.mode]?.unit}</div></td>
             <td><input name="origin_${o.id}" value="${o.origin || ''}"></td><td><input name="dest_${o.id}" value="${o.destination || ''}"></td>
-            <td><input name="rate_${o.id}" type="number" step="0.01" min="0" value="${o.rate_usd}" required></td>
+            <td><input name="rate_${o.id}" type="number" step="0.01" min="0" value="${o.rate_usd}" required>
+              ${Freight.MODE_INFO[o.mode] ? html`<div><button class="btn ghost small" type="submit" formaction="/admin/logistics/${o.id}/check-rate" formmethod="post" formnovalidate data-busy ${AI.enabled() ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check market rate</button></div>` : ''}
+              ${o.notes ? html`<div class="sub">${o.notes}</div>` : ''}</td>
             <td><input name="min_${o.id}" type="number" step="0.01" min="0" value="${o.min_charge_usd}"></td>
             <td><input name="fees_${o.id}" type="number" step="0.01" min="0" value="${o.fees_per_shipment_usd}"></td>
             <td><input name="days_${o.id}" type="number" step="1" min="0" value="${o.transit_days ?? ''}" class="tiny"></td>
@@ -126,6 +129,62 @@ module.exports = function toolRoutes(router, { db, config }) {
           </tbody></table></div><div class="form-actions"><button class="btn">Save logistics options</button></div></form>
       </section>`,
     }));
+  }));
+
+  // Market-rate check: AI finds the current benchmark online and PROPOSES a rate; nothing changes until the admin confirms.
+  router.post('/admin/logistics/:id/check-rate', G(async (req, res) => {
+    needAi();
+    await parseForm(req, { limitBytes: 1_000_000 }).catch(() => null);
+    const o = await db.get('logistics_options', req.params.id);
+    if (!o) throw new HttpError(404, 'Option not found');
+    let r;
+    try { r = await Freight.researchRate(o); } catch (e) {
+      console.error('Freight rate check failed:', e.message);
+      flash(res, 'error', `Market rate check failed: ${e.message}`);
+      return res.redirect('/admin/logistics');
+    }
+    const safe = (u) => /^https?:\/\//i.test(u);
+    res.html(page({
+      title: 'Market rate check', nav: adminNav('logistics'), flash: takeFlash(req, res),
+      body: html`<h1>Market rate check</h1>
+      <section class="card">
+        <h2>${o.name}</h2>
+        <dl class="kv">
+          <dt>Current rate in portal</dt><dd>${fmt.money(r.current_rate_usd)} <span class="sub">${r.unit}</span></dd>
+          <dt class="strong">Proposed rate</dt><dd class="strong">${r.rate_usd === null ? 'No usable figure found' : html`${fmt.money(r.rate_usd)} ${r.change_pct !== null ? html`<span class="${r.change_pct > 0 ? 'neg' : 'pos'}">${r.change_pct > 0 ? '+' : ''}${r.change_pct}%</span>` : ''}`} <span class="pill ${r.confidence === 'high' ? 's-selected' : r.confidence === 'low' ? 's-rejected' : 's-reviewing'}">${r.confidence} confidence</span></dd>
+          ${r.low_usd !== null && r.low_usd !== undefined && r.high_usd !== null && r.high_usd !== undefined ? html`<dt>Range found</dt><dd>${fmt.money(r.low_usd)} – ${fmt.money(r.high_usd)}</dd>` : ''}
+          <dt>Basis</dt><dd>${r.basis}${r.as_of ? ` · as of ${r.as_of}` : ''}${r.lane ? ` · ${r.lane}` : ''}</dd>
+          ${r.includes_fees ? html`<dt>Includes</dt><dd>${r.includes_fees}</dd>` : ''}
+        </dl>
+        <p>${r.explanation}</p>
+        ${r.warnings.length ? html`<div class="flash warn"><strong>Check before applying:</strong><ul class="plain">${r.warnings.map((w) => html`<li>${w}</li>`)}</ul></div>` : ''}
+        ${r.sources.length ? html`<p><strong>Sources</strong></p><ul class="plain">${r.sources.filter((x) => safe(x.url)).map((x) => html`<li><a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title}</a> <span class="sub">${x.url}</span></li>`)}</ul>` : ''}
+        <details><summary>Research notes</summary><p class="muted" style="white-space:pre-wrap">${r.notes_text}</p></details>
+        <div class="form-actions">
+          ${r.rate_usd !== null && r.rate_usd > 0 ? html`<form method="post" action="/admin/logistics/${o.id}/apply-rate" class="inline-form">
+            <label><span class="lbl">Rate to apply (USD, ${r.unit}): edit if your forwarder quoted differently</span><input name="rate" type="number" step="0.01" min="0.01" value="${r.rate_usd}" required></label>
+            <input type="hidden" name="source" value="${(r.sources[0]?.title || r.basis || '').slice(0, 120)}">
+            <input type="hidden" name="as_of" value="${r.as_of || ''}">
+            <button class="btn">Confirm &amp; update rate</button></form>` : ''}
+          <a class="btn ghost" href="/admin/logistics">Cancel: keep current rate</a>
+        </div>
+      </section>`,
+    }));
+  }));
+
+  router.post('/admin/logistics/:id/apply-rate', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const rate = num(fields.rate);
+    const o = await db.get('logistics_options', req.params.id);
+    if (!o) throw new HttpError(404, 'Option not found');
+    if (rate === null || !(rate > 0) || rate > 100000) { flash(res, 'error', 'Enter a valid rate'); return res.redirect('/admin/logistics'); }
+    const today = new Date().toISOString().slice(0, 10);
+    const until = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const note = `Rate ${o.rate_usd} → ${rate} confirmed ${today} from market check (${String(fields.source || 'web').slice(0, 120)}${fields.as_of ? `, as of ${String(fields.as_of).slice(0, 40)}` : ''})`;
+    await db.update('logistics_options', { id: o.id }, { rate_usd: rate, valid_until: until, notes: note });
+    S.invalidate('ctx');
+    flash(res, 'ok', `${o.name}: rate updated to ${rate} (valid until ${until}). Costs on all products now use it.`);
+    res.redirect('/admin/logistics');
   }));
 
   router.post('/admin/logistics', G(async (req, res) => {
@@ -194,7 +253,7 @@ module.exports = function toolRoutes(router, { db, config }) {
           <td class="r">${fmt.money(a.unit_price_usd)}</td>
           <td class="r">${fmt.money(a.primary?.freight_per_unit)}<div class="sub">${a.primary?.mode_label || ''}</div></td>
           <td class="r">${fmt.money(a.primary?.duty_per_unit)}<div class="sub">${a.base_duty_pct}% · ${a.duty_source}</div></td>
-          <td class="r">${chinaOrigin(p) ? (p.duty_ai_checked_at || p.duty_rate_pct !== null && p.duty_rate_pct !== undefined ? (a.tariff_pct ? html`${fmt.money(a.primary?.tariff_per_unit)}<div class="sub">${a.tariff_pct}%</div>` : html`<span class="sub">${a.duty_source === 'manual' ? 'in manual duty' : 'none'}</span>`) : html`<span class="sub warn-text">not researched</span>`) : html`<span class="sub">n/a</span>`}</td>
+          <td class="r">${a.tariff_pct ? html`${fmt.money(a.primary?.tariff_per_unit)}<div class="sub">${a.tariff_pct}%${a.blanket_tariff_pct ? ` (${a.blanket_tariff_pct}% blanket)` : ''}</div>` : chinaOrigin(p) ? (p.duty_ai_checked_at || p.duty_rate_pct !== null && p.duty_rate_pct !== undefined ? (a.tariff_pct ? html`${fmt.money(a.primary?.tariff_per_unit)}<div class="sub">${a.tariff_pct}%</div>` : html`<span class="sub">${a.duty_source === 'manual' ? 'in manual duty' : 'none'}</span>`) : html`<span class="sub warn-text">not researched</span>`) : html`<span class="sub">n/a</span>`}</td>
           <td class="r">${fmt.money(a.primary ? (a.primary.customs_fees_per_unit || 0) + (a.primary.insurance_per_unit || 0) : null)}</td>
           <td class="r"><b>${fmt.money(a.landed_cost)}</b></td>
           <td class="r">${a.cheapest && a.cheapest.option_id !== a.primary?.option_id ? html`${fmt.money(a.cheapest.landed_cost)}<div class="sub">${a.cheapest.mode_label}</div>` : html`<span class="sub">same</span>`}</td>
@@ -376,6 +435,8 @@ module.exports = function toolRoutes(router, { db, config }) {
         <div class="grid">
           <label><span class="lbl">Default duty % (if category has none)</span><input name="default_duty_pct" type="number" step="0.01" min="0" value="${s.default_duty_pct}"></label>
           <label><span class="lbl">Default target margin %</span><input name="default_target_margin_pct" type="number" step="0.1" min="0" max="95" value="${s.default_target_margin_pct}"></label>
+          <label><span class="lbl">Blanket extra tariff % on China-made goods</span><input name="china_extra_tariff_pct" type="number" step="0.01" min="0" max="500" value="${s.china_extra_tariff_pct ?? 0}"></label>
+          <p class="sub" style="grid-column:1/-1;margin:0">Added to every China-made product's landed cost (country of origin China or blank), except products with a manual duty. Use it for measures that apply to all Chinese goods (check the current rate on cbp.gov or with your broker). If AI web research already counts the same measure, leave this at 0 to avoid double counting.</p>
           <label><span class="lbl">Cargo insurance % of goods value</span><input name="insurance_pct" type="number" step="0.01" min="0" value="${s.insurance_pct}"></label>
         </div>
         <h2>Exchange rates (1 unit → USD)</h2>
@@ -401,7 +462,9 @@ module.exports = function toolRoutes(router, { db, config }) {
     if (m && Number(m[2]) > 0) fx[m[1].toUpperCase()] = Number(m[2]);
     await db.update('settings', { id: 1 }, {
       default_duty_pct: num(fields.default_duty_pct) ?? 0, default_target_margin_pct: Math.min(95, num(fields.default_target_margin_pct) ?? 40),
-      insurance_pct: num(fields.insurance_pct) ?? 0, fx_to_usd: fx, updated_at: new Date().toISOString(),
+      insurance_pct: num(fields.insurance_pct) ?? 0,
+      ...((num(fields.china_extra_tariff_pct) ?? 0) !== Number(ctx.settings.china_extra_tariff_pct ?? 0) ? { china_extra_tariff_pct: Math.min(500, num(fields.china_extra_tariff_pct) ?? 0) } : {}),
+      fx_to_usd: fx, updated_at: new Date().toISOString(),
     });
     S.invalidate('ctx');
     flash(res, 'ok', 'Settings saved');
