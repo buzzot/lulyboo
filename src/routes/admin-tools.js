@@ -157,22 +157,44 @@ module.exports = function toolRoutes(router, { db, config }) {
   }));
 
   // ── Pricing
+  const chinaOrigin = (p) => { const o = String(p.country_of_origin || '').trim().toLowerCase(); return !o || ['china', 'cn', 'prc', "people's republic of china", '中国'].includes(o); };
+  const needsDutyResearch = (p) => chinaOrigin(p) && !p.duty_ai_checked_at && (p.duty_rate_pct === null || p.duty_rate_pct === undefined) && !p.is_draft;
+
+  router.post('/admin/pricing/research-duty', G(async (req, res) => {
+    needAi();
+    const { items } = await S.loadAnalyzed(db);
+    const todo = items.map((i) => i.product).filter(needsDutyResearch).slice(0, 6);
+    let ok = 0; const failed = [];
+    for (let i = 0; i < todo.length; i += 2) {
+      await Promise.all(todo.slice(i, i + 2).map(async (p) => {
+        try { const r = await Duty.researchDuty(p); await db.update('products', { id: p.id }, Duty.productPatch(r)); ok++; }
+        catch (e) { console.error('Duty research failed for', p.id, e.message); failed.push(`${p.product_name || p.id}: ${e.message}`); }
+      }));
+    }
+    flash(res, failed.length ? 'warn' : 'ok', `Duty & China tariff checked for ${ok} product(s).${failed.length ? ` Failed: ${failed.slice(0, 3).join(' | ')}` : ''} Review each result on the product page.`);
+    res.redirect('/admin/pricing');
+  }));
+
   router.get('/admin/pricing', G(async (req, res) => {
     const { ctx, items, suppliers } = await S.loadAnalyzed(db);
     const q = { sort: 'margin', ...req.query };
     const list = applyFilters(items, q).slice(0, 300);
+    const pendingResearch = items.filter(({ product: p }) => needsDutyResearch(p));
     res.html(page({
       title: 'Pricing', nav: adminNav('pricing'), flash: takeFlash(req, res), wide: true,
       body: html`<h1>Pricing</h1>
-      <p class="muted">Landed cost uses each product's costing option (or the default). Suggested wholesale = landed ÷ (1 − category target margin). Edit wholesale/retail and save all at once.</p>
+      <p class="muted">Landed cost uses each product's costing option (or the default). Suggested wholesale = landed ÷ (1 − category target margin). Edit wholesale/retail and save all at once. For products made in China, the duty and any additional China tariff (Section 301 etc.) are read from the US tariff schedule (USITC) by AI and included in landed cost; a manual duty on the product page always wins.</p>
+      ${pendingResearch.length ? html`<form method="post" action="/admin/pricing/research-duty" class="inline"><button class="btn">Research duty &amp; China tariff (${pendingResearch.length} product${pendingResearch.length === 1 ? '' : 's'} not checked)</button> <span class="sub">Checks up to 6 at a time with AI. Press again for the rest.</span></form>` : ''}
       ${filterBar(q, ctx, suppliers, '/admin/pricing')}
       <form method="post" action="/admin/pricing"><div class="table-wrap"><table class="list edit">
-        <thead><tr><th>Product</th><th class="r">Price USD</th><th class="r">Freight</th><th class="r">Duty+fees</th><th class="r">Landed</th><th class="r">Cheapest option</th><th class="r">Target</th><th class="r">Sugg. wholesale</th><th>Our wholesale</th><th class="r">Our margin</th><th>Retail</th><th class="r">Retailer margin</th><th>Status</th></tr></thead>
+        <thead><tr><th>Product</th><th class="r">Price USD</th><th class="r">Freight</th><th class="r">Duty</th><th class="r">China tariff</th><th class="r">Fees+ins.</th><th class="r">Landed</th><th class="r">Cheapest option</th><th class="r">Target</th><th class="r">Sugg. wholesale</th><th>Our wholesale</th><th class="r">Our margin</th><th>Retail</th><th class="r">Retailer margin</th><th>Status</th></tr></thead>
         <tbody>${list.map(({ product: p, analysis: a }) => html`<tr>
           <td><a href="/admin/products/${p.id}">${p.product_name}</a><div class="sub">${p.supplier_name} · ${p.category || '—'}</div></td>
           <td class="r">${fmt.money(a.unit_price_usd)}</td>
           <td class="r">${fmt.money(a.primary?.freight_per_unit)}<div class="sub">${a.primary?.mode_label || ''}</div></td>
-          <td class="r">${fmt.money(a.primary ? (a.primary.duty_per_unit || 0) + (a.primary.customs_fees_per_unit || 0) + (a.primary.insurance_per_unit || 0) : null)}</td>
+          <td class="r">${fmt.money(a.primary?.duty_per_unit)}<div class="sub">${a.base_duty_pct}% · ${a.duty_source}</div></td>
+          <td class="r">${chinaOrigin(p) ? (p.duty_ai_checked_at || p.duty_rate_pct !== null && p.duty_rate_pct !== undefined ? (a.tariff_pct ? html`${fmt.money(a.primary?.tariff_per_unit)}<div class="sub">${a.tariff_pct}%</div>` : html`<span class="sub">${a.duty_source === 'manual' ? 'in manual duty' : 'none'}</span>`) : html`<span class="sub warn-text">not researched</span>`) : html`<span class="sub">n/a</span>`}</td>
+          <td class="r">${fmt.money(a.primary ? (a.primary.customs_fees_per_unit || 0) + (a.primary.insurance_per_unit || 0) : null)}</td>
           <td class="r"><b>${fmt.money(a.landed_cost)}</b></td>
           <td class="r">${a.cheapest && a.cheapest.option_id !== a.primary?.option_id ? html`${fmt.money(a.cheapest.landed_cost)}<div class="sub">${a.cheapest.mode_label}</div>` : html`<span class="sub">same</span>`}</td>
           <td class="r">${a.pricing.target_margin_pct}%</td>
