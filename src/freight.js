@@ -35,11 +35,15 @@ const TOOL = {
   },
 };
 
-async function searchRates(option, fetchImpl = fetch) {
+async function searchRates(option, fetchImpl = fetch, attempt = 0) {
   const info = MODE_INFO[option.mode];
-  const prompt = `Find the CURRENT spot freight rate for ${info.label} shipping from ${option.origin || 'China'} to ${option.destination || 'the US West Coast'}. ` +
-    `I need ${info.unitText}. Prefer published indices and recent reports (Drewry World Container Index, Freightos Baltic Index, Xeneta, SeaRates, carrier or forwarder rate pages, trade press such as JOC / Container News / Loadstar). ` +
-    `State each figure with its date, lane, what it includes (ocean only vs all-in) and the source name. If sources disagree, give the range. Do not guess: if you cannot find a figure, say so. Plain text, under 250 words.`;
+  const today = new Date().toISOString().slice(0, 10);
+  const hints = attempt === 0
+    ? `Search for the latest weekly Drewry World Container Index (Shanghai to Los Angeles, per 40ft) and the Freightos Baltic Index (China/East Asia to US West Coast, per FEU). The index sites themselves are often not readable, but trade-press articles quote the numbers every week: search Hellenic Shipping News, Container News, JOC, Loadstar, Splash247, Freightos weekly updates ("Freightos update"), and quote the figures printed in those articles.`
+    : `The first search found no figure. Try different searches: "Drewry World Container Index this week Shanghai Los Angeles", "Freightos Baltic Index transpacific rates this week", "trans-Pacific spot rate Asia US West Coast per FEU", "spot rate Shanghai Los Angeles 40ft container this week". Read the articles and quote the numbers they print.`;
+  const prompt = `Today is ${today}. Find the CURRENT spot freight rate for ${info.label} shipping from ${option.origin || 'China'} to ${option.destination || 'the US West Coast'}. ` +
+    `I need ${info.unitText}. ${hints} ` +
+    `Use the most recent figure available (within the last 3 weeks) and say its date. State each figure with its date, lane, what it includes (ocean only vs all-in) and the source name. If sources disagree, give the range. Do not guess: if you cannot find a figure, say so. Plain text, under 250 words.`;
   const messages = [{ role: 'user', content: prompt }];
   const sources = new Map();
   let text = '';
@@ -47,7 +51,7 @@ async function searchRates(option, fetchImpl = fetch) {
     const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: ai.model(), max_tokens: 1500, messages, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }] }),
+      body: JSON.stringify({ model: ai.model(), max_tokens: 1500, messages, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }] }),
       signal: AbortSignal.timeout(90000),
     });
     if (!res.ok) {
@@ -65,18 +69,30 @@ async function searchRates(option, fetchImpl = fetch) {
   return { text: text.trim(), sources: [...sources].map(([url, title]) => ({ url, title })).slice(0, 8) };
 }
 
-/** Returns a proposal {rate_usd, ..., sources, current_rate_usd, change_pct, checked_at}. Saves nothing. */
-async function researchRate(option, { fetchImpl = fetch } = {}) {
-  if (!ai.enabled()) throw new Error('AI is not configured: set ANTHROPIC_API_KEY');
-  if (!MODE_INFO[option.mode]) throw new Error('Market rate check is available for container, LCL and air options only.');
-  const { text, sources } = await searchRates(option, fetchImpl);
-  if (!text) throw new Error('The web search returned nothing usable. Try again later.');
-  const info = MODE_INFO[option.mode];
-  const { result } = await ai.callTool({
+async function extract(option, info, text) {
+  return ai.callTool({
     tool: TOOL, maxTokens: 800,
     system: 'You extract freight rates from research notes. Use only numbers that appear in the notes. Never invent or average numbers that are not there; if the notes give no usable figure, return rate_usd null and basis not_found.',
     content: `Option: ${option.name} (${info.label}), ${option.origin || ''} → ${option.destination || ''}. Unit wanted: ${info.unitText}. Current rate in our system: ${option.rate_usd}.\n\nRESEARCH NOTES:\n${text}`,
   });
+}
+
+/** Returns a proposal {rate_usd, ..., sources, current_rate_usd, change_pct, checked_at}. Saves nothing. */
+async function researchRate(option, { fetchImpl = fetch } = {}) {
+  if (!ai.enabled()) throw new Error('AI is not configured: set ANTHROPIC_API_KEY');
+  if (!MODE_INFO[option.mode]) throw new Error('Market rate check is available for container, LCL and air options only.');
+  const info = MODE_INFO[option.mode];
+  let text = ''; let sources = []; let result = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const found = await searchRates(option, fetchImpl, attempt);
+    if (found.text) text = text ? `${text}\n\n--- second search ---\n${found.text}` : found.text;
+    const known = new Set(sources.map((x) => x.url));
+    sources = sources.concat(found.sources.filter((x) => !known.has(x.url)));
+    if (!text) continue;
+    ({ result } = await extract(option, info, text));
+    if (result.rate_usd !== null && result.rate_usd !== undefined && result.basis !== 'not_found') break;
+  }
+  if (!result) throw new Error('The web search returned nothing usable. Try again later.');
   const rate = result.rate_usd === null || result.rate_usd === undefined ? null : Number(result.rate_usd);
   const cur = Number(option.rate_usd);
   const warnings = [...(result.warnings || [])];

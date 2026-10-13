@@ -159,7 +159,8 @@ module.exports = function toolRoutes(router, { db, config }) {
         <p>${r.explanation}</p>
         ${r.warnings.length ? html`<div class="flash warn"><strong>Check before applying:</strong><ul class="plain">${r.warnings.map((w) => html`<li>${w}</li>`)}</ul></div>` : ''}
         ${r.sources.length ? html`<p><strong>Sources</strong></p><ul class="plain">${r.sources.filter((x) => safe(x.url)).map((x) => html`<li><a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title}</a> <span class="sub">${x.url}</span></li>`)}</ul>` : ''}
-        <details><summary>Research notes</summary><p class="muted" style="white-space:pre-wrap">${r.notes_text}</p></details>
+        ${r.rate_usd === null ? html`<div class="flash warn"><strong>No usable figure found.</strong> Index sites are often hidden from search. You can look it up yourself and type it into the Rate field on the Logistics page: <a href="https://www.drewry.co.uk/supply-chain-advisors/supply-chain-expertise/world-container-index-assessed-by-drewry" target="_blank" rel="noopener noreferrer">Drewry WCI</a> · <a href="https://fbx.freightos.com/" target="_blank" rel="noopener noreferrer">Freightos FBX</a>, or ask your forwarder. Read what the search found below.</div>` : ''}
+        <details ${r.rate_usd === null ? raw('open') : ''}><summary>Research notes</summary><p class="muted" style="white-space:pre-wrap">${r.notes_text}</p></details>
         <div class="form-actions">
           ${r.rate_usd !== null && r.rate_usd > 0 ? html`<form method="post" action="/admin/logistics/${o.id}/apply-rate" class="inline-form">
             <label><span class="lbl">Rate to apply (USD, ${r.unit}): edit if your forwarder quoted differently</span><input name="rate" type="number" step="0.01" min="0.01" value="${r.rate_usd}" required></label>
