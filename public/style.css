@@ -440,3 +440,13 @@ body:not(.has-shell) .top-in { padding: 12px 20px; }
 label[for="f_description"] { display: flex; justify-content: space-between; align-items: center; }
 .ai-inline { float: none; margin-top: 0; }
 table.product-table td { vertical-align: middle; }
+
+/* Help dialog */
+.help-dialog { border: 1px solid var(--line); border-radius: 14px; padding: 20px 24px; max-width: 640px; width: calc(100% - 32px); box-shadow: 0 20px 60px rgba(0,0,0,.25); color: var(--ink); }
+.help-dialog::backdrop { background: rgba(30,30,30,.45); }
+.help-dialog h2 { margin: 0; font-size: 1.15rem; }
+.help-dialog h3 { margin: 18px 0 6px; font-size: .95rem; }
+.help-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.help-steps { margin: 0; padding-left: 20px; font-size: .9rem; line-height: 1.5; }
+.help-steps li { margin: 6px 0; }
+.help-btn { margin-bottom: 4px; }

@@ -29,7 +29,8 @@ function dutyHelp() {
       <li><strong>HTS code.</strong> Admin-entered code → else the supplier's HS code → else AI suggests one from the product name, materials and category.</li>
       <li><strong>Base duty.</strong> Read from the US tariff schedule (hts.usitc.gov), "General" column of that code's line. “Free” = 0%. Rates like “6.8¢/kg + 10%”: only the % part is counted (flagged).</li>
       <li><strong>China additional tariffs</strong> (Section 301 etc., Chapter 99 headings 9903.xx.xx). Added only if the AI confirms they apply to this code <em>and</em> the rate comes from USITC data or web research. Unconfirmed ones are shown but <em>not</em> counted.</li>
-      <li><strong>Total duty</strong> = base + confirmed additional tariffs. Percentages are applied to the factory price (FOB value).</li>
+      <li><strong>Blanket China tariff.</strong> A % you enter in Settings for measures that apply to all Chinese goods. Added to every China-made product (origin China or blank) unless it has a manual duty. Keep it at 0 if AI web research already counts the same measure.</li>
+      <li><strong>Total duty</strong> = base + confirmed additional tariffs + blanket China tariff. Percentages are applied to the factory price (FOB value).</li>
       <li><strong>Rate used in landed cost</strong>, first one that exists:<br>① Admin manual override (replaces everything, tariff included) → ② AI / USITC total → ③ Category default → ④ Global default (Settings).</li>
       <li><strong>Also added to landed cost:</strong> MPF 0.3464%, HMF 0.125% (ocean only) and insurance. DDP price: duty is not added; CIF: insurance is not added.</li>
     </ol>
@@ -392,7 +393,7 @@ module.exports = function adminRoutes(router, { db, config }) {
             ${p.currency !== 'USD' ? html`<dt>In USD</dt><dd>${fmt.money(a.unit_price_usd)} <span class="sub">@ ${ctx.settings.fx_to_usd?.[p.currency] ?? '?'}</span></dd>` : ''}
             <dt>Freight / unit</dt><dd>${fmt.money(a.primary?.freight_per_unit)} <span class="sub">${a.primary?.name || ''}</span></dd>
             <dt>Duty</dt><dd>${fmt.money(a.primary?.duty_per_unit)} <span class="sub">${a.base_duty_pct}% (${a.duty_source})</span></dd>
-            ${a.tariff_pct ? html`<dt>China tariff</dt><dd>${fmt.money(a.primary?.tariff_per_unit)} <span class="sub">${a.tariff_pct}% (Section 301 / other)</span></dd>`
+            ${a.tariff_pct ? html`<dt>China tariff</dt><dd>${fmt.money(a.primary?.tariff_per_unit)} <span class="sub">${a.tariff_pct}%${a.blanket_tariff_pct ? ` (incl. ${a.blanket_tariff_pct}% blanket from Settings)` : ' (Section 301 / other)'}</span></dd>`
               : (!p.country_of_origin || /^(china|cn|prc|中国)$/i.test(String(p.country_of_origin).trim())) ? html`<dt>China tariff</dt><dd>${a.duty_source === 'manual' ? html`<span class="sub">included in the manual duty</span>` : p.duty_ai_checked_at ? html`$0.00 <span class="sub">none found</span>` : html`<a href="#duty" class="warn-text">Not researched yet: not in landed cost. Run “Check with USITC + AI” below.</a>`}</dd>` : ''}
             <dt>Customs fees + insurance</dt><dd>${fmt.money((a.primary?.customs_fees_per_unit ?? 0) + (a.primary?.insurance_per_unit ?? 0))}</dd>
             <dt class="strong">Landed cost</dt><dd class="strong">${fmt.money(a.landed_cost)}</dd>
