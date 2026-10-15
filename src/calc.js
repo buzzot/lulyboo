@@ -156,12 +156,18 @@ function analyzeProduct(p, ctx) {
   }
 
   // Duty precedence: admin's manual override > AI/USITC research > category default > global default.
-  const dutyPct = n(p.duty_rate_pct) ?? n(p.duty_ai_pct) ?? n(cat?.default_duty_pct) ?? n(settings.default_duty_pct) ?? 0;
+  const baseTotal = n(p.duty_rate_pct) ?? n(p.duty_ai_pct) ?? n(cat?.default_duty_pct) ?? n(settings.default_duty_pct) ?? 0;
   const dutySource = n(p.duty_rate_pct) !== null ? 'manual' : n(p.duty_ai_pct) !== null ? 'AI / USITC' : n(cat?.default_duty_pct) !== null ? 'category' : 'default';
-  // Split of the AI/USITC total: ordinary duty vs additional tariffs (Section 301 etc. for China). Other sources are all-in.
+  // Split of the AI/USITC total: ordinary duty vs additional tariffs found by research (Section 301 etc.).
   const aiDetail = dutySource === 'AI / USITC' && p.duty_ai_detail && typeof p.duty_ai_detail === 'object' ? p.duty_ai_detail : null;
-  const tariffPct = aiDetail && n(aiDetail.additional_pct) !== null ? Math.min(n(aiDetail.additional_pct), dutyPct) : 0;
-  const baseDutyPct = Math.round((dutyPct - tariffPct) * 1000) / 1000;
+  const aiTariffPct = aiDetail && n(aiDetail.additional_pct) !== null ? Math.min(n(aiDetail.additional_pct), baseTotal) : 0;
+  // Blanket extra tariff on China-origin goods, entered by the admin in Settings. A manual duty is all-in, so none is added to it.
+  const origin = String(p.country_of_origin || '').trim().toLowerCase();
+  const isChina = !origin || ['china', 'cn', 'prc', "people's republic of china", '中国'].includes(origin);
+  const blanketPct = isChina && dutySource !== 'manual' ? Math.max(0, n(settings.china_extra_tariff_pct) ?? 0) : 0;
+  const dutyPct = Math.round((baseTotal + blanketPct) * 1000) / 1000;
+  const tariffPct = Math.round((aiTariffPct + blanketPct) * 1000) / 1000;
+  const baseDutyPct = Math.round((baseTotal - aiTariffPct) * 1000) / 1000;
   const targetMarginPct = n(cat?.target_margin_pct) ?? n(settings.default_target_margin_pct) ?? 40;
   const insurancePct = n(settings.insurance_pct) ?? 0;
   const qtyExplicit = n(p.planned_qty);
@@ -227,6 +233,7 @@ function analyzeProduct(p, ctx) {
     duty_pct: dutyPct,
     base_duty_pct: baseDutyPct,
     tariff_pct: tariffPct,
+    blanket_tariff_pct: blanketPct,
     duty_source: dutySource,
     insurance_pct: insurancePct,
     incoterm,

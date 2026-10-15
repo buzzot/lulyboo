@@ -167,6 +167,7 @@ alter table public.products add column if not exists hts_verified_code text;
 alter table public.products add column if not exists duty_ai_pct numeric(6,3);
 alter table public.products add column if not exists duty_ai_detail jsonb;
 alter table public.products add column if not exists duty_ai_checked_at timestamptz;
+alter table public.settings add column if not exists china_extra_tariff_pct numeric(6,3) not null default 0; -- blanket extra tariff on China-origin goods (admin-entered)
 
 -- ───────────────────────── Images ─────────────────────────
 create table if not exists public.product_images (

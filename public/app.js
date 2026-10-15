@@ -20,6 +20,14 @@
   // Auto-submit filter selects
   document.querySelectorAll('select[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form.submit(); }); });
 
+  // Help dialogs: [data-open-dialog="id"] opens <dialog id>, [data-close-dialog] or a click on the backdrop closes it
+  document.addEventListener('click', function (e) {
+    var open = e.target.closest && e.target.closest('[data-open-dialog]');
+    if (open) { var d = document.getElementById(open.getAttribute('data-open-dialog')); if (d && d.showModal) d.showModal(); return; }
+    if (e.target.closest && e.target.closest('[data-close-dialog]')) { var dd = e.target.closest('dialog'); if (dd) dd.close(); return; }
+    if (e.target.tagName === 'DIALOG' && e.target.classList.contains('help-dialog')) e.target.close();
+  });
+
   // Confirm before destructive submits
   document.addEventListener('submit', function (e) {
     var f = e.target;

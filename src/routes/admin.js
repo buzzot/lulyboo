@@ -45,6 +45,59 @@ function dutyHelp() {
   </dialog>`;
 }
 
+/** Read-only summary of everything the supplier submitted, grouped as text blocks beside the photos. */
+function productDetails({ p, imgs, urls }) {
+  const val = (x, suffix = '') => (x === null || x === undefined || String(x).trim() === '' ? html`<span class="none">—</span>` : html`${x}${suffix}`);
+  const row = (label, x, suffix) => html`<dt>${label}</dt><dd>${val(x, suffix)}</dd>`;
+  const dims = [p.carton_l_cm, p.carton_w_cm, p.carton_h_cm];
+  const carton = dims.every((d) => d !== null && d !== undefined) ? `${dims.join(' × ')} cm` : null;
+  const hero = imgs[0];
+  return html`<section class="card pd" id="details">
+    <div class="pd-grid">
+      <div class="pd-photos">
+        ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" target="_blank" rel="noopener"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
+          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 9).map((im) => html`<a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 9 ? html`<span class="sub">+${imgs.length - 9} more below</span>` : ''}</div>` : ''}`
+          : html`<div class="pd-hero empty">No photo yet</div>`}
+        ${p.photo_link ? html`<p class="sub"><a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">Supplier photo / catalog link ↗</a></p>` : ''}
+      </div>
+      <div class="pd-blocks">
+        <div class="pd-block pd-wide"><h3>Product</h3>
+          <p class="pd-desc">${p.description ? p.description : html`<span class="none">No description given</span>`}</p>
+          <dl class="kv">
+            ${row('Materials', p.materials)}
+            ${row('Product size (L×W×H)', p.product_size_cm, ' cm')}
+            ${row('Unit net weight', p.unit_net_weight_kg, ' kg')}
+            ${row('Packaging', p.packaging_type)}
+            ${row('Certifications', p.certifications)}
+            ${row('Battery / magnet / liquid', p.dangerous_goods)}
+            ${row('HS code (supplier)', p.hs_code)}
+            ${row('Country of origin', p.country_of_origin)}
+            ${row('Brand', p.brand)}
+          </dl></div>
+        <div class="pd-block"><h3>Price &amp; terms</h3>
+          <dl class="kv">
+            ${row('Unit price', p.unit_price === null || p.unit_price === undefined ? null : fmt.money(p.unit_price, p.currency))}
+            ${row('Incoterm', [p.incoterm, p.fob_port].filter(Boolean).join(' · '))}
+            ${row('MOQ', p.moq === null || p.moq === undefined ? null : fmt.num(p.moq), ' units')}
+            ${row('Payment', p.payment_terms)}
+            ${row('Sample lead time', p.sample_lead_days, ' days')}
+            ${row('Production lead time', p.production_lead_days, ' days')}
+            ${row('Quote valid until', p.quote_valid_until ? fmt.date(p.quote_valid_until) : null)}
+          </dl></div>
+        <div class="pd-block"><h3>Packing</h3>
+          <dl class="kv">
+            ${row('Units per carton', p.units_per_carton)}
+            ${row('Units per inner pack', p.units_per_inner)}
+            ${row('Master carton size', carton)}
+            ${row('Carton weight (net / gross)', p.carton_nw_kg !== null && p.carton_nw_kg !== undefined || p.carton_gw_kg !== null && p.carton_gw_kg !== undefined ? `${p.carton_nw_kg ?? '—'} / ${p.carton_gw_kg ?? '—'} kg` : null)}
+            ${row('Supplier says per container', [p.supplier_qty_20gp && `20GP ${fmt.num(p.supplier_qty_20gp)}`, p.supplier_qty_40gp && `40GP ${fmt.num(p.supplier_qty_40gp)}`, p.supplier_qty_40hq && `40HQ ${fmt.num(p.supplier_qty_40hq)}`].filter(Boolean).join(' · '))}
+          </dl></div>
+        ${p.factory_notes ? html`<div class="pd-block pd-wide"><h3>Factory notes</h3><p class="pd-desc">${p.factory_notes}</p></div>` : ''}
+      </div>
+    </div>
+  </section>`;
+}
+
 function dutyPanel({ p, a, testDuty, aiOn }) {
   const d = p.duty_ai_detail || null;
   const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
@@ -385,6 +438,8 @@ module.exports = function adminRoutes(router, { db, config }) {
         <a class="btn ghost small" href="/admin/products/${p.id}">Exit test mode</a></div>` : ''}
       ${a.issues.length ? html`<div class="flash warn"><strong>Check:</strong> ${a.issues.join(' · ')}</div>` : ''}
 
+      ${productDetails({ p, imgs, urls })}
+
       <div class="cols">
         <section class="card">
           <h2>Pricing</h2>
@@ -439,7 +494,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       </section>
 
       <section class="card">
-        <h2>Photos</h2>
+        <h2>Manage photos</h2>
         ${imgs.length ? html`<form method="post">${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}</form>` : html`<p class="muted">No photos yet.</p>`}
         ${p.photo_link ? html`<p>Supplier link: <a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">${p.photo_link}</a></p>` : ''}
       </section>

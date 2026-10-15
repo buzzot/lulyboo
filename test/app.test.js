@@ -589,3 +589,28 @@ test('logistics: Check market rate proposes, and only a confirmation changes the
   const bad = await req(base, 'POST', `/admin/logistics/${opt.id}/apply-rate`, { cookie, form: { rate: '-5' } });
   assert.equal(Number(db.tables.logistics_options.find((o) => o.id === opt.id).rate_usd), 2450);
 });
+
+test('logistics: when no rate is found, the page says so, retries once and offers no apply button', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const realFetch = global.fetch;
+  let searches = 0;
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.anthropic.com')) {
+      const body = JSON.parse(opts.body);
+      if (body.tools?.[0]?.type === 'web_search_20250305') { searches++; return new Response(JSON.stringify({ model: 'm', stop_reason: 'end_turn', content: [{ type: 'text', text: 'No figures found.' }] }), { status: 200 }); }
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'propose_rate', input: { rate_usd: null, basis: 'not_found', confidence: 'low', explanation: 'Nothing found.' } }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  process.env.ANTHROPIC_API_KEY = 'test';
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const opt = db.tables.logistics_options.find((o) => o.mode === 'FCL_40HQ');
+  const r = await req(base, 'POST', `/admin/logistics/${opt.id}/check-rate`, { cookie, form: {} });
+  assert.equal(r.status, 200);
+  assert.equal(searches, 2);
+  assert.match(r.text, /No usable figure found/);
+  assert.doesNotMatch(r.text, /Confirm &amp; update rate/);
+});
