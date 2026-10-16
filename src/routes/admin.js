@@ -641,6 +641,8 @@ module.exports = function adminRoutes(router, { db, config }) {
       db.list('supplier_users', { filters: { supplier_id: s.id }, order: 'created_at.asc' }),
     ]);
     const fl = takeFlash(req, res);
+    const imgs = await S.imagesFor(db, items.map(({ product: p }) => p.id));
+    const urls = await db.storage.signedUrls(items.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
     res.html(page({
       title: s.name, nav: adminNav('suppliers'), wide: true,
       flash: fl && fl.type !== 'link' ? fl : null,
@@ -691,8 +693,8 @@ module.exports = function adminRoutes(router, { db, config }) {
       </div>
       <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
         <div class="actions"><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
-        <table class="list compact"><thead><tr><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th class="r">Margin</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td class="r">${fmt.pct(a.margin_pct)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table>
+        <table class="list compact"><thead><tr><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th class="r">Margin</th><th>Status</th></tr></thead>
+        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td class="r">${fmt.pct(a.margin_pct)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table>
         <h3>Import products for this supplier</h3>
         <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="inline-form"><input type="file" name="file" accept=".xlsx,.csv" required><button class="btn small">Import</button>
           <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a></form>

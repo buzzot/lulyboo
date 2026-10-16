@@ -119,7 +119,7 @@ table.edit tr.new td { background: #fafbfb; }
 .best { color: var(--ok); }
 .thumb-cell { width: 56px; }
 .thumb-cell img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; display: block; background: var(--soft); }
-.noimg { display: inline-block; width: 48px; height: 48px; line-height: 48px; text-align: center; background: var(--soft); color: var(--muted); border-radius: 6px; font-size: .65rem; }
+.noimg { display: inline-grid; place-items: center; width: 48px; height: 48px; line-height: 48px; text-align: center; background: var(--soft); color: var(--muted); border-radius: 6px; font-size: .65rem; }
 .warn-dot { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; border-radius: 9px; background: var(--warn-soft); color: var(--warn); font-size: .72rem; text-align: center; font-weight: 700; cursor: help; padding: 0 4px; }
 .bar-cell { width: 18%; min-width: 60px; }
 .bar { display: block; height: 8px; background: var(--brand); border-radius: 4px; opacity: .75; margin-top: 6px; }
