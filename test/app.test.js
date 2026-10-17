@@ -614,3 +614,59 @@ test('logistics: when no rate is found, the page says so, retries once and offer
   assert.match(r.text, /No usable figure found/);
   assert.doesNotMatch(r.text, /Confirm &amp; update rate/);
 });
+
+test('information requests: ticked products → email with CC and reference → inbound reply is linked to the request', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const s = await db.insert('suppliers', { name: 'Happy Toys', email: 'sales@happy.cn' });
+  const a = await db.insert('products', { supplier_id: s.id, product_name: 'Rattle', is_draft: false });
+  const b = await db.insert('products', { supplier_id: s.id, product_name: 'Teether', is_draft: false });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  process.env.RESEND_API_KEY = 're_test'; process.env.INBOUND_EMAIL_SECRET = 'sekret';
+  const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.resend.com/emails') && opts?.method === 'POST') { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'em_1' }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.INBOUND_EMAIL_SECRET; });
+
+  // supplier page shows checkboxes + the button
+  const page = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie });
+  assert.match(page.text, /name="ids" value="/); assert.match(page.text, /Request information/);
+  // compose
+  const idsForm = (extra = []) => new URLSearchParams([['ids', a.id], ['ids', b.id], ...extra]);
+  const compose = await req(base, 'POST', `/admin/suppliers/${s.id}/request`, { cookie, form: idsForm() });
+  assert.equal(compose.status, 200); assert.match(compose.text, /Packaging dieline/); assert.match(compose.text, /sales@happy\.cn/);
+  // nothing chosen → rejected, no email
+  const none = await req(base, 'POST', `/admin/suppliers/${s.id}/request/send`, { cookie, form: idsForm([['to', 'sales@happy.cn']]) });
+  assert.equal(none.status, 303); assert.equal(sent.length, 0);
+  // send
+  const ok = await req(base, 'POST', `/admin/suppliers/${s.id}/request/send`, { cookie, form: idsForm([['items', 'dieline'], ['items', 'samples'], ['to', 'sales@happy.cn'], ['note', 'Need by Friday']]) });
+  assert.equal(ok.status, 303); assert.match(ok.location, /^\/admin\/requests\//);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].to, ['sales@happy.cn']); assert.deepEqual(sent[0].cc, ['marsel@lulyboo.com']);
+  assert.match(sent[0].subject, /\[Lulyboo LB-1001\]/); assert.match(sent[0].text, /do not start a new email|Do not change the subject/i);
+  assert.match(sent[0].text, /Rattle/); assert.match(sent[0].text, /Need by Friday/);
+  const detail = await req(base, 'GET', ok.location, { cookie });
+  assert.match(detail.text, /LB-1001/); assert.match(detail.text, /Sent to supplier/);
+  // inbound webhook: wrong key refused; right key links by reference in the subject
+  const hook = (key, payload) => req(base, 'POST', `/hooks/inbound-email?key=${key}`, { body: JSON.stringify(payload) });
+  assert.equal((await hook('nope', {})).status, 404);
+  assert.equal((await hook('sekret', { from: 'x@y.com', subject: 'Re: hello', text: 'unrelated' })).status, 202);
+  const inb = await hook('sekret', { from: 'sales@happy.cn', to: ['sourcing@lulyboo.space'], subject: 'RE: [Lulyboo LB-1001] Information request', text: 'Dieline attached', attachments: [{ filename: 'dieline.pdf' }] });
+  assert.equal(inb.status, 200);
+  assert.equal(db.tables.info_requests[0].status, 'Replied');
+  const detail2 = await req(base, 'GET', ok.location, { cookie });
+  assert.match(detail2.text, /Dieline attached/); assert.match(detail2.text, /dieline\.pdf/);
+  // list + status + manual log
+  assert.match((await req(base, 'GET', '/admin/requests', { cookie })).text, /LB-1001/);
+  const id = db.tables.info_requests[0].id;
+  await req(base, 'POST', `/admin/requests/${id}/status`, { cookie, form: { status: 'Complete' } });
+  assert.equal(db.tables.info_requests[0].status, 'Complete');
+  await req(base, 'POST', `/admin/requests/${id}/log`, { cookie, form: { direction: 'note', body: 'Sample arrived' } });
+  assert.equal(db.tables.info_request_messages.length, 3);
+  // second request gets the next reference
+  const ok2 = await req(base, 'POST', `/admin/suppliers/${s.id}/request/send`, { cookie, form: idsForm([['items', 'certs'], ['to', 'sales@happy.cn']]) });
+  assert.equal(ok2.status, 303); assert.match(sent[1].subject, /LB-1002/);
+});

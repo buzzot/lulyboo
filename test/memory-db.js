@@ -41,6 +41,8 @@ function createMemoryDb(seed = {}) {
     supplier_users: () => ({ status: 'invited', session_version: 1, created_at: new Date().toISOString() }),
     auth_codes: () => ({ attempts: 0, used: false, created_at: new Date().toISOString() }),
     logistics_options: () => ({ active: true, min_charge_usd: 0, fees_per_shipment_usd: 0, sort: 0 }),
+    info_requests: () => ({ status: 'Sent', product_ids: [], items: [], to_emails: [], cc_emails: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+    info_request_messages: () => ({ to_emails: [], attachments: [], created_at: new Date().toISOString() }),
   };
 
   const db = {

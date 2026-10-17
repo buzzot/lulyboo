@@ -8,7 +8,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 const emailConfigured = () => !!process.env.RESEND_API_KEY;
 
-async function sendEmail(config, { to, subject, text, html }) {
+async function sendEmail(config, { to, subject, text, html, cc, replyTo }) {
   const key = process.env.RESEND_API_KEY;
   if (!key) {
     if (process.env.EMAIL_DEV_LOG === 'true') {
@@ -22,7 +22,7 @@ async function sendEmail(config, { to, subject, text, html }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM || 'Lulyboo <onboarding@resend.dev>', to: [to], subject, text, html, reply_to: process.env.EMAIL_REPLY_TO || undefined }),
+    body: JSON.stringify({ from: process.env.EMAIL_FROM || 'Lulyboo <onboarding@resend.dev>', to: [].concat(to), cc: cc && [].concat(cc).length ? [].concat(cc) : undefined, subject, text, html, reply_to: replyTo || process.env.EMAIL_REPLY_TO || undefined }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -31,7 +31,8 @@ async function sendEmail(config, { to, subject, text, html }) {
     err.status = 502;
     throw err;
   }
-  return { dev: false };
+  const sent = await res.json().catch(() => ({}));
+  return { dev: false, id: sent.id || null };
 }
 
 const FONT = "Arial,'Microsoft YaHei','PingFang SC',sans-serif";
@@ -92,4 +93,42 @@ function inviteEmail({ link, companyName, days }) {
   };
 }
 
-module.exports = { sendEmail, codeEmail, inviteEmail, emailConfigured };
+
+/** What we can ask a factory for. `en`/`zh` are shown in the form and in the email. */
+const REQUEST_ITEMS = {
+  dieline: { en: 'Packaging dieline file (print-ready template for box / insert / hang tag)', zh: '包装刀版图（盒子 / 内托 / 吊牌的可印刷模板文件）' },
+  checklist: { en: 'Completed checklist (product, packaging and compliance details)', zh: '填写完整的清单（产品、包装及合规信息）' },
+  samples: { en: 'Samples (please tell us the cost and how you will ship them)', zh: '样品（请告知费用和寄送方式）' },
+  certs: { en: 'Test reports / certificates (CPSIA, CPC, ASTM F963, etc.)', zh: '测试报告 / 证书（CPSIA、CPC、ASTM F963 等）' },
+  photos: { en: 'Additional photos or product video', zh: '更多产品照片或视频' },
+};
+
+function requestEmail({ ref, companyName, items, other, note, products }) {
+  const list = items.filter((k) => REQUEST_ITEMS[k]);
+  const enLines = [...list.map((k) => REQUEST_ITEMS[k].en), ...(other ? [other] : [])];
+  const zhLines = list.map((k) => REQUEST_ITEMS[k].zh);
+  const names = products.map((p) => `${p.product_name || 'Product'}${p.supplier_sku ? ` (${p.supplier_sku})` : ''}`);
+  const subject = `[Lulyboo ${ref}] Information request · 资料请求 (${products.length} product${products.length === 1 ? '' : 's'})`;
+  const text = `Hello${companyName ? ` ${companyName}` : ''},\n\nFor the following product(s):\n${names.map((n) => `- ${n}`).join('\n')}\n\nPlease send us:\n${enLines.map((l) => `- ${l}`).join('\n')}\n${note ? `\nNote: ${note}\n` : ''}\nIMPORTANT: Please REPLY to this email with the requested items attached. Do not change the subject line and do not start a new email, so that we can link your reply to this request (${ref}).\n\n您好，\n\n针对以下产品：\n${names.map((n) => `- ${n}`).join('\n')}\n\n请提供：\n${[...zhLines, ...(other ? [other] : [])].map((l) => `- ${l}`).join('\n')}\n\n重要：请直接“回复”此邮件并附上所需资料。请勿修改邮件主题，也不要新建邮件，以便我们将您的回复与此请求（${ref}）关联。`;
+  const ul = (arr) => `<ul style="margin:8px 0 0;padding-left:20px;font-size:15px;line-height:24px;">${arr.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
+  return {
+    subject, text,
+    html: layout({
+      preheader: `Information request ${ref} · 资料请求 ${ref}`,
+      body: `<tr><td style="padding:32px 0 0;"><h1 style="margin:0;font-size:27px;line-height:36px;font-weight:600;">Information request</h1>
+<p style="margin:8px 0 0;font-size:18px;line-height:28px;color:#73777d;" lang="zh-CN">资料请求</p>
+<p style="margin:10px 0 0;font-size:12px;line-height:18px;color:#73777d;">Reference ${esc(ref)} · 编号 ${esc(ref)}</p></td></tr>
+<tr><td style="padding:25px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:25px;">${companyName ? `Hello ${esc(companyName)},` : 'Hello,'}</p>
+<p style="margin:0;font-size:15px;line-height:25px;">For the following product(s):</p>${ul(names)}
+<p style="margin:18px 0 0;font-size:15px;line-height:25px;"><strong>Please send us:</strong></p>${ul(enLines)}
+<p style="margin:18px 0 0;font-size:15px;line-height:26px;color:#62676e;" lang="zh-CN">针对以上产品，请提供：</p>${ul([...zhLines, ...(other ? [other] : [])])}
+${note ? `<p style="margin:18px 0 0;font-size:15px;line-height:25px;"><strong>Note · 备注:</strong> ${esc(note)}</p>` : ''}</td></tr>
+<tr><td style="padding:24px 0 0;"><div style="padding:16px 18px;background:#fdf3f1;border:1px solid #f3d3ce;border-radius:6px;">
+<p style="margin:0;font-size:14px;line-height:23px;"><strong>Please REPLY to this email</strong> with the requested items attached. <strong>Do not change the subject line and do not start a new email</strong>, so we can link your reply to this request.</p>
+<p style="margin:8px 0 0;font-size:14px;line-height:23px;color:#62676e;" lang="zh-CN"><strong>请直接“回复”此邮件</strong>并附上所需资料。<strong>请勿修改邮件主题，也不要新建邮件</strong>，以便我们将您的回复与此请求关联。</p></div></td></tr>
+<tr><td style="padding:29px 0 30px;"></td></tr>`,
+    }),
+  };
+}
+
+module.exports = { sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

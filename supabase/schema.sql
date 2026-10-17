@@ -214,6 +214,39 @@ select * from (values
 ) v(name, mode, origin, destination, rate_usd, fees_per_shipment_usd, transit_days, sort)
 where not exists (select 1 from public.logistics_options);
 
+-- ───────────────────────── Information requests to suppliers (email, tracked by reference) ─────────────────────────
+create table if not exists public.info_requests (
+  id            uuid primary key default gen_random_uuid(),
+  ref           text not null unique,                 -- e.g. LB-1001, put in the email subject so replies can be linked
+  supplier_id   uuid not null references public.suppliers(id) on delete cascade,
+  product_ids   uuid[] not null default '{}',
+  items         text[] not null default '{}',         -- dieline, checklist, samples, certs, photos
+  other_text    text,
+  note          text,
+  to_emails     text[] not null default '{}',
+  cc_emails     text[] not null default '{}',
+  subject       text not null,
+  status        text not null default 'Sent' check (status in ('Sent','Replied','Complete','Closed')),
+  email_id      text,                                 -- Resend id of the outgoing message
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index if not exists info_requests_supplier_idx on public.info_requests (supplier_id, created_at desc);
+create table if not exists public.info_request_messages (
+  id            uuid primary key default gen_random_uuid(),
+  request_id    uuid not null references public.info_requests(id) on delete cascade,
+  direction     text not null check (direction in ('out','in','note')),
+  from_email    text,
+  to_emails     text[] not null default '{}',
+  subject       text,
+  body          text,
+  attachments   jsonb not null default '[]',
+  created_at    timestamptz not null default now()
+);
+create index if not exists info_request_messages_idx on public.info_request_messages (request_id, created_at);
+alter table public.info_requests         enable row level security;
+alter table public.info_request_messages enable row level security;
+
 -- ───────────────────────── Settings (single row) ─────────────────────────
 create table if not exists public.settings (
   id                         smallint primary key default 1 check (id = 1),

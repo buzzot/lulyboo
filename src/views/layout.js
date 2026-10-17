@@ -83,6 +83,7 @@ function adminNav(active) {
     ['dashboard', '/admin', 'Dashboard'],
     ['products', '/admin/products', 'Products'],
     ['suppliers', '/admin/suppliers', 'Suppliers'],
+    ['requests', '/admin/requests', 'Requests'],
     ['categories', '/admin/categories', 'Categories'],
     ['logistics', '/admin/logistics', 'Logistics'],
     ['pricing', '/admin/pricing', 'Pricing'],

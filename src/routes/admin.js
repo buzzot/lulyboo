@@ -635,10 +635,11 @@ module.exports = function adminRoutes(router, { db, config }) {
   router.get('/admin/suppliers/:id', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);
     if (!s) throw new HttpError(404, 'Supplier not found');
-    const [{ items }, acts, users] = await Promise.all([
+    const [{ items }, acts, users, reqs] = await Promise.all([
       S.loadAnalyzed(db, { filters: { supplier_id: s.id } }),
       db.list('supplier_activities', { filters: { supplier_id: s.id }, order: 'activity_date.desc,created_at.desc' }),
       db.list('supplier_users', { filters: { supplier_id: s.id }, order: 'created_at.asc' }),
+      db.list('info_requests', { filters: { supplier_id: s.id }, order: 'created_at.desc', limit: 20 }),
     ]);
     const fl = takeFlash(req, res);
     const imgs = await S.imagesFor(db, items.map(({ product: p }) => p.id));
@@ -693,8 +694,11 @@ module.exports = function adminRoutes(router, { db, config }) {
       </div>
       <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
         <div class="actions"><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
-        <table class="list compact"><thead><tr><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th class="r">Margin</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td class="r">${fmt.pct(a.margin_pct)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table>
+        ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
+        <form method="post" action="/admin/suppliers/${s.id}/request">
+        <div class="bulkbar"><span data-selcount>0 selected</span> <button class="btn small" title="Ask the supplier for a dieline, checklist, samples…">Request information</button></div>
+        <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th class="r">Margin</th><th>Status</th></tr></thead>
+        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}"></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td class="r">${fmt.pct(a.margin_pct)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>
         <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="inline-form"><input type="file" name="file" accept=".xlsx,.csv" required><button class="btn small">Import</button>
           <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a></form>
