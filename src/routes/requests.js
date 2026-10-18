@@ -23,8 +23,51 @@ const refOf = (text) => (String(text || '').match(/\bLB-(\d{3,7})\b/i) || [])[0]
 const canSend = () => emailConfigured() || process.env.EMAIL_DEV_LOG === 'true';
 const pill = (st) => html`<span class="pill ${st === 'Complete' ? 's-selected' : st === 'Replied' ? 's-reviewing' : st === 'Closed' ? '' : 's-new'}">${st}</span>`;
 
+const MAX_FILE = 20 * 1024 * 1024;
+const safeName = (n) => String(n || 'file').replace(/[^\w.\-()\u4e00-\u9fff]+/g, '_').slice(-100) || 'file';
+
 module.exports = function requestRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
+
+  // Store one attachment in Storage and return its record for the log.
+  async function saveAttachment(ref, { name, type, buffer }) {
+    const rec = { filename: name || 'file', size: buffer.length, content_type: type || null };
+    if (buffer.length > MAX_FILE) return { ...rec, error: 'too large to store' };
+    const path = `requests/${ref}/${Date.now()}-${crypto.randomBytes(3).toString('hex')}-${safeName(name)}`;
+    try { await db.storage.upload(path, buffer, type || 'application/octet-stream'); return { ...rec, path }; } catch (e) {
+      console.error('Attachment save failed:', e.message); return { ...rec, error: 'could not be stored' };
+    }
+  }
+
+  // Resend inbound: attachments are listed in the event; download them with the API key.
+  async function fetchInboundAttachments(ref, emailId, listed) {
+    const key = process.env.RESEND_API_KEY; const out = [];
+    const H = { Authorization: `Bearer ${key}` };
+    let items = listed || [];
+    try {
+      if (!items.length && emailId && key) {
+        const r = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}/attachments`, { headers: H, signal: AbortSignal.timeout(15000) });
+        if (r.ok) { const j = await r.json(); items = j.data || j.attachments || (Array.isArray(j) ? j : []); }
+      }
+    } catch (e) { console.error('Attachment list failed:', e.message); }
+    for (const a of items.slice(0, 10)) {
+      const name = a.filename || a.name || 'file'; const type = a.content_type || a.contentType || null;
+      try {
+        let buffer = null;
+        if (a.content) buffer = Buffer.from(a.content, 'base64');
+        else {
+          let url = a.download_url || a.url;
+          if (!url && emailId && a.id && key) {
+            const r = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(a.id)}`, { headers: H, signal: AbortSignal.timeout(15000) });
+            if (r.ok) { const j = await r.json(); url = j.download_url || j.url; }
+          }
+          if (url) { const r = await fetch(url, { signal: AbortSignal.timeout(60000) }); if (r.ok) buffer = Buffer.from(await r.arrayBuffer()); }
+        }
+        out.push(buffer ? await saveAttachment(ref, { name, type, buffer }) : { filename: name, size: a.size || null, error: 'not downloaded: open the original email' });
+      } catch (e) { console.error('Attachment download failed:', e.message); out.push({ filename: name, size: a.size || null, error: 'not downloaded: open the original email' }); }
+    }
+    return out;
+  }
 
   async function nextRef() {
     const rows = await db.list('info_requests', { select: 'ref' });
@@ -124,6 +167,8 @@ module.exports = function requestRoutes(router, { db, config }) {
       db.list('info_request_messages', { filters: { request_id: r.id }, order: 'created_at.asc' }),
       (r.product_ids || []).length ? db.list('products', { filters: { id: ['in', r.product_ids] } }) : [],
     ]);
+    const urls = await db.storage.signedUrls(msgs.flatMap((m) => (m.attachments || []).map((a) => a.path)), 3600);
+    const attLinks = (m) => (m.attachments || []).length ? html`<div class="sub">Attachments: ${m.attachments.map((a) => (a.path && urls[a.path] ? html`<a href="${urls[a.path]}" download="${a.filename}">${a.filename}</a> ` : html`${a.filename}${a.error ? ` (${a.error})` : ''} `))}</div>` : '';
     res.html(page({
       title: r.ref, nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
       body: html`<div class="head-row"><div><h1>${r.ref} ${pill(r.status)}</h1>
@@ -137,17 +182,18 @@ module.exports = function requestRoutes(router, { db, config }) {
           <p class="sub">Subject: ${r.subject}</p></section>
         <section class="card"><h2>Add to the log</h2>
           <p class="muted">Replies are logged automatically when the inbound-email webhook is set up. Otherwise paste the reply here, or add a note (for example “dieline received by WeChat”).</p>
-          <form method="post" action="/admin/requests/${r.id}/log" class="grid">
+          <form method="post" enctype="multipart/form-data" action="/admin/requests/${r.id}/log" class="grid">
             <label><span class="lbl">Type</span><select name="direction"><option value="in">Reply from supplier</option><option value="note">Internal note</option></select></label>
             <label><span class="lbl">Mark as</span><select name="status"><option value="">Keep status</option><option>Replied</option><option>Complete</option><option>Closed</option></select></label>
-            <label class="span2"><span class="lbl">Text</span><textarea name="body" rows="4" required></textarea></label>
+            <label class="span2"><span class="lbl">Text</span><textarea name="body" rows="4" placeholder="Paste the reply, or describe what was received"></textarea></label>
+            <label class="span2"><span class="lbl">Attach files (optional, up to 20 MB each)</span><input type="file" name="files" multiple></label>
             <div class="span2"><button class="btn small">Save to log</button></div></form></section>
       </div>
       <section class="card"><h2>Communication log</h2>
         ${msgs.length ? html`<ul class="feed req-log">${msgs.map((m) => html`<li class="${m.direction}"><span class="date">${fmt.date(m.created_at)}</span> <b>${m.direction === 'out' ? 'Sent to supplier' : m.direction === 'in' ? `Reply${m.from_email ? ` from ${m.from_email}` : ''}` : 'Note'}</b>
           ${m.subject ? html`<div class="sub">${m.subject}</div>` : ''}
           <div class="req-body">${m.body || ''}</div>
-          ${(m.attachments || []).length ? html`<div class="sub">Attachments: ${m.attachments.map((a) => a.filename || a).join(', ')}</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing logged yet.</p>`}
+          ${attLinks(m)}</li>`)}</ul>` : html`<p class="muted">Nothing logged yet.</p>`}
       </section>`,
     }));
   }));
@@ -161,13 +207,16 @@ module.exports = function requestRoutes(router, { db, config }) {
   }));
 
   router.post('/admin/requests/:id/log', G(async (req, res) => {
-    const { fields } = await parseForm(req);
+    const { fields, files } = await parseForm(req, { limitBytes: 60 * 1024 * 1024 });
     const r = await db.get('info_requests', req.params.id);
     if (!r) throw new HttpError(404, 'Request not found');
     const body = String(fields.body || '').trim().slice(0, 20000);
-    if (!body) { flash(res, 'warn', 'Write something first'); return res.redirect(`/admin/requests/${r.id}`); }
+    const uploads = (files.files || []).slice(0, 10);
+    if (!body && !uploads.length) { flash(res, 'warn', 'Write something or attach a file first'); return res.redirect(`/admin/requests/${r.id}`); }
     const direction = fields.direction === 'in' ? 'in' : 'note';
-    await db.insert('info_request_messages', { request_id: r.id, direction, body });
+    const attachments = [];
+    for (const f of uploads) attachments.push(await saveAttachment(r.ref, f));
+    await db.insert('info_request_messages', { request_id: r.id, direction, body: body || null, attachments });
     const status = STATUSES.includes(fields.status) ? fields.status : direction === 'in' && r.status === 'Sent' ? 'Replied' : r.status;
     await db.update('info_requests', { id: r.id }, { status, updated_at: new Date().toISOString() });
     flash(res, 'ok', 'Saved to the log');
@@ -200,7 +249,7 @@ module.exports = function requestRoutes(router, { db, config }) {
       } catch (e) { console.error('Inbound body fetch failed:', e.message); }
     }
     const body = (text || String(htmlBody).replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim().slice(0, 20000) || '(no text: open the original email)';
-    const attachments = (d.attachments || []).map((a) => ({ filename: a.filename || a.name || 'file', size: a.size || null }));
+    const attachments = await fetchInboundAttachments(r.ref, d.email_id || d.id, d.attachments);
     await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments });
     await db.update('info_requests', { id: r.id }, { status: r.status === 'Sent' ? 'Replied' : r.status, updated_at: new Date().toISOString() });
     res.json({ ok: true, matched: true, ref });

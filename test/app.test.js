@@ -654,18 +654,24 @@ test('information requests: ticked products → email with CC and reference → 
   const hook = (key, payload) => req(base, 'POST', `/hooks/inbound-email?key=${key}`, { body: JSON.stringify(payload) });
   assert.equal((await hook('nope', {})).status, 404);
   assert.equal((await hook('sekret', { from: 'x@y.com', subject: 'Re: hello', text: 'unrelated' })).status, 202);
-  const inb = await hook('sekret', { from: 'sales@happy.cn', to: ['sourcing@lulyboo.space'], subject: 'RE: [Lulyboo LB-1001] Information request', text: 'Dieline attached', attachments: [{ filename: 'dieline.pdf' }] });
+  const inb = await hook('sekret', { from: 'sales@happy.cn', to: ['sourcing@lulyboo.space'], subject: 'RE: [Lulyboo LB-1001] Information request', text: 'Dieline attached', attachments: [{ filename: 'dieline.pdf', content_type: 'application/pdf', content: Buffer.from('%PDF-1.4 test').toString('base64') }] });
   assert.equal(inb.status, 200);
   assert.equal(db.tables.info_requests[0].status, 'Replied');
   const detail2 = await req(base, 'GET', ok.location, { cookie });
   assert.match(detail2.text, /Dieline attached/); assert.match(detail2.text, /dieline\.pdf/);
+  assert.match(detail2.text, /href="https:\/\/x\.supabase\.co\/storage[^"]*LB-1001[^"]*dieline\.pdf/); // stored and linked
   // list + status + manual log
   assert.match((await req(base, 'GET', '/admin/requests', { cookie })).text, /LB-1001/);
   const id = db.tables.info_requests[0].id;
   await req(base, 'POST', `/admin/requests/${id}/status`, { cookie, form: { status: 'Complete' } });
   assert.equal(db.tables.info_requests[0].status, 'Complete');
   await req(base, 'POST', `/admin/requests/${id}/log`, { cookie, form: { direction: 'note', body: 'Sample arrived' } });
-  assert.equal(db.tables.info_request_messages.length, 3);
+  const fd = new FormData(); fd.set('direction', 'in'); fd.set('body', ''); fd.set('files', new Blob(['dieline v2'], { type: 'application/pdf' }), 'box v2.pdf');
+  const up = await fetch(`${base}/admin/requests/${id}/log`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' });
+  assert.equal(up.status, 303);
+  const msgs = db.tables.info_request_messages;
+  assert.equal(msgs.length, 4);
+  assert.match(msgs[3].attachments[0].path, /^requests\/LB-1001\/.*box_v2\.pdf$/);
   // second request gets the next reference
   const ok2 = await req(base, 'POST', `/admin/suppliers/${s.id}/request/send`, { cookie, form: idsForm([['items', 'certs'], ['to', 'sales@happy.cn']]) });
   assert.equal(ok2.status, 303); assert.match(sent[1].subject, /LB-1002/);
