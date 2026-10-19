@@ -351,16 +351,17 @@ module.exports = function adminRoutes(router, { db, config }) {
   router.post('/admin/products/bulk', G(async (req, res) => {
     const { fields } = await parseForm(req);
     const ids = [].concat(fields.ids || []);
-    if (!ids.length) { flash(res, 'warn', 'Select at least one product'); return res.redirect('/admin/products'); }
+    const back = /^\/admin\/[\w\/-]*$/.test(String(fields.back || '')) ? fields.back : '/admin/products';
+    if (!ids.length) { flash(res, 'warn', 'Select at least one product'); return res.redirect(back); }
     if (fields.action === 'status') {
-      if (!F.STATUSES.includes(fields.status)) { flash(res, 'warn', 'Choose a status'); return res.redirect('/admin/products'); }
+      if (!F.STATUSES.includes(fields.status)) { flash(res, 'warn', 'Choose a status'); return res.redirect(back); }
       await db.update('products', { id: ['in', ids] }, { status: fields.status });
       flash(res, 'ok', `${ids.length} product(s) set to ${fields.status}`);
-      return res.redirect('/admin/products');
+      return res.redirect(back);
     }
     if (fields.action === 'compare') return res.redirect(`/admin/compare?ids=${ids.slice(0, 8).join(',')}`);
     if (fields.action === 'ai_compare') return res.redirect(`/admin/ai/compare?ids=${ids.slice(0, 8).join(',')}`, 307);
-    res.redirect('/admin/products');
+    res.redirect(back);
   }));
 
   // ── Compare (table)
@@ -696,7 +697,11 @@ module.exports = function adminRoutes(router, { db, config }) {
         <div class="actions"><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
         ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
         <form method="post" action="/admin/suppliers/${s.id}/request">
-        <div class="bulkbar"><span data-selcount>0 selected</span> <button class="btn small" title="Ask the supplier for a dieline, checklist, samples…">Request information</button></div>
+        <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
+        <div class="bulkbar"><span data-selcount>0 selected</span>
+          <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
+          <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
+          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button></div>
         <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
         <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}"></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>

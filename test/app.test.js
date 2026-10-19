@@ -676,3 +676,23 @@ test('information requests: ticked products → email with CC and reference → 
   const ok2 = await req(base, 'POST', `/admin/suppliers/${s.id}/request/send`, { cookie, form: idsForm([['items', 'certs'], ['to', 'sales@happy.cn']]) });
   assert.equal(ok2.status, 303); assert.match(sent[1].subject, /LB-1002/);
 });
+
+test('supplier page: bulk-set status on ticked products and return to the supplier page', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const s = await db.insert('suppliers', { name: 'A' });
+  const a = await db.insert('products', { supplier_id: s.id, product_name: 'A', is_draft: false, status: 'New' });
+  const b = await db.insert('products', { supplier_id: s.id, product_name: 'B', is_draft: false, status: 'New' });
+  const c = await db.insert('products', { supplier_id: s.id, product_name: 'C', is_draft: false, status: 'New' });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const page = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie });
+  assert.match(page.text, /formaction="\/admin\/products\/bulk"/);
+  const r = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'status'], ['status', 'Shortlisted'], ['back', `/admin/suppliers/${s.id}`], ['ids', a.id], ['ids', b.id]]) });
+  assert.equal(r.status, 303); assert.equal(r.location, `/admin/suppliers/${s.id}`);
+  const st = Object.fromEntries(db.tables.products.map((p) => [p.product_name, p.status]));
+  assert.deepEqual(st, { A: 'Shortlisted', B: 'Shortlisted', C: 'New' });
+  // an off-site "back" is ignored
+  const evil = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'status'], ['status', 'Rejected'], ['back', 'https://evil.example'], ['ids', c.id]]) });
+  assert.equal(evil.location, '/admin/products');
+});
