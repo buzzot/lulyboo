@@ -711,3 +711,18 @@ test('importer accepts the Factory Quotation Request form layout', () => {
   const p = r.products[0].row;
   assert.equal(p.carton_gw_kg, 10.8); assert.equal(p.carton_h_cm, 32); assert.equal(p.incoterm, 'FOB'); assert.equal(p.moq, 500);
 });
+
+test('importer: "20 DAYS" validity and separate N.W./G.W. columns', () => {
+  const { mapRows } = require('../src/importer');
+  const rows = [[], [], [], [], [], [], [], [], [],
+    ['Quotation Valid Until', '20 DAYS'],
+    ['ITEM NO. / SKU', 'DESCRIPTION', 'UNIT PRICE (USD)', 'PACKING (pcs/ctn)', 'N.W. (kg)', 'G.W. (kg)', 'CARTON SIZE L×W×H (cm)'],
+    ['A1', 'Soft rubber boats', 1.16, 48, 9.6, 10.8, '56x38x32']];
+  const r = mapRows(rows);
+  assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+  assert.equal(r.products.length, 1);
+  assert.deepEqual(r.unknownColumns, []);
+  const p = r.products[0].row;
+  assert.equal(p.carton_nw_kg, 9.6); assert.equal(p.carton_gw_kg, 10.8);
+  assert.match(p.quote_valid_until, /^\d{4}-\d\d-\d\d$/);
+});

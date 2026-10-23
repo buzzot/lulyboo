@@ -280,6 +280,7 @@ function buildHeaderMap() {
     '包装方式': 'packaging_type', '装箱数件箱': 'units_per_carton', 'hs编码': 'hs_code', '40hq装柜数量件': 'supplier_qty_40hq', '工厂备注': 'factory_notes',
     // composite columns, split below
     'nwgwkg': '_nw_gw', 'nwgw': '_nw_gw', '净重毛重kg': '_nw_gw',
+    'nwkg': 'carton_nw_kg', 'gwkg': 'carton_gw_kg', 'nw': 'carton_nw_kg', 'gw': 'carton_gw_kg', '净重kg': 'carton_nw_kg', '毛重kg': 'carton_gw_kg',
     'cartonsizelwhcm': '_carton_size', 'cartonsizecm': '_carton_size', 'cartonsize': '_carton_size', '外箱尺寸长宽高cm': '_carton_size',
     // quotation-level terms (label cells above the product table)
     'currency': 'currency', '币种': 'currency', 'incoterm': 'incoterm', '贸易术语': 'incoterm',
@@ -327,13 +328,24 @@ function readTerms(rows, headerIdx) {
     });
   }
   // Lenient: "45 days", "1000 pcs", "30-45天" → first number
+  normaliseValidity(terms);
   for (const k of ['moq', 'sample_lead_days', 'production_lead_days']) {
     if (terms[k] !== undefined && typeof terms[k] !== 'number') { const n = nums(terms[k]); terms[k] = n.length ? n[0] : terms[k]; }
   }
   return terms;
 }
 
+// "Valid until" written as a duration ("20 DAYS") → date counted from today; anything that is not a date is dropped, not an error.
+function normaliseValidity(o) {
+  const qv = o.quote_valid_until;
+  if (typeof qv !== 'string' || !qv.trim()) return;
+  const dm = /^\s*(\d{1,3})\s*(days?|d|天)/i.exec(qv);
+  if (dm) o.quote_valid_until = new Date(Date.now() + Number(dm[1]) * 86400000).toISOString().slice(0, 10);
+  else if (Number.isNaN(Date.parse(qv))) delete o.quote_valid_until;
+}
+
 function splitComposite(input) {
+  normaliseValidity(input);
   if (input._carton_size !== undefined) {
     const n = nums(input._carton_size);
     if (n.length >= 3) { input.carton_l_cm ??= n[0]; input.carton_w_cm ??= n[1]; input.carton_h_cm ??= n[2]; }
