@@ -696,3 +696,18 @@ test('supplier page: bulk-set status on ticked products and return to the suppli
   const evil = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'status'], ['status', 'Rejected'], ['back', 'https://evil.example'], ['ids', c.id]]) });
   assert.equal(evil.location, '/admin/products');
 });
+
+test('importer accepts the Factory Quotation Request form layout', () => {
+  const { mapRows } = require('../src/importer');
+  const rows = [];
+  rows[11] = ['Currency', '', 'Incoterm', '', 'FOB Port / Delivery Point', '', 'Payment Terms', '', 'MOQ'];
+  rows[12] = ['USD', '', 'FOB', '', 'Ningbo', '', '30% deposit', '', 500];
+  rows[13] = ['ITEM NO. / SKU', 'FACTORY PRODUCT PICTURE', 'PRODUCT SIZE (cm)', 'DESCRIPTION', 'UNIT PRICE (USD)', 'MATERIAL', 'PRODUCTION LEAD TIME (days)', 'PACKAGING TYPE', 'PACKING (pcs/ctn)', 'N.W. / G.W. (kg)', 'CARTON SIZE L×W×H (cm)', 'HS CODE', 'QTY PER 40HQ (pcs)', 'FACTORY NOTES'];
+  rows[14] = ['HB-1', 'Insert image', '20x20', 'Muslin swaddle', 3.2, 'Cotton', 30, 'Polybag', 48, '9.6 / 10.8', '56x38x32', '6307.90', 5000, ''];
+  for (let i = 0; i < 11; i++) rows[i] = rows[i] || [];
+  const r = mapRows(rows);
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.products.length, 1);
+  const p = r.products[0].row;
+  assert.equal(p.carton_gw_kg, 10.8); assert.equal(p.carton_h_cm, 32); assert.equal(p.incoterm, 'FOB'); assert.equal(p.moq, 500);
+});

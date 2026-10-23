@@ -377,6 +377,7 @@ function importPage(base) {
   <section class="card">
     <ol class="steps">
       <li>${t('Download the template:', '下载模板：')} <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Lulyboo_Supplier_Product_Template.xlsx</a></li>
+      <li>${t('Or use the Factory Quotation Request form (also accepted):', '也可使用工厂报价申请表（同样支持）：')} <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Lulyboo_Factory_Quotation_Request_2026.xlsx</a></li>
       <li>${t('Fill in your factory details and terms once at the top, then one row per product.', '在顶部填写一次工厂信息和条款，然后每个产品填写一行。')}</li>
       <li>${t('Put each product photo in the Photo column of its row (Excel: Insert → Pictures → Place in Cell). Upload the .xlsx below: products and photos are imported together.', '请把每个产品的照片放在该行的“照片”列（Excel：插入 → 图片 → 放入单元格）。在下方上传 .xlsx 文件，产品和照片会一起导入。')}</li>
     </ol>
