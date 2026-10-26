@@ -137,13 +137,15 @@ module.exports = function crmRoutes(router, { db, config }) {
     const prev = C.addDays(first, -1).slice(0, 7);
     const next = C.addDays(first, 32).slice(0, 7);
     const day = C.isDate(req.query.day) ? req.query.day : (today.startsWith(month) ? today : first);
-    const [tasks, acts, legacy, suppliers, names] = await Promise.all([
+    const [tasks, acts, legacy, suppliers, names, reqRows] = await Promise.all([
       db.list('crm_tasks', { filters: { due_date: ['gte', gridStart] }, order: 'due_date.asc' }),
       db.list('supplier_activities', { filters: { activity_date: ['gte', gridStart] }, order: 'activity_date.asc' }),
       db.list('supplier_activities', { filters: { done: false, follow_up_date: ['gte', gridStart] } }),
       db.list('suppliers', { select: 'id,name', order: 'name.asc' }),
       C.supplierNames(db),
+      db.list('info_requests', { select: 'id,ref' }),
     ]);
+    const reqByRef = Object.fromEntries(reqRows.map((r) => [r.ref, r.id]));
     const entries = []; // {date, time, kind: 'open'|'done'|'log', ...}
     for (const x of tasks) if (x.due_date <= gridEnd) entries.push({ date: x.due_date, time: x.due_time, state: x.done ? 'done' : 'open', raw: { kind: 'task', ...x }, label: x.title, type: x.type, supplier_id: x.supplier_id });
     for (const a of legacy) if (a.follow_up_date <= gridEnd) entries.push({ date: a.follow_up_date, state: 'open', raw: { kind: 'act', id: a.id, supplier_id: a.supplier_id, title: a.summary, type: 'Follow-up', due_date: a.follow_up_date, due_time: null }, label: a.summary, type: 'Follow-up', supplier_id: a.supplier_id });
@@ -158,7 +160,7 @@ module.exports = function crmRoutes(router, { db, config }) {
       for (let d = 0; d < 7; d++) {
         const date = C.addDays(gridStart, w * 7 + d);
         const list = byDate.get(date) || [];
-        const chips = list.slice(0, 3).map((e) => html`<span class="chip ${tyClass(e.type)} ${e.state}" title="${e.type}: ${e.label}${names[e.supplier_id] ? ' — ' + names[e.supplier_id] : ''}">${e.time ? e.time + ' ' : ''}${e.label}${names[e.supplier_id] ? ' · ' + names[e.supplier_id] : ''}</span>`);
+        const chips = list.slice(0, 3).map((e) => html`<a class="chip ${tyClass(e.type)} ${e.state}" href="/admin/crm/calendar?m=${month}&day=${date}#day" title="${e.type}: ${e.label}${names[e.supplier_id] ? ' — ' + names[e.supplier_id] : ''}">${e.time ? e.time + ' ' : ''}${e.label}${names[e.supplier_id] ? ' · ' + names[e.supplier_id] : ''}</a>`);
         cells.push(html`<td class="${date.slice(0, 7) !== month ? 'out' : ''} ${date === today ? 'today' : ''} ${date === day ? 'sel' : ''}">
           <a class="dnum" href="/admin/crm/calendar?m=${month}&day=${date}">${Number(date.slice(8))}</a>${chips}${list.length > 3 ? html`<a class="more" href="/admin/crm/calendar?m=${month}&day=${date}">+${list.length - 3} more</a>` : ''}</td>`);
       }
@@ -173,8 +175,9 @@ module.exports = function crmRoutes(router, { db, config }) {
       <div class="cal-nav"><a class="btn small ghost" href="/admin/crm/calendar?m=${prev}">←</a><b>${monthLabel}</b><a class="btn small ghost" href="/admin/crm/calendar?m=${next}">→</a><a class="btn small ghost" href="/admin/crm/calendar">Today</a>
         <span class="legend">${C.TASK_TYPES.map((x) => html`<span class="chip ${tyClass(x)}">${x}</span>`)}<span class="chip log">Logged activity</span></span></div>
       <div class="table-wrap"><table class="cal"><thead><tr>${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => html`<th>${d}</th>`)}</tr></thead><tbody>${weeks}</tbody></table></div>
-      <section class="card"><h2>${C.dayName(day)}</h2>
-        ${dayList.length ? html`<ul class="tasks">${dayList.map((e) => e.raw ? itemRow(e.raw, { names, today, back }) : html`<li class="task log"><div class="t-main"><span class="tag ${tyClass(e.type)}">${e.type}</span> ${e.label} · ${e.supplier_id ? html`<a href="/admin/suppliers/${e.supplier_id}">${names[e.supplier_id]}</a>` : 'General'} <span class="muted">(logged)</span></div></li>`)}</ul>` : html`<p class="muted">Nothing on this day.</p>`}
+      <section class="card" id="day"><h2>${C.dayName(day)}</h2>
+        ${dayList.length ? html`<ul class="tasks">${dayList.map((e) => e.raw ? itemRow(e.raw, { names, today, back }) : html`<li class="task log"><div class="t-main"><span class="tag ${tyClass(e.type)}">${e.type}</span> <span class="muted">logged</span><div>${e.label}</div>
+          <div class="sub">${e.supplier_id ? html`<a href="/admin/suppliers/${e.supplier_id}">${names[e.supplier_id]}</a>` : 'General'}${(() => { const ref = (String(e.label).match(/\bLB-\d{3,7}\b/) || [])[0]; return ref && reqByRef[ref] ? html` · <a href="/admin/requests/${reqByRef[ref]}">Open request ${ref}</a>` : ''; })()}</div></div></li>`)}</ul>` : html`<p class="muted">Nothing on this day.</p>`}
         ${dayList.some((e) => e.state === 'done') ? html`<p class="muted small">Completed tasks are shown struck through in the calendar.</p>` : ''}
         <h3>Schedule something on this day</h3>${taskForm({ suppliers, date: day, back })}</section>`,
     }));

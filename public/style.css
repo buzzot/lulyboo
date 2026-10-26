@@ -518,3 +518,4 @@ table.cal td.today { background: var(--brand-soft); } table.cal td.sel { outline
 .chip.log, .chip.log { background: transparent; border: 1px dashed #cfcac2; color: var(--muted); }
 .more { font-size: .72rem; color: var(--muted); }
 @media (max-width: 720px) { table.cal td { height: 70px; } .chip { font-size: .65rem; } }
+a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: brightness(.95); outline: 1px solid var(--brand); }

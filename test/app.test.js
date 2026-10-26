@@ -839,3 +839,18 @@ test('crm: Telegram pairing, buttons, digest and timed pings', async (t) => {
   await hook({ message: { text: '/today', chat: { id: 42 } } });
   assert.match(sent().at(-1).body.text, /Today/);
 });
+
+test('crm calendar: chips link to the day; logged request activities link to the request', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const C = require('../src/crm'); const today = C.localNow().date;
+  const s = await db.insert('suppliers', { name: 'Dadi Toys' });
+  const r = await db.insert('info_requests', { supplier_id: s.id, ref: 'LB-1005' });
+  await db.insert('supplier_activities', { supplier_id: s.id, type: 'Email', summary: 'Information request LB-1005 sent (Samples)', activity_date: today });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const cal = await req(base, 'GET', `/admin/crm/calendar?day=${today}`, { cookie });
+  assert.match(cal.text, /<a class="chip [^"]*" href="\/admin\/crm\/calendar\?m=\d{4}-\d{2}&(?:amp;)?day=\d{4}-\d{2}-\d{2}#day"/);
+  assert.ok(cal.text.includes(`href="/admin/requests/${r.id}"`));
+  assert.match(cal.text, /Open request LB-1005/);
+});
