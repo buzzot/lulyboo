@@ -854,3 +854,43 @@ test('crm calendar: chips link to the day; logged request activities link to the
   assert.ok(cal.text.includes(`href="/admin/requests/${r.id}"`));
   assert.match(cal.text, /Open request LB-1005/);
 });
+
+test('mailgun inbound: signed reply is logged with attachment; bad/stale signature refused; unmatched is 200; retries not duplicated', async (t) => {
+  process.env.MAILGUN_SIGNING_KEY = 'mg-key';
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { delete process.env.MAILGUN_SIGNING_KEY; server.close(); });
+  const crypto = require('node:crypto');
+  const s = await db.insert('suppliers', { name: 'Dadi Toys' });
+  const r = await db.insert('info_requests', { supplier_id: s.id, ref: 'LB-1007', status: 'Sent' });
+  const sign = (ts, token, key = 'mg-key') => crypto.createHmac('sha256', key).update(ts + token).digest('hex');
+  const post = (over = {}, { file = true, ts = String(Math.floor(Date.now() / 1000)), key } = {}) => {
+    const token = 'tok' + Math.random();
+    const fd = new FormData();
+    const fields = { timestamp: ts, token, signature: sign(ts, token, key), from: 'Lily <lily@dadi.example>', recipient: 'requests@in.lulyboo.space', subject: 'Re: Lulyboo information request LB-1007', 'stripped-text': 'Attached are the photos.', 'body-plain': 'Attached are the photos.\n> quoted', ...over };
+    for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+    if (file) fd.append('attachment-1', new Blob([Buffer.from('JPEGDATA')], { type: 'image/jpeg' }), 'photo 1.jpg');
+    return fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: fd });
+  };
+  assert.equal((await post({}, { key: 'wrong' })).status, 404);
+  assert.equal((await post({}, { ts: String(Math.floor(Date.now() / 1000) - 3600) })).status, 404);
+  assert.equal(db.tables.info_request_messages?.length || 0, 0);
+
+  const ok = await post();
+  assert.equal(ok.status, 200);
+  const j = await ok.json(); assert.equal(j.matched, true); assert.equal(j.ref, 'LB-1007');
+  const msgs = db.tables.info_request_messages;
+  assert.equal(msgs.length, 1); assert.equal(msgs[0].direction, 'in'); assert.equal(msgs[0].body, 'Attached are the photos.');
+  assert.match(msgs[0].from_email, /lily@dadi\.example/);
+  assert.equal(msgs[0].attachments.length, 1); assert.ok(msgs[0].attachments[0].path);
+  assert.ok(db.files.has(msgs[0].attachments[0].path));
+  assert.equal(db.tables.info_requests[0].status, 'Replied');
+
+  // Mailgun retry of the same message is not logged twice
+  assert.equal((await (await post({}, {})).json()).duplicate, true);
+  assert.equal(db.tables.info_request_messages.length, 1);
+  // no reference → accepted (so Mailgun stops retrying) but nothing logged
+  const none = await post({ subject: 'Hello', 'body-plain': 'x', 'stripped-text': 'x' }, { file: false });
+  assert.equal(none.status, 200); assert.equal((await none.json()).matched, false);
+  assert.equal(db.tables.info_request_messages.length, 1);
+});

@@ -14,6 +14,8 @@ const { page, adminNav } = require('../views/layout');
 const S = require('../services');
 const { sendEmail, requestEmail, REQUEST_ITEMS, emailConfigured } = require('../email');
 const { guard } = require('./admin');
+const tg = require('../telegram');
+const C = require('../crm');
 
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const STATUSES = ['Sent', 'Replied', 'Complete', 'Closed'];
@@ -223,6 +225,27 @@ module.exports = function requestRoutes(router, { db, config }) {
     res.redirect(`/admin/requests/${r.id}`);
   }));
 
+  // Log one inbound reply on its request (used by every inbound provider) and tell the admin on Telegram.
+  const plain = (htmlBody) => String(htmlBody || '').replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  async function logReply(r, { from, toList, subject, text, htmlBody, attachments }) {
+    const body = (text || plain(htmlBody)).trim().slice(0, 20000) || '(no text: open the original email)';
+    const dupe = (await db.list('info_request_messages', { filters: { request_id: r.id, direction: 'in' } })).some((x) => x.body === body && x.from_email === from && x.subject === subject);
+    if (dupe) return { duplicate: true };
+    await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments });
+    await db.update('info_requests', { id: r.id }, { status: r.status === 'Sent' ? 'Replied' : r.status, updated_at: new Date().toISOString() });
+    if (tg.enabled()) {
+      try {
+        const st = await C.settingsRow(db);
+        if (st?.telegram_chat_id) {
+          const sup = r.supplier_id ? await db.get('suppliers', r.supplier_id) : null;
+          const n = attachments.filter((a) => a.path).length;
+          await tg.sendMessage(st.telegram_chat_id, `📬 <b>${tg.escapeHtml(sup?.name || from || 'Supplier')}</b> replied to <b>${r.ref}</b>${n ? ` · ${n} attachment${n > 1 ? 's' : ''}` : ''}\n${tg.escapeHtml(body.slice(0, 300))}${body.length > 300 ? '…' : ''}`, { buttons: [[{ text: 'Open request', url: `${config.publicUrl}/admin/requests/${r.id}` }]] });
+        }
+      } catch (e) { console.error('Reply notification failed:', e.message); }
+    }
+    return { duplicate: false };
+  }
+
   // ── Inbound email webhook: links a supplier's reply to its request by the LB-xxxx reference.
   //    Set INBOUND_EMAIL_SECRET and point your inbound-email provider (e.g. Resend inbound) at
   //    https://<your-site>/hooks/inbound-email?key=<secret>. Accepts Resend's `email.received` event, or a plain JSON
@@ -248,10 +271,34 @@ module.exports = function requestRoutes(router, { db, config }) {
         if (rr.ok) { const j = await rr.json(); text = j.text || ''; htmlBody = j.html || ''; }
       } catch (e) { console.error('Inbound body fetch failed:', e.message); }
     }
-    const body = (text || String(htmlBody).replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim().slice(0, 20000) || '(no text: open the original email)';
     const attachments = await fetchInboundAttachments(r.ref, d.email_id || d.id, d.attachments);
-    await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments });
-    await db.update('info_requests', { id: r.id }, { status: r.status === 'Sent' ? 'Replied' : r.status, updated_at: new Date().toISOString() });
+    await logReply(r, { from, toList, subject, text, htmlBody, attachments });
     res.json({ ok: true, matched: true, ref });
+  });
+
+  // ── Mailgun inbound route. In Mailgun: Receiving → Create route → expression `match_recipient(".*@<your-inbound-domain>")`,
+  //    action `Forward` to https://<your-site>/hooks/mailgun-inbound. Set MAILGUN_SIGNING_KEY (Mailgun → Settings → API security →
+  //    "HTTP webhook signing key"). Replies are matched to their request by the LB-xxxx reference, like the Resend route above.
+  router.post('/hooks/mailgun-inbound', async (req, res) => {
+    const key = process.env.MAILGUN_SIGNING_KEY;
+    if (!key) return res.json({ error: 'not found' }, 404);
+    let parsed;
+    try { parsed = await parseForm(req, { limitBytes: 45 * 1024 * 1024 }); } catch { return res.json({ error: 'bad request' }, 400); }
+    const f = parsed.fields;
+    const expect = crypto.createHmac('sha256', key).update(String(f.timestamp || '') + String(f.token || '')).digest('hex');
+    const sig = String(f.signature || '');
+    const fresh = Math.abs(Date.now() / 1000 - Number(f.timestamp)) < 15 * 60;
+    if (!(sig.length === expect.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect)) && fresh)) return res.json({ error: 'not found' }, 404);
+    const from = String(f.from || f.sender || '');
+    const toList = String(f.recipient || f.To || '').split(/[,;]\s*/).filter(Boolean);
+    const subject = String(f.subject || '');
+    const text = String(f['stripped-text'] || f['body-plain'] || '');
+    const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(f['body-plain']) || null;
+    const r = ref ? (await db.list('info_requests', { filters: { ref } }))[0] : null;
+    if (!r) return res.json({ ok: true, matched: false }); // 200 so Mailgun does not retry
+    const attachments = [];
+    for (const file of Object.values(parsed.files).flat()) attachments.push(await saveAttachment(r.ref, file));
+    const out = await logReply(r, { from, toList, subject, text, htmlBody: f['body-html'], attachments });
+    res.json({ ok: true, matched: true, ref, ...out });
   });
 };
