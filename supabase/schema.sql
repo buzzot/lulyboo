@@ -284,6 +284,33 @@ with (security_invoker = true) as
 select count(*)::int as image_count, coalesce(sum(bytes),0)::bigint as total_bytes
 from public.product_images;
 
+-- ───────────────────────── CRM tasks (follow-ups, calls, meetings) ─────────────────────────
+create table if not exists public.crm_tasks (
+  id              uuid primary key default gen_random_uuid(),
+  supplier_id     uuid references public.suppliers(id) on delete cascade,
+  product_id      uuid references public.products(id) on delete set null,
+  request_id      uuid references public.info_requests(id) on delete set null,
+  title           text not null,
+  notes           text,
+  type            text not null default 'Follow-up'
+                  check (type in ('Follow-up','Call','Email','Meeting','Sample','Visit','Other')),
+  due_date        date not null,
+  due_time        text check (due_time is null or due_time ~ '^[0-2][0-9]:[0-5][0-9]$'),   -- local time, HH:MM
+  remind_minutes  integer not null default 15,       -- Telegram ping this many minutes before due_time
+  reminded_at     timestamptz,
+  done            boolean not null default false,
+  done_at         timestamptz,
+  created_at      timestamptz not null default now()
+);
+create index if not exists crm_tasks_due_idx on public.crm_tasks(done, due_date);
+create index if not exists crm_tasks_supplier_idx on public.crm_tasks(supplier_id);
+alter table public.crm_tasks enable row level security;
+
+-- Telegram reminders: paired chat, one-time pairing code, last daily digest date
+alter table public.settings add column if not exists telegram_chat_id   text;
+alter table public.settings add column if not exists telegram_pair_code text;
+alter table public.settings add column if not exists crm_digest_date    date;
+
 -- ───────────────────────── Security ─────────────────────────
 -- The Node server uses the secret / service-role key (bypasses RLS).
 -- RLS with no policies keeps the public anon key from reading anything.

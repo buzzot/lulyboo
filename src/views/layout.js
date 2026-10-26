@@ -84,6 +84,7 @@ function adminNav(active) {
     ['products', '/admin/products', 'Products'],
     ['suppliers', '/admin/suppliers', 'Suppliers'],
     ['requests', '/admin/requests', 'Requests'],
+    ['crm', '/admin/crm', 'CRM'],
     ['categories', '/admin/categories', 'Categories'],
     ['logistics', '/admin/logistics', 'Logistics'],
     ['pricing', '/admin/pricing', 'Pricing'],

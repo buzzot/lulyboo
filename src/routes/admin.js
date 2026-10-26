@@ -222,17 +222,19 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   // ── Dashboard
   router.get('/admin', G(async (req, res) => {
-    const [{ ctx, items, suppliers }, activities, usageRows, supFull] = await Promise.all([
+    const [{ ctx, items, suppliers }, activities, usageRows, supFull, crmTasks] = await Promise.all([
       S.loadAnalyzed(db),
       db.list('supplier_activities', { filters: { done: false, follow_up_date: ['lte', today()] }, order: 'follow_up_date.asc' }),
       db.list('storage_usage', { limit: 1 }),
       db.list('suppliers', { order: 'name.asc' }),
+      db.list('crm_tasks', { filters: { done: false, due_date: ['lte', today()] }, order: 'due_date.asc' }),
     ]);
     const usage = usageRows[0] || { image_count: 0, total_bytes: 0 };
     const supName = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     const count = (st) => items.filter((i) => i.product.status === st).length;
     const pipeline = ['Shortlisted', 'Sample requested', 'Selected'].reduce((a, s) => a + count(s), 0);
     const followUps = [
+      ...crmTasks.map((x) => ({ date: x.due_date, supplier_id: x.supplier_id, text: x.title })),
       ...activities.map((a) => ({ date: a.follow_up_date, supplier_id: a.supplier_id, text: a.summary })),
       ...supFull.filter((s) => s.next_follow_up && s.next_follow_up <= today()).map((s) => ({ date: s.next_follow_up, supplier_id: s.id, text: 'Follow up' })),
     ].sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -267,7 +269,7 @@ module.exports = function adminRoutes(router, { db, config }) {
         <a class="kpi" href="/admin/products"><b>${fmt.num(items.length)}</b><span>Products</span><small>${withIssues} with data issues</small></a>
         <a class="kpi accent" href="/admin/products?status=New"><b>${fmt.num(count('New'))}</b><span>New to review</span></a>
         <a class="kpi" href="/admin/products?status=Shortlisted"><b>${fmt.num(pipeline)}</b><span>Shortlisted → Selected</span><small>${count('Selected')} selected</small></a>
-        <a class="kpi ${followUps.length ? 'warn' : ''}" href="/admin/suppliers?followup=1"><b>${followUps.length}</b><span>Follow-ups due</span></a>
+        <a class="kpi ${followUps.length ? 'warn' : ''}" href="/admin/crm"><b>${followUps.length}</b><span>Follow-ups due</span></a>
         <a class="kpi" href="/admin/settings#storage"><b>${fmt.bytes(usage.total_bytes)}</b><span>Image storage</span><small>${fmt.num(usage.image_count)} photos · ${usedPct.toFixed(1)}% of ${storagePlanGb} GB</small></a>
       </div>
 
@@ -680,6 +682,7 @@ module.exports = function adminRoutes(router, { db, config }) {
             <label class="span2"><span class="lbl">Notes</span><textarea name="notes" rows="3">${s.notes || ''}</textarea></label>
             <div class="span2"><button class="btn">Save</button></div>
           </form></section>
+        ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
         <section class="card"><h2>Activity</h2>
           <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
             <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
@@ -776,7 +779,8 @@ module.exports = function adminRoutes(router, { db, config }) {
     const a = await db.get('supplier_activities', req.params.id);
     if (!a) throw new HttpError(404, 'Not found');
     await db.update('supplier_activities', { id: a.id }, { done: true });
-    res.redirect(`/admin/suppliers/${a.supplier_id}`);
+    const { fields } = await parseForm(req).catch(() => ({ fields: {} }));
+    res.redirect(/^\/admin\/[\w\/?=&.-]*$/.test(fields.back || '') ? fields.back : `/admin/suppliers/${a.supplier_id}`);
   }));
   router.post('/admin/suppliers/:id/import', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);

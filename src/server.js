@@ -51,6 +51,7 @@ function createApp({ db, config }) {
   require('./routes/admin')(router, { db, config });
   require('./routes/admin-tools')(router, { db, config });
   require('./routes/requests')(router, { db, config });
+  require('./routes/crm')(router, { db, config });
 
   const imgOrigin = config.supabaseUrl ? new URL(config.supabaseUrl).origin : '';
 
@@ -96,6 +97,11 @@ if (require.main === module) {
   if (!process.env.SESSION_SECRET) console.warn('SESSION_SECRET is not set; using a value derived from ADMIN_PASSWORD.');
   const server = http.createServer(createApp({ db, config }));
   server.requestTimeout = 5 * 60_000; // AI calls and large uploads
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    const { runReminders } = require('./crm');
+    const tick = () => runReminders({ db, config }).catch((e) => console.error('Reminder run failed:', e.message));
+    setTimeout(tick, 15_000); setInterval(tick, 60_000);
+  } else console.warn('TELEGRAM_BOT_TOKEN is not set: CRM reminders on Telegram are off.');
   server.listen(config.port, () => console.log(`Lulyboo portal on :${config.port} (${config.publicUrl})`));
 }
 

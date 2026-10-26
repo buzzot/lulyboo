@@ -726,3 +726,116 @@ test('importer: "20 DAYS" validity and separate N.W./G.W. columns', () => {
   assert.equal(p.carton_nw_kg, 9.6); assert.equal(p.carton_gw_kg, 10.8);
   assert.match(p.quote_valid_until, /^\d{4}-\d\d-\d\d$/);
 });
+
+// ── CRM ───────────────────────────────────────────────────────
+test('crm: add, list, calendar, snooze, done (logs activity), supplier page widget', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const C = require('../src/crm');
+  const today = C.localNow().date;
+  const s = await db.insert('suppliers', { name: 'Dadi Toys' });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+
+  const bad = await req(base, 'POST', '/admin/crm/tasks', { cookie, form: { title: '  ', due_date: today } });
+  assert.equal(bad.status, 303); assert.equal(db.tables.crm_tasks?.length || 0, 0);
+  const add = await req(base, 'POST', '/admin/crm/tasks', { cookie, form: { title: 'Chase samples', supplier_id: s.id, type: 'Call', due_date: C.addDays(today, -2), due_time: '10:30', remind_minutes: '30', back: '/admin/crm' } });
+  assert.equal(add.location, '/admin/crm');
+  await req(base, 'POST', '/admin/crm/tasks', { cookie, form: { title: 'Send NDA', due_date: today, type: 'nonsense' } });
+  assert.equal(db.tables.crm_tasks.length, 2);
+  const [a, b] = db.tables.crm_tasks;
+  assert.equal(a.type, 'Call'); assert.equal(a.due_time, '10:30'); assert.equal(a.remind_minutes, 30);
+  assert.equal(b.type, 'Follow-up'); assert.equal(b.supplier_id, null);
+
+  const list = await req(base, 'GET', '/admin/crm', { cookie });
+  assert.equal(list.status, 200);
+  assert.match(list.text, /Overdue/); assert.match(list.text, /Chase samples/); assert.match(list.text, /Send NDA/); assert.match(list.text, /Dadi Toys/);
+  const cal = await req(base, 'GET', `/admin/crm/calendar?m=${today.slice(0, 7)}&day=${today}`, { cookie });
+  assert.equal(cal.status, 200); assert.match(cal.text, /class="cal"/); assert.match(cal.text, /Send NDA/);
+  assert.match((await req(base, 'GET', '/admin/crm/calendar?m=garbage', { cookie })).text, /class="cal"/);
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text, /Next actions[\s\S]*Chase samples/);
+
+  // snooze an overdue task moves it from today, not from the past
+  await req(base, 'POST', `/admin/crm/tasks/${a.id}/snooze`, { cookie, form: { days: '1' } });
+  assert.equal(db.tables.crm_tasks.find((x) => x.id === a.id).due_date, C.addDays(today, 1));
+  // done logs an activity on the supplier timeline
+  const done = await req(base, 'POST', `/admin/crm/tasks/${a.id}/done`, { cookie, form: { back: 'https://evil.example' } });
+  assert.equal(done.location, '/admin/crm');
+  assert.equal(db.tables.crm_tasks.find((x) => x.id === a.id).done, true);
+  assert.ok(db.tables.supplier_activities.some((x) => x.supplier_id === s.id && x.summary === 'Done: Chase samples' && x.type === 'Call'));
+  await req(base, 'POST', `/admin/crm/tasks/${b.id}/delete`, { cookie, form: {} });
+  assert.equal(db.tables.crm_tasks.length, 1);
+  // not reachable without login
+  assert.equal((await req(base, 'GET', '/admin/crm')).status, 303);
+});
+
+test('crm: Telegram pairing, buttons, digest and timed pings', async (t) => {
+  process.env.TELEGRAM_BOT_TOKEN = 'TESTTOKEN';
+  const realFetch = global.fetch; const calls = [];
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.telegram.org/')) {
+      const method = String(url).split('/').pop(); const body = JSON.parse(opts.body); calls.push({ method, body });
+      return new Response(JSON.stringify({ ok: true, result: method === 'getMe' ? { username: 'lulyboo_test_bot' } : { message_id: 1 } }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.TELEGRAM_BOT_TOKEN; server.close(); });
+  const C = require('../src/crm'); const tgm = require('../src/telegram');
+  const config = { ...buildConfig({ ADMIN_PASSWORD: 'pw-test', SESSION_SECRET: 's', PORT: '0', SUPABASE_URL: 'https://x.supabase.co' }), publicUrl: 'https://portal.test' };
+  const secret = tgm.webhookSecret(config); // same derivation as the server (config.sessionSecret = 's')
+  const hook = (update, sec = secret) => fetch(`${base}/hooks/telegram`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': sec }, body: JSON.stringify(update) });
+  const sent = () => calls.filter((c) => c.method === 'sendMessage');
+
+  // wrong secret is refused
+  assert.equal((await hook({ message: { text: '/start x', chat: { id: 1 } } }, 'nope')).status, 404);
+  // pairing with the right one-time code
+  await db.insert('settings', { id: 1 }).catch(() => {});
+  db.tables.settings[0].telegram_pair_code = 'abc123';
+  await hook({ message: { text: '/start wrongcode', chat: { id: 77 } } });
+  assert.equal(db.tables.settings[0].telegram_chat_id ?? null, null);
+  await hook({ message: { text: '/start abc123', chat: { id: 42 } } });
+  assert.equal(db.tables.settings[0].telegram_chat_id, '42'); assert.equal(db.tables.settings[0].telegram_pair_code, null);
+  assert.match(sent().at(-1).body.text, /Connected/);
+  // strangers are ignored
+  const before = sent().length;
+  await hook({ message: { text: '/today', chat: { id: 999 } } });
+  assert.equal(sent().length, before);
+
+  const sup = await db.insert('suppliers', { name: 'Dadi Toys' });
+  const noon = new Date(); // run reminders "now"
+  const ln = C.localNow(noon);
+  const overdue = await db.insert('crm_tasks', { supplier_id: sup.id, title: 'Late thing', due_date: C.addDays(ln.date, -1) });
+  const timed = await db.insert('crm_tasks', { supplier_id: sup.id, title: 'Call about samples', type: 'Call', due_date: ln.date, due_time: '23:59', remind_minutes: 24 * 60 - 1 }); // remind moment = 00:00 today → already due
+  const later = await db.insert('crm_tasks', { supplier_id: sup.id, title: 'Future', due_date: C.addDays(ln.date, 5), due_time: '09:00' });
+
+  // digest only after the digest hour
+  process.env.CRM_DIGEST_HOUR = '23';
+  const early = new Date(Date.now()); if (ln.hour >= 23) process.env.CRM_DIGEST_HOUR = '23';
+  const r1 = await C.runReminders({ db, config, now: noon });
+  const msgs1 = sent().slice(before).map((c) => c.body.text);
+  assert.ok(msgs1.some((x) => /Call about samples/.test(x) && /⏰/.test(x)), 'timed ping');
+  assert.ok(db.tables.crm_tasks.find((x) => x.id === timed.id).reminded_at);
+  assert.equal(db.tables.crm_tasks.find((x) => x.id === later.id).reminded_at ?? null, null);
+  // run again: nothing new is sent
+  const n = sent().length; await C.runReminders({ db, config, now: noon }); assert.equal(sent().length, n);
+  // digest at/after the hour, once per day
+  process.env.CRM_DIGEST_HOUR = '0';
+  await C.runReminders({ db, config, now: noon });
+  const digest = sent().map((c) => c.body.text).find((x) => /Good morning/.test(x));
+  assert.ok(digest && /Late thing/.test(digest) && /Overdue/.test(digest));
+  assert.equal(db.tables.settings[0].crm_digest_date, ln.date);
+  const n2 = sent().length; await C.runReminders({ db, config, now: noon }); assert.equal(sent().length, n2);
+  delete process.env.CRM_DIGEST_HOUR;
+
+  // buttons: snooze then done
+  const cb = (data) => hook({ callback_query: { id: 'q1', data, message: { message_id: 5, text: 'x', chat: { id: 42 } } } });
+  await cb(`s7:${overdue.id}`);
+  assert.equal(db.tables.crm_tasks.find((x) => x.id === overdue.id).due_date, C.addDays(ln.date, 7));
+  await cb(`d:${overdue.id}`);
+  assert.equal(db.tables.crm_tasks.find((x) => x.id === overdue.id).done, true);
+  // commands
+  await hook({ message: { text: '/today', chat: { id: 42 } } });
+  assert.match(sent().at(-1).body.text, /Today/);
+});
