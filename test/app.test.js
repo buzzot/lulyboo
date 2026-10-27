@@ -894,3 +894,19 @@ test('mailgun inbound: signed reply is logged with attachment; bad/stale signatu
   assert.equal(none.status, 200); assert.equal((await none.json()).matched, false);
   assert.equal(db.tables.info_request_messages.length, 1);
 });
+
+test('AI failures show the reason on the page instead of a generic 500', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'bad-key';
+  const realFetch = global.fetch;
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  global.fetch = async (url, opts) => (String(url).startsWith('https://api.anthropic.com') ? new Response('{"error":{"type":"authentication_error","message":"invalid x-api-key"}}', { status: 401 }) : realFetch(url, opts));
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const s = await db.insert('suppliers', { name: 'A' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Swaddle', is_draft: false, status: 'New', unit_price: 3 });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const r = await req(base, 'POST', `/admin/products/${p.id}/ai-review`, { cookie, form: {} });
+  assert.equal(r.status, 303); assert.equal(r.location, `/admin/products/${p.id}`);
+  const page = await req(base, 'GET', r.location, { cookie: cookie + '; ' + r.cookies.map((x) => x.split(';')[0]).join('; ') });
+  assert.match(page.text, /AI request failed: The Anthropic API key was rejected/);
+});

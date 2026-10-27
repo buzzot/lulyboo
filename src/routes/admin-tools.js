@@ -18,6 +18,25 @@ const csvCell = (v) => { if (v === null || v === undefined) return ''; const s =
 module.exports = function toolRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
 
+  // AI failures should say why (bad key, wrong model, no credit, busy) instead of a generic 500.
+  function friendlyAi(msg) {
+    msg = String(msg || '');
+    if (/Claude API 401|authentication|invalid x-api-key/i.test(msg)) return 'The Anthropic API key was rejected. Check ANTHROPIC_API_KEY in Railway (no spaces or quotes).';
+    if (/Claude API 404|model/i.test(msg) && /not.?found|model/i.test(msg)) return 'Anthropic does not know the model name. Check ANTHROPIC_MODEL in Railway, or delete that variable to use the default.';
+    if (/credit|billing|balance/i.test(msg)) return 'The Anthropic account is out of credit. Add credit at console.anthropic.com → Billing.';
+    if (/Claude API (429|529|500|503)|overloaded|rate/i.test(msg)) return 'Claude is busy or rate-limited. Wait a minute and try again.';
+    return msg.slice(0, 300) || 'Unknown error';
+  }
+  const AIG = (fn) => G(async (req, res) => {
+    try { return await fn(req, res); } catch (e) {
+      if (e instanceof HttpError || res.headersSent) throw e;
+      console.error(new Date().toISOString(), 'AI request failed', req.method, req.pathname, e.message);
+      flash(res, 'error', `AI request failed: ${friendlyAi(e.message)}`);
+      res.redirect(req.params?.id ? `/admin/products/${req.params.id}` : '/admin/ai');
+    }
+  });
+
+
   // ── Categories
   router.get('/admin/categories', G(async (req, res) => {
     const [ctx, products] = await Promise.all([S.getCtx(db), db.list('products', { select: 'id,category' })]);
@@ -132,7 +151,7 @@ module.exports = function toolRoutes(router, { db, config }) {
   }));
 
   // Market-rate check: AI finds the current benchmark online and PROPOSES a rate; nothing changes until the admin confirms.
-  router.post('/admin/logistics/:id/check-rate', G(async (req, res) => {
+  router.post('/admin/logistics/:id/check-rate', AIG(async (req, res) => {
     needAi();
     await parseForm(req, { limitBytes: 1_000_000 }).catch(() => null);
     const o = await db.get('logistics_options', req.params.id);
@@ -220,7 +239,7 @@ module.exports = function toolRoutes(router, { db, config }) {
   const chinaOrigin = (p) => { const o = String(p.country_of_origin || '').trim().toLowerCase(); return !o || ['china', 'cn', 'prc', "people's republic of china", '中国'].includes(o); };
   const needsDutyResearch = (p) => chinaOrigin(p) && !p.duty_ai_checked_at && (p.duty_rate_pct === null || p.duty_rate_pct === undefined) && !p.is_draft;
 
-  router.post('/admin/pricing/research-duty', G(async (req, res) => {
+  router.post('/admin/pricing/research-duty', AIG(async (req, res) => {
     needAi();
     const { items } = await S.loadAnalyzed(db);
     const todo = items.map((i) => i.product).filter(needsDutyResearch).slice(0, 6);
@@ -313,7 +332,7 @@ module.exports = function toolRoutes(router, { db, config }) {
   function needAi() { if (!AI.enabled()) throw new HttpError(400, 'AI is not configured. Add ANTHROPIC_API_KEY in Railway variables.'); }
 
   // ── Duty & HTS (USITC + AI); manual override and test mode live in admin.js / calc.js
-  router.post('/admin/products/:id/duty/research', G(async (req, res) => {
+  router.post('/admin/products/:id/duty/research', AIG(async (req, res) => {
     needAi();
     const { fields } = await parseForm(req);
     const p = await db.get('products', req.params.id);
@@ -342,7 +361,7 @@ module.exports = function toolRoutes(router, { db, config }) {
     res.redirect(`/admin/products/${req.params.id}#duty`);
   }));
 
-  router.post('/admin/products/:id/ai-review', G(async (req, res) => {
+  router.post('/admin/products/:id/ai-review', AIG(async (req, res) => {
     needAi();
     const { items, ctx } = await S.loadAnalyzed(db, { filters: { id: req.params.id } });
     const it = items[0];
@@ -354,7 +373,7 @@ module.exports = function toolRoutes(router, { db, config }) {
     res.redirect(`/admin/products/${it.product.id}`);
   }));
 
-  router.post('/admin/products/:id/ai-similar', G(async (req, res) => {
+  router.post('/admin/products/:id/ai-similar', AIG(async (req, res) => {
     needAi();
     const { items } = await S.loadAnalyzed(db);
     const target = items.find((i) => i.product.id === req.params.id);
@@ -369,7 +388,7 @@ module.exports = function toolRoutes(router, { db, config }) {
     res.redirect(`/admin/products/${target.product.id}`);
   }));
 
-  router.post('/admin/ai/compare', G(async (req, res) => {
+  router.post('/admin/ai/compare', AIG(async (req, res) => {
     needAi();
     await parseForm(req, { limitBytes: 1_000_000 }).catch(() => null);
     const ids = String(req.query.ids || '').split(',').filter(Boolean).slice(0, 8);
@@ -381,7 +400,7 @@ module.exports = function toolRoutes(router, { db, config }) {
     res.redirect(`/admin/ai/${an.id}`);
   }));
 
-  router.post('/admin/ai/category', G(async (req, res) => {
+  router.post('/admin/ai/category', AIG(async (req, res) => {
     needAi();
     const { fields } = await parseForm(req);
     const category = String(fields.category || '');
