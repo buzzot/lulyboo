@@ -153,11 +153,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     res.html(page({
       title: 'Requests', nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
       body: html`<h1>Information requests</h1>
-      <p class="muted">Send them from a supplier page: tick products, then “Request information”. Replies are tracked by the reference in the subject line.</p>
+      <p class="muted">Send them from a supplier page: tick products, then “Request information”. Replies are tracked by the reference in the subject line. RFQs recorded by Hermes appear here too (<a href="/admin/api-log">integration log</a>).</p>
       <p>${['', ...STATUSES].map((s) => html`<a class="btn small ${(st || '') === s ? '' : 'ghost'}" href="/admin/requests${s ? `?status=${s}` : ''}">${s || 'All'}</a> `)}</p>
       <div class="table-wrap"><table class="list"><thead><tr><th>Ref</th><th>Supplier</th><th>Requested</th><th class="r">Products</th><th>Status</th><th>Sent</th></tr></thead>
       <tbody>${list.length ? list.map((r) => html`<tr><td><a href="/admin/requests/${r.id}"><b>${r.ref}</b></a></td><td><a href="/admin/suppliers/${r.supplier_id}">${name[r.supplier_id] || '—'}</a></td>
-        <td>${[...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ')}</td><td class="r">${(r.product_ids || []).length}</td><td>${pill(r.status)}</td><td>${fmt.date(r.created_at)}</td></tr>`) : html`<tr><td colspan="6" class="muted">No requests yet.</td></tr>`}</tbody></table></div>`,
+        <td>${r.kind === 'rfq' ? html`<span class="pill s-new">RFQ${r.channel ? ' · ' + r.channel : ''}</span> ${r.subject}` : [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ')}</td><td class="r">${(r.product_ids || []).length}</td><td>${pill(r.status)}</td><td>${fmt.date(r.created_at)}</td></tr>`) : html`<tr><td colspan="6" class="muted">No requests yet.</td></tr>`}</tbody></table></div>`,
     }));
   }));
 
@@ -174,10 +174,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     res.html(page({
       title: r.ref, nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
       body: html`<div class="head-row"><div><h1>${r.ref} ${pill(r.status)}</h1>
-        <p class="muted"><a href="/admin/suppliers/${r.supplier_id}">${supplier?.name || 'Supplier'}</a> · sent ${fmt.date(r.created_at)} to ${(r.to_emails || []).join(', ')}${(r.cc_emails || []).length ? ` · CC ${r.cc_emails.join(', ')}` : ''}</p></div>
+        <p class="muted"><a href="/admin/suppliers/${r.supplier_id}">${supplier?.name || 'Supplier'}</a> · sent ${fmt.date(r.created_at)}${r.kind === 'rfq' ? html` as RFQ${r.channel ? ' via ' + r.channel : ''}${r.contact ? ' to ' + r.contact : ''}` : ''}${(r.to_emails || []).length ? ' to ' + r.to_emails.join(', ') : ''}${(r.cc_emails || []).length ? ` · CC ${r.cc_emails.join(', ')}` : ''}</p></div>
         <form method="post" action="/admin/requests/${r.id}/status" class="inline-form"><select name="status">${STATUSES.map((s) => html`<option ${s === r.status ? raw('selected') : ''}>${s}</option>`)}</select><button class="btn small">Update status</button></form></div>
       <div class="cols">
         <section class="card"><h2>What was requested</h2>
+          ${r.kind === 'rfq' ? html`<p>${r.subject}</p>` : ''}
           <ul class="plain">${(r.items || []).map((k) => html`<li>${REQUEST_ITEMS[k]?.en || k} <span class="sub">${REQUEST_ITEMS[k]?.zh || ''}</span></li>`)}${r.other_text ? html`<li>${r.other_text}</li>` : ''}</ul>
           ${r.note ? html`<p><b>Note:</b> ${r.note}</p>` : ''}
           <h3>Products</h3><ul class="plain">${products.map((p) => html`<li><a href="/admin/products/${p.id}">${p.product_name}</a> <span class="sub">${p.supplier_sku || ''}</span></li>`)}</ul>
@@ -233,6 +234,7 @@ module.exports = function requestRoutes(router, { db, config }) {
     if (dupe) return { duplicate: true };
     await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments });
     await db.update('info_requests', { id: r.id }, { status: r.status === 'Sent' ? 'Replied' : r.status, updated_at: new Date().toISOString() });
+    await C.completeRequestTasks(db, r.id);
     if (tg.enabled()) {
       try {
         const st = await C.settingsRow(db);
@@ -245,6 +247,8 @@ module.exports = function requestRoutes(router, { db, config }) {
     }
     return { duplicate: false };
   }
+
+  router.requestHelpers = { nextRef, saveAttachment, logReply };
 
   // ── Inbound email webhook: links a supplier's reply to its request by the LB-xxxx reference.
   //    Set INBOUND_EMAIL_SECRET and point your inbound-email provider (e.g. Resend inbound) at

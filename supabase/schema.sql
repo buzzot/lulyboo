@@ -232,6 +232,12 @@ create table if not exists public.info_requests (
   updated_at    timestamptz not null default now()
 );
 create index if not exists info_requests_supplier_idx on public.info_requests (supplier_id, created_at desc);
+-- RFQs sent from outside the portal (e.g. the Hermes agent over Telegram/WhatsApp/WeChat) are logged as requests too.
+alter table public.info_requests add column if not exists kind        text not null default 'info';   -- 'info' (sent from the portal) | 'rfq' (logged via the API)
+alter table public.info_requests add column if not exists channel     text;                            -- Telegram, WhatsApp, WeChat, Email, ...
+alter table public.info_requests add column if not exists contact     text;                            -- the handle or address it was sent to
+alter table public.info_requests add column if not exists external_id text;                            -- the sender's own id, makes retries safe
+create unique index if not exists info_requests_external_idx on public.info_requests (external_id) where external_id is not null;
 create table if not exists public.info_request_messages (
   id            uuid primary key default gen_random_uuid(),
   request_id    uuid not null references public.info_requests(id) on delete cascade,
@@ -310,6 +316,23 @@ alter table public.crm_tasks enable row level security;
 alter table public.settings add column if not exists telegram_chat_id   text;
 alter table public.settings add column if not exists telegram_pair_code text;
 alter table public.settings add column if not exists crm_digest_date    date;
+
+-- ───────────────────────── Integration API: audit log + supplier review flag ─────────────────────────
+create table if not exists public.api_log (
+  id                uuid primary key default gen_random_uuid(),
+  created_at        timestamptz not null default now(),
+  ip                text,
+  key_label         text,            -- 'current' | 'next' | null (failed auth)
+  endpoint          text not null,
+  status            integer not null,
+  ref               text,
+  supplier_created  boolean,
+  note              text
+);
+create index if not exists api_log_created_idx on public.api_log(created_at desc);
+alter table public.api_log enable row level security;
+alter table public.suppliers add column if not exists needs_review boolean not null default false;   -- created automatically, not yet checked by a person
+alter table public.suppliers add column if not exists created_via  text;
 
 -- ───────────────────────── Security ─────────────────────────
 -- The Node server uses the secret / service-role key (bypasses RLS).

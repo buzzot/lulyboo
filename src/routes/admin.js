@@ -588,7 +588,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       <div class="table-wrap"><table class="list">
         <thead><tr><th>Supplier</th><th>Contact</th><th>Country</th><th>Status</th><th>Rating</th><th class="r">Products</th><th class="r">Shortlisted+</th><th>Last activity</th><th>Next follow-up</th><th>Portal</th></tr></thead>
         <tbody>${list.map((s) => { const ps = products.filter((p) => p.supplier_id === s.id); return html`<tr>
-          <td><a href="/admin/suppliers/${s.id}">${s.name}</a><div class="sub">${s.categories_supplied || ''}</div></td>
+          <td><a href="/admin/suppliers/${s.id}">${s.name}</a>${s.needs_review ? html` <span class="pill s-new">Review</span>` : ''}<div class="sub">${s.categories_supplied || ''}</div></td>
           <td>${s.contact_name || '—'}<div class="sub">${s.email || ''}</div></td><td>${s.country || '—'}</td>
           <td>${s.crm_status}</td><td>${s.rating ? '★'.repeat(s.rating) : '—'}</td>
           <td class="r">${ps.length}</td><td class="r">${ps.filter((p) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length}</td>
@@ -652,6 +652,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       flash: fl && fl.type !== 'link' ? fl : null,
       body: html`
       ${fl?.type === 'link' ? html`<div class="flash invite"><strong>${fl.msg.split('|||')[0]}</strong> The link is shown only once.<input class="copy" readonly value="${fl.msg.split('|||')[1] || ''}" data-copy><button class="btn small" type="button" data-copybtn>Copy</button></div>` : ''}
+      ${s.needs_review ? html`<div class="flash warn"><b>Created automatically</b> from an RFQ logged by Hermes. Check the details, then <form method="post" action="/admin/suppliers/${s.id}/approve" class="inline"><button class="link">mark as reviewed</button></form>.</div>` : ''}
       <div class="head-row"><div><h1>${s.name}</h1><p class="muted">${s.crm_status}${s.country ? ` · ${s.country}` : ''}${s.rating ? ` · ${'★'.repeat(s.rating)}` : ''}${s.registered_at ? ` · registered ${fmt.date(s.registered_at)}` : ' · not registered yet'}</p></div>
         <div class="actions">
           <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>

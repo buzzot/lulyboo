@@ -52,6 +52,7 @@ function createApp({ db, config }) {
   require('./routes/admin-tools')(router, { db, config });
   require('./routes/requests')(router, { db, config });
   require('./routes/crm')(router, { db, config });
+  require('./routes/api')(router, { db, config });
 
   const imgOrigin = config.supabaseUrl ? new URL(config.supabaseUrl).origin : '';
 

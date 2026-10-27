@@ -55,6 +55,13 @@ async function snoozeTask(db, id, days, now = new Date()) {
   return { ...x, due_date: due };
 }
 
+/** A supplier answered: close the open follow-up tasks that were created for that request. */
+async function completeRequestTasks(db, requestId) {
+  const open = await db.list('crm_tasks', { filters: { request_id: requestId, done: false } });
+  for (const x of open) await completeTask(db, x.id);
+  return open.length;
+}
+
 // ── Telegram reminders
 const settingsRow = async (db) => (await db.list('settings', { limit: 1 }))[0] || null;
 const line = (i, names) => `• ${i.due_time ? i.due_time + ' ' : ''}<b>${tg.escapeHtml(names[i.supplier_id] || 'General')}</b> — ${tg.escapeHtml(i.title)} <i>(${tg.escapeHtml(i.type)})</i>`;
@@ -113,4 +120,4 @@ async function runReminders({ db, config, now = new Date() }) {
   return { sent };
 }
 
-module.exports = { digestHourLabel, TASK_TYPES, ACTIVITY_TYPE, tzOf, localNow, addDays, isDate, isTime, dayName, openItems, completeTask, snoozeTask, runReminders, digestText, taskButtons, supplierNames, settingsRow, line };
+module.exports = { digestHourLabel, TASK_TYPES, ACTIVITY_TYPE, tzOf, localNow, addDays, isDate, isTime, dayName, openItems, completeTask, completeRequestTasks, snoozeTask, runReminders, digestText, taskButtons, supplierNames, settingsRow, line };

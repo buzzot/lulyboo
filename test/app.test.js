@@ -910,3 +910,99 @@ test('AI failures show the reason on the page instead of a generic 500', async (
   const page = await req(base, 'GET', r.location, { cookie: cookie + '; ' + r.cookies.map((x) => x.split(';')[0]).join('; ') });
   assert.match(page.text, /AI request failed: The Anthropic API key was rejected/);
 });
+
+test('integration API: Hermes records RFQs (write-only), creates new suppliers, no read access', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { delete process.env.INTEGRATION_API_KEY; server.close(); });
+  const call = (body, { key = 'k'.repeat(32), method = 'POST', path = '/api/v1/rfq' } = {}) => fetch(base + path, { method, headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) }, body: method === 'GET' ? undefined : JSON.stringify(body) });
+
+  assert.equal((await call({})).status, 503); // not enabled until the key is set
+  process.env.INTEGRATION_API_KEY = 'k'.repeat(32);
+  assert.equal((await call({ supplier: { name: 'X' }, title: 't' }, { key: 'wrong' })).status, 401);
+  assert.equal((await call({ supplier: { name: 'X' }, title: 't' }, { key: null })).status, 401);
+  assert.equal((await call({ title: 'no supplier' })).status, 400);
+  assert.equal(db.tables.suppliers?.length || 0, 0);
+
+  const payload = { supplier: { name: 'Shantou Dadi Plastic Toys Co., Ltd', email: 'Lily@Dadi.example', contact_name: 'Lily', country: 'China' }, title: 'RFQ: silicone bottle', message: 'Please quote 3000 pcs, FOB Shantou.', channel: 'telegram', contact: '@lily_dadi', products: [{ name: 'Silicone baby bottle', qty: 3000, target_price: '$1.20' }], external_id: 'tg-1', attachments: [{ filename: 'spec.pdf', content_type: 'application/pdf', content_base64: Buffer.from('PDF').toString('base64') }] };
+  const r1 = await call(payload);
+  assert.equal(r1.status, 201);
+  const j1 = await r1.json();
+  assert.match(j1.ref, /^LB-\d+$/); assert.equal(j1.supplier_created, true);
+  assert.deepEqual(Object.keys(j1).sort(), ['ok', 'ref', 'request_id', 'supplier_created', 'url']); // nothing else comes back
+
+  const sup = db.tables.suppliers[0];
+  assert.equal(sup.email, 'lily@dadi.example'); assert.equal(sup.crm_status, 'Contacted'); assert.equal(sup.country, 'China');
+  const rq = db.tables.info_requests[0];
+  assert.equal(rq.kind, 'rfq'); assert.equal(rq.channel, 'Telegram'); assert.equal(rq.subject, 'RFQ: silicone bottle');
+  const msg = db.tables.info_request_messages[0];
+  assert.match(msg.body, /Please quote 3000 pcs/); assert.match(msg.body, /Silicone baby bottle — qty 3000 — target \$1\.20/);
+  assert.equal(msg.attachments.length, 1); assert.ok(db.files.has(msg.attachments[0].path));
+  assert.ok(db.tables.supplier_activities.some((a) => a.type === 'WeChat/WhatsApp' && a.summary.includes(j1.ref)));
+  const task = db.tables.crm_tasks[0];
+  assert.equal(task.request_id, rq.id); assert.equal(task.done, false);
+
+  // retry is idempotent
+  const dupe = await (await call(payload)).json();
+  assert.equal(dupe.duplicate, true); assert.equal(dupe.ref, j1.ref);
+  assert.equal(db.tables.info_requests.length, 1);
+
+  // existing supplier matched by name (different punctuation/suffix): reused, nothing overwritten, not reported back
+  const again = await (await call({ supplier: { name: 'shantou dadi plastic toys', country: 'Vietnam', phone: '123' }, title: 'Second RFQ', follow_up_days: 0 })).json();
+  assert.equal(again.supplier_created, false);
+  assert.equal(db.tables.suppliers.length, 1);
+  assert.equal(db.tables.suppliers[0].country, 'China'); assert.equal(db.tables.suppliers[0].phone, '123');
+  assert.equal(db.tables.crm_tasks.length, 1); // follow_up_days: 0 skips the task
+
+  // no way to read anything back
+  for (const [m, p] of [['GET', '/api/v1/rfq'], ['GET', `/api/v1/rfq/${j1.ref}`], ['GET', '/api/v1/suppliers']]) assert.equal((await call(null, { method: m, path: p })).status, 404);
+
+  // shows in the admin Requests list, and a supplier reply closes the follow-up
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const list = await req(base, 'GET', '/admin/requests', { cookie });
+  assert.match(list.text, /RFQ · Telegram/); assert.match(list.text, new RegExp(j1.ref));
+  const detail = await req(base, 'GET', `/admin/requests/${j1.request_id}`, { cookie });
+  assert.match(detail.text, /Please quote 3000 pcs/); assert.match(detail.text, /via Telegram/);
+});
+
+test('integration API safeguards: audit log, key rotation, rate limits, bad-key throttle, supplier review flag', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const K1 = 'a'.repeat(32); const K2 = 'b'.repeat(32);
+  Object.assign(process.env, { INTEGRATION_API_KEY: K1, API_MAX_CALLS_PER_HOUR: '4', API_MAX_NEW_SUPPLIERS_PER_DAY: '2', API_MAX_FAILED_PER_15MIN: '3' });
+  t.after(() => { for (const k of ['INTEGRATION_API_KEY', 'INTEGRATION_API_KEY_NEXT', 'API_MAX_CALLS_PER_HOUR', 'API_MAX_NEW_SUPPLIERS_PER_DAY', 'API_MAX_FAILED_PER_15MIN']) delete process.env[k]; server.close(); });
+  const call = (body, key) => fetch(`${base}/api/v1/rfq`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'x-forwarded-for': '203.0.113.9' }, body: JSON.stringify(body) });
+  const rfq = (n) => ({ supplier: { name: `Supplier ${n}` }, title: `RFQ ${n}`, follow_up_days: 0 });
+
+  // key rotation: the next key works alongside the current one, and is recorded as such
+  process.env.INTEGRATION_API_KEY_NEXT = K2;
+  assert.equal((await call(rfq(1), K1)).status, 201);
+  assert.equal((await call(rfq(2), K2)).status, 201);
+  assert.deepEqual(db.tables.api_log.map((x) => x.key_label), ['current', 'next']);
+  // new suppliers are flagged for review and capped per day
+  assert.ok(db.tables.suppliers.every((s) => s.needs_review === true && s.created_via === 'api'));
+  const capped = await call(rfq(3), K1);
+  assert.equal(capped.status, 429); assert.match((await capped.json()).error, /new suppliers/);
+  assert.equal(db.tables.suppliers.length, 2);
+  // existing suppliers are still fine under the supplier cap (counts only new ones)
+  assert.equal((await call(rfq(1), K1)).status, 201);
+  // hourly cap (4 successful calls so far counts 3; one more allowed, then refused)
+  assert.equal((await call(rfq(2), K1)).status, 201);
+  assert.equal((await call(rfq(1), K1)).status, 429);
+  // repeated bad keys from one address get throttled, even for a later correct key
+  for (let i = 0; i < 3; i++) assert.equal((await call(rfq(1), 'nope')).status, 401);
+  assert.equal((await call(rfq(1), K1)).status, 429);
+
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const log = await req(base, 'GET', '/admin/api-log', { cookie });
+  assert.equal(log.status, 200); assert.match(log.text, /203\.0\.113\.9/); assert.match(log.text, /LB-\d+/); assert.match(log.text, /401/); assert.match(log.text, /429/);
+  assert.equal((await req(base, 'GET', '/admin/api-log')).status, 303); // admin only
+
+  // review banner, list badge, approve
+  const s = db.tables.suppliers[0];
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text, /Created automatically/);
+  assert.match((await req(base, 'GET', '/admin/suppliers', { cookie })).text, /Review/);
+  await req(base, 'POST', `/admin/suppliers/${s.id}/approve`, { cookie, form: {} });
+  assert.equal(db.tables.suppliers[0].needs_review, false);
+  assert.doesNotMatch((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text, /Created automatically/);
+});
