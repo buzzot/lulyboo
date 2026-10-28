@@ -107,6 +107,12 @@ table.list { width: 100%; border-collapse: collapse; font-size: .9rem; }
 table.list th, table.list td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
 table.list thead th { font-size: .75rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); background: #fafbfb; white-space: nowrap; position: sticky; top: 0; }
 table.list tbody tr:hover { background: #fafbfb; }
+/* Requests list: Ref, Status and Sent stay on one line; Supplier gets a wider column */
+table.list.reqs td { white-space: nowrap; }
+table.list.reqs td a { overflow-wrap: normal; }
+table.list.reqs th:nth-child(2), table.list.reqs td:nth-child(2) { min-width: 340px; }
+/* Requested takes the leftover width and is cut with an ellipsis (full text on hover) */
+table.list.reqs td:nth-child(3) { width: 100%; max-width: 0; min-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 table.list tr.hl { background: var(--brand-soft); }
 table.compact th, table.compact td { padding: 6px 8px; }
 table.edit input, table.edit select { padding: 5px 7px; font-size: .85rem; min-width: 70px; }

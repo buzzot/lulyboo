@@ -8,9 +8,25 @@ Only the Python standard library is used.
 """
 import json, os, sys, urllib.request, urllib.error
 
+def from_env_file(name):
+    """If the variable was not passed to this process, read ONLY that one line from ~/.hermes/.env
+    (or $HERMES_HOME/.env). Nothing else in the file is read or printed."""
+    home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+    try:
+        with open(os.path.join(home, ".env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
 def main():
-    key = os.environ.get("LULYBOO_API_KEY", "").strip()
-    base = os.environ.get("LULYBOO_API_URL", "https://lulyboo.space").rstrip("/")
+    key = os.environ.get("LULYBOO_API_KEY", "").strip() or from_env_file("LULYBOO_API_KEY")
+    base = (os.environ.get("LULYBOO_API_URL", "").strip() or from_env_file("LULYBOO_API_URL") or "https://lulyboo.space").rstrip("/")
     if not key:
         print(json.dumps({"ok": False, "error": "LULYBOO_API_KEY is not set"})); return 2
     src = sys.argv[1] if len(sys.argv) > 1 else "-"

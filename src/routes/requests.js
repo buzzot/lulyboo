@@ -155,9 +155,9 @@ module.exports = function requestRoutes(router, { db, config }) {
       body: html`<h1>Information requests</h1>
       <p class="muted">Send them from a supplier page: tick products, then “Request information”. Replies are tracked by the reference in the subject line. RFQs recorded by Hermes appear here too (<a href="/admin/api-log">integration log</a>).</p>
       <p>${['', ...STATUSES].map((s) => html`<a class="btn small ${(st || '') === s ? '' : 'ghost'}" href="/admin/requests${s ? `?status=${s}` : ''}">${s || 'All'}</a> `)}</p>
-      <div class="table-wrap"><table class="list"><thead><tr><th>Ref</th><th>Supplier</th><th>Requested</th><th class="r">Products</th><th>Status</th><th>Sent</th></tr></thead>
+      <div class="table-wrap"><table class="list reqs"><thead><tr><th>Ref</th><th>Supplier</th><th>Requested</th><th class="r">Products</th><th>Status</th><th>Sent</th></tr></thead>
       <tbody>${list.length ? list.map((r) => html`<tr><td><a href="/admin/requests/${r.id}"><b>${r.ref}</b></a></td><td><a href="/admin/suppliers/${r.supplier_id}">${name[r.supplier_id] || '—'}</a></td>
-        <td>${r.kind === 'rfq' ? html`<span class="pill s-new">RFQ${r.channel ? ' · ' + r.channel : ''}</span> ${r.subject}` : [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ')}</td><td class="r">${(r.product_ids || []).length}</td><td>${pill(r.status)}</td><td>${fmt.date(r.created_at)}</td></tr>`) : html`<tr><td colspan="6" class="muted">No requests yet.</td></tr>`}</tbody></table></div>`,
+        <td title="${r.kind === 'rfq' ? (r.subject || '') : ''}">${r.kind === 'rfq' ? html`<span class="pill s-new">RFQ${r.channel ? ' · ' + r.channel : ''}</span> ${r.subject}` : [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ')}</td><td class="r">${(r.product_ids || []).length}</td><td>${pill(r.status)}</td><td>${fmt.date(r.created_at)}</td></tr>`) : html`<tr><td colspan="6" class="muted">No requests yet.</td></tr>`}</tbody></table></div>`,
     }));
   }));
 
