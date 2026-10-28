@@ -963,6 +963,11 @@ test('integration API: Hermes records RFQs (write-only), creates new suppliers, 
   assert.match(list.text, /RFQ · Telegram/); assert.match(list.text, new RegExp(j1.ref));
   const detail = await req(base, 'GET', `/admin/requests/${j1.request_id}`, { cookie });
   assert.match(detail.text, /Please quote 3000 pcs/); assert.match(detail.text, /via Telegram/);
+  // The recipient is shown once even when contact and the To list hold the same address.
+  Object.assign(db.tables.info_requests[0], { contact: 'a@b.example', to_emails: ['a@b.example'] });
+  const detail2 = await req(base, 'GET', `/admin/requests/${j1.request_id}`, { cookie });
+  assert.match(detail2.text, /as RFQ via telegram to a@b\.example/i);
+  assert.doesNotMatch(detail2.text, /to a@b\.example to a@b\.example/i);
 });
 
 test('integration API safeguards: audit log, key rotation, rate limits, bad-key throttle, supplier review flag', async (t) => {

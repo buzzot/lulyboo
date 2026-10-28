@@ -174,7 +174,13 @@ module.exports = function requestRoutes(router, { db, config }) {
     res.html(page({
       title: r.ref, nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
       body: html`<div class="head-row"><div><h1>${r.ref} ${pill(r.status)}</h1>
-        <p class="muted"><a href="/admin/suppliers/${r.supplier_id}">${supplier?.name || 'Supplier'}</a> · sent ${fmt.date(r.created_at)}${r.kind === 'rfq' ? html` as RFQ${r.channel ? ' via ' + r.channel : ''}${r.contact ? ' to ' + r.contact : ''}` : ''}${(r.to_emails || []).length ? ' to ' + r.to_emails.join(', ') : ''}${(r.cc_emails || []).length ? ` · CC ${r.cc_emails.join(', ')}` : ''}</p></div>
+        <p class="muted"><a href="/admin/suppliers/${r.supplier_id}">${supplier?.name || 'Supplier'}</a> · sent ${fmt.date(r.created_at)}${r.kind === 'rfq' ? html` as RFQ${r.channel ? ' via ' + r.channel : ''}` : ''}${(() => {
+          // Show the recipient once: the To list if there is one, otherwise the RFQ contact (skip it if it is already in the list).
+          const tos = r.to_emails || [];
+          const contact = r.kind === 'rfq' && r.contact && !tos.some((e) => String(e).toLowerCase() === String(r.contact).toLowerCase()) ? [r.contact] : [];
+          const all = [...contact, ...tos];
+          return all.length ? ' to ' + all.join(', ') : '';
+        })()}${(r.cc_emails || []).length ? ` · CC ${r.cc_emails.join(', ')}` : ''}</p></div>
         <form method="post" action="/admin/requests/${r.id}/status" class="inline-form"><select name="status">${STATUSES.map((s) => html`<option ${s === r.status ? raw('selected') : ''}>${s}</option>`)}</select><button class="btn small">Update status</button></form></div>
       <div class="cols">
         <section class="card"><h2>What was requested</h2>
