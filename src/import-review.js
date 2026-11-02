@@ -199,25 +199,44 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
   const hd = parsed.header || {}; const tm = parsed.terms || {};
   const today = new Date().toISOString().slice(0, 10);
   const validUntil = tm.quote_valid_until !== undefined ? first.quote_valid_until : null;
-  const contact = [hd.contact_name, hd.phone, hd.email, hd.website].filter(Boolean);
-  const none = html`<span class="muted">${T('not in file', '文件中未找到')}</span>`;
-  const cell = (v) => (v ? html`<b>${String(v)}</b>` : none);
+  const none = html`<span class="rv-na">${T('Not in file', '文件中未找到')}</span>`;
   const cm = companyMatch(hd.company, supplierName);
+  // "+86 183…/183…" lists the same number twice: split on / , ; and drop repeats
+  const seenPh = new Set();
+  const phones = String(hd.phone || '').split(/\s*[\/,;，；]\s*/).map((x) => x.trim()).filter((x) => { const k = x.replace(/\D/g, '').slice(-9) || x; if (!x || seenPh.has(k)) return false; seenPh.add(k); return true; });
+  const link = (v, href) => (v ? html`<a href="${href}" target="_blank" rel="noopener">${v}</a>` : none);
+  const web = hd.website ? (/^https?:\/\//i.test(hd.website) ? hd.website : `https://${hd.website}`) : '';
+  const field = (label, body, cls = '') => html`<div class="rv-f ${cls}"><dt>${label}</dt><dd>${body}</dd></div>`;
+  const val = (v) => (v ? String(v) : none);
+  const badge = cm === 'match' ? html`<span class="rv-badge ok">✓ ${T('Matches', '一致')} “${supplierName}”</span>`
+    : cm === 'mismatch' ? html`<span class="rv-badge bad">⚠ ${T('Does not match', '不一致')} “${supplierName}”</span>`
+    : html`<span class="rv-badge">${T('Not checked', '未核对')}</span>`;
   const overview = html`<div class="rv-overview">
-    <h3>${T('File header', '文件抬头')}</h3>
-    <dl class="rv-hd">
-      <div><dt>${T('Company name', '公司名称')}</dt><dd>${cell(hd.company)}</dd></div>
-      <div><dt>${T('Contact info', '联系方式')}</dt><dd>${contact.length ? html`<b>${contact.join(' · ')}</b>` : none}</dd></div>
-      <div class="wide"><dt>${T('Address', '地址')}</dt><dd>${cell(hd.address)}</dd></div>
-      <div><dt>${T('Incoterm', '贸易术语')}</dt><dd>${cell(tm.incoterm)}</dd></div>
-      <div><dt>${T('Port', '港口')}</dt><dd>${cell(tm.fob_port ?? first.fob_port)}</dd></div>
-      <div class="wide"><dt>${T('Payment terms', '付款条款')}</dt><dd>${cell(tm.payment_terms ?? first.payment_terms)}</dd></div>
-      <div><dt>${T('Validity', '报价有效期')}</dt><dd>${validUntil ? html`<b>${validUntil}</b>${validUntil < today ? html` <span class="rv-flag">${T('expired', '已过期')}</span>` : ''}` : none}</dd></div>
-    </dl>
-    ${admin && cm === 'mismatch' ? html`<p class="flash warn" role="alert"><b>${T('Company does not match.', '公司名称不一致。')}</b> ${T(`The file says “${hd.company}”, but you are importing for “${supplierName}”. Check that you chose the right supplier before approving.`, `文件中的公司为“${hd.company}”，但您正在为“${supplierName}”导入。请确认供应商无误后再确认导入。`)}</p>` : ''}
-    ${!admin && cm === 'mismatch' ? html`<p class="flash warn" role="alert"><b>${T('Company does not match.', '公司名称不一致。')}</b> ${T(`The file says “${hd.company}”, but your account is “${supplierName}”.`, `文件中的公司为“${hd.company}”，与您的账户“${supplierName}”不一致。`)}</p>` : ''}
-    ${cm === 'unknown' && !hd.company ? html`<p class="flash info">${T(`No company name was found in the file, so it could not be checked against “${supplierName}”.`, `文件中未找到公司名称，无法与“${supplierName}”核对。`)}</p>` : ''}
-    ${cm === 'match' ? html`<p class="sub rv-ok">✓ ${T('Company name matches', '公司名称一致')} “${supplierName}”</p>` : ''}
+    <div class="rv-ov-head"><h3>${T('File header', '文件抬头')}</h3>${badge}</div>
+    <div class="rv-ov-cols">
+      <section class="rv-ov-col">
+        <h4>${T('Supplier', '供应商')}</h4>
+        <dl>
+          ${field(T('Company name', '公司名称'), hd.company ? html`<span class="rv-company">${hd.company}</span>` : none, 'full')}
+          ${field(T('Address', '地址'), val(hd.address), 'full')}
+          ${field(T('Contact person', '联系人'), val(hd.contact_name))}
+          ${field(T('Phone', '电话'), phones.length ? html`${phones.map((x, i) => html`${i ? html`<br>` : ''}${x}`)}` : none)}
+          ${field(T('Email', '邮箱'), link(hd.email, `mailto:${hd.email}`))}
+          ${field(T('Website', '网站'), link(hd.website, web))}
+        </dl>
+      </section>
+      <section class="rv-ov-col">
+        <h4>${T('Commercial terms', '商务条款')}</h4>
+        <dl>
+          ${field(T('Incoterm', '贸易术语'), val(tm.incoterm))}
+          ${field(T('Port', '港口'), val(tm.fob_port ?? first.fob_port))}
+          ${field(T('Payment terms', '付款条款'), val(tm.payment_terms ?? first.payment_terms), 'full')}
+          ${field(T('Validity', '报价有效期'), validUntil ? html`${validUntil}${validUntil < today ? html` <span class="rv-flag">${T('expired', '已过期')}</span>` : ''}` : none)}
+        </dl>
+      </section>
+    </div>
+    ${cm === 'mismatch' ? html`<p class="rv-alert" role="alert"><b>${T('Company does not match.', '公司名称不一致。')}</b> ${admin ? T(`The file says “${hd.company}”, but you are importing for “${supplierName}”. Check that you chose the right supplier before approving.`, '') : T(`The file says “${hd.company}”, but your account is “${supplierName}”.`, `文件中的公司为“${hd.company}”，与您的账户“${supplierName}”不一致。`)}</p>` : ''}
+    ${cm === 'unknown' && !hd.company ? html`<p class="rv-note">${T(`No company name was found in the file, so it could not be checked against “${supplierName}”.`, `文件中未找到公司名称，无法与“${supplierName}”核对。`)}</p>` : ''}
   </div>`;
   const flagsFor = (p) => {
     const f = [];

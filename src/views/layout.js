@@ -23,6 +23,8 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
   </div>` : '';
   const head = html`<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/static/favicon.svg?v=${ASSET_V}" type="image/svg+xml"><link rel="icon" href="/static/favicon-32.png?v=${ASSET_V}" type="image/png" sizes="32x32"><link rel="shortcut icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=${ASSET_V}">
 <title>${title} · Lulyboo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap">

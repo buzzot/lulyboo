@@ -70,6 +70,10 @@ function createApp({ db, config }) {
         let ok = false; try { ok = new URL(req.headers.origin).host === host; } catch { /* bad origin */ }
         if (!ok) throw new HttpError(403, 'Cross-site request blocked');
       }
+      if (req.pathname === '/favicon.ico' && (req.method === 'GET' || req.method === 'HEAD')) {
+        req.pathname = '/static/favicon.ico';
+        if (serveStatic(publicDir, req, res)) return;
+      }
       if (req.pathname.startsWith('/static/') && (req.method === 'GET' || req.method === 'HEAD')) {
         if (serveStatic(publicDir, req, res)) return;
         throw new HttpError(404, 'File not found');

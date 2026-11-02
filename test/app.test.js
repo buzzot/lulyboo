@@ -1176,3 +1176,13 @@ test('importer reads a standard file header; company names are compared loosely'
   assert.equal(companyMatch('Ningbo Happy Baby Co.', 'Review Factory'), 'mismatch');
   assert.equal(companyMatch('', 'Review Factory'), 'unknown');
 });
+
+test('favicon: linked in every page and served at /favicon.ico', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const login = await req(base, 'GET', '/admin/login');
+  assert.match(login.text, /rel="icon" href="\/static\/favicon\.svg/); assert.match(login.text, /apple-touch-icon/);
+  const ico = await fetch(`${base}/favicon.ico`); assert.equal(ico.status, 200); assert.equal(ico.headers.get('content-type'), 'image/x-icon');
+  assert.equal((await fetch(`${base}/static/favicon.svg`)).status, 200);
+});
