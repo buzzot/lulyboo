@@ -712,3 +712,8 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .doc-list .doc-ic { color: var(--muted); }
 .doc-list a { font-weight: 600; }
 .doc-list .sub { flex: 1; }
+
+.dz-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.dz-list li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--brand-line,#e3c3bc);border-radius:8px;background:#fff;font-size:14px}
+.dz-list .dz-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dz-list .dz-remove{position:static;border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#8a6a64}

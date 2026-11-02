@@ -544,4 +544,57 @@
     }
     show(parseInt(wiz.getAttribute('data-start'), 10) || 0);
   }
+
+  // Attach-files box (request log): drag & drop, choose, or paste files/screenshots anywhere on the page; list with remove.
+  (function () {
+    var zone = document.querySelector('[data-multidrop]');
+    if (!zone || !window.DataTransfer) return;
+    var input = zone.querySelector('input[type=file]');
+    var list = document.querySelector('[data-multilist]');
+    var note = document.querySelector('[data-multinote]');
+    var MAXN = 10, MAXB = 20 * 1024 * 1024;
+    var dt = new DataTransfer();
+    var key = function (f) { return f.name + '|' + f.size + '|' + f.lastModified; };
+    var size = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; };
+    var render = function () {
+      list.innerHTML = '';
+      Array.prototype.forEach.call(dt.files, function (f, i) {
+        var li = document.createElement('li');
+        var name = document.createElement('span'); name.className = 'dz-name'; name.textContent = f.name;
+        var sz = document.createElement('small'); sz.textContent = size(f.size);
+        var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'dz-remove'; rm.setAttribute('aria-label', 'Remove ' + f.name); rm.textContent = '\u00d7';
+        rm.addEventListener('click', function () {
+          var next = new DataTransfer();
+          Array.prototype.forEach.call(dt.files, function (g, j) { if (j !== i) next.items.add(g); });
+          dt = next; input.files = dt.files; render();
+        });
+        li.appendChild(name); li.appendChild(sz); li.appendChild(rm); list.appendChild(li);
+      });
+      zone.classList.toggle('has-file', dt.files.length > 0);
+    };
+    var add = function (files) {
+      var skipped = [], have = {};
+      Array.prototype.forEach.call(dt.files, function (f) { have[key(f)] = 1; });
+      Array.prototype.forEach.call(files, function (f) {
+        if (f.size > MAXB) { skipped.push(f.name + ' (over 20 MB)'); return; }
+        if (have[key(f)]) return;
+        if (dt.files.length >= MAXN) { skipped.push(f.name + ' (limit ' + MAXN + ')'); return; }
+        dt.items.add(f); have[key(f)] = 1;
+      });
+      input.files = dt.files;
+      note.textContent = skipped.length ? 'Skipped: ' + skipped.join(', ') : '';
+      render();
+    };
+    input.addEventListener('change', function () { var picked = Array.prototype.slice.call(input.files); input.files = dt.files; add(picked); });
+    ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('over'); }); });
+    ['dragleave', 'dragend'].forEach(function (ev) { zone.addEventListener(ev, function () { zone.classList.remove('over'); }); });
+    zone.addEventListener('drop', function (e) { e.preventDefault(); e.stopPropagation(); zone.classList.remove('over'); add(e.dataTransfer.files); });
+    window.addEventListener('dragover', function (e) { e.preventDefault(); });
+    window.addEventListener('drop', function (e) { if (!zone.contains(e.target)) { e.preventDefault(); add(e.dataTransfer.files); } });
+    // Pasting a file or screenshot works even while typing in the Text box; pasted text is left alone.
+    document.addEventListener('paste', function (e) {
+      var files = e.clipboardData && e.clipboardData.files;
+      if (files && files.length) { e.preventDefault(); add(files); }
+    });
+  })();
 })();

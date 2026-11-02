@@ -177,7 +177,7 @@ module.exports = function requestRoutes(router, { db, config }) {
         <p class="muted"><a href="/admin/suppliers/${r.supplier_id}">${supplier?.name || 'Supplier'}</a> · sent ${fmt.date(r.created_at)}${r.kind === 'rfq' ? html` as RFQ${r.channel ? ' via ' + r.channel : ''}` : ''}${(() => {
           // Show the recipient once: the To list if there is one, otherwise the RFQ contact (skip it if it is already in the list).
           const tos = r.to_emails || [];
-          const contact = r.kind === 'rfq' && r.contact && !tos.some((e) => String(e).toLowerCase() === String(r.contact).toLowerCase()) ? [r.contact] : [];
+          const contact = r.kind === 'rfq' && r.contact && !/\[object Object\]/.test(r.contact) && !tos.some((e) => String(e).toLowerCase() === String(r.contact).toLowerCase()) ? [r.contact] : [];
           const all = [...contact, ...tos];
           return all.length ? ' to ' + all.join(', ') : '';
         })()}${(r.cc_emails || []).length ? ` · CC ${r.cc_emails.join(', ')}` : ''}</p></div>
@@ -195,7 +195,14 @@ module.exports = function requestRoutes(router, { db, config }) {
             <label><span class="lbl">Type</span><select name="direction"><option value="in">Reply from supplier</option><option value="note">Internal note</option></select></label>
             <label><span class="lbl">Mark as</span><select name="status"><option value="">Keep status</option><option>Replied</option><option>Complete</option><option>Closed</option></select></label>
             <label class="span2"><span class="lbl">Text</span><textarea name="body" rows="4" placeholder="Paste the reply, or describe what was received"></textarea></label>
-            <label class="span2"><span class="lbl">Attach files (optional, up to 20 MB each)</span><input type="file" name="files" multiple></label>
+            <div class="span2"><span class="lbl">Attach files (optional)</span>
+              <label class="dropzone compact" data-multidrop>
+                <input type="file" name="files" multiple>
+                <span class="dz-icon" aria-hidden="true">⬆</span>
+                <span class="dz-main">Drag &amp; drop files here, or <u>choose files</u></span>
+                <span class="dz-hint">You can also paste (Ctrl/⌘+V) a copied file or screenshot · up to 10 files · 20 MB each</span>
+              </label>
+              <ul class="dz-list" data-multilist></ul><p class="dz-note" data-multinote></p></div>
             <div class="span2"><button class="btn small">Save to log</button></div></form></section>
       </div>
       <section class="card"><h2>Communication log</h2>

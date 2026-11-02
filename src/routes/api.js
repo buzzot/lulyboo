@@ -17,7 +17,13 @@ const C = require('../crm');
 const CHANNELS = ['Telegram', 'WhatsApp', 'WeChat', 'Email', 'Phone', 'Other'];
 const ACTIVITY_TYPE = { Email: 'Email', Telegram: 'WeChat/WhatsApp', WhatsApp: 'WeChat/WhatsApp', WeChat: 'WeChat/WhatsApp', Phone: 'Call', Other: 'Note' };
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : v == null ? '' : String(v).trim().slice(0, max));
+const str = (v, max) => {
+  if (typeof v === 'string') return v.trim().slice(0, max);
+  if (v == null) return '';
+  // A nested object (e.g. contact: {email, name}) becomes readable text instead of "[object Object]"
+  if (typeof v === 'object') return (Array.isArray(v) ? v : Object.values(v)).filter((x) => x != null && typeof x !== 'object').map((x) => String(x).trim()).filter(Boolean).join(', ').slice(0, max);
+  return String(v).trim().slice(0, max);
+};
 const normName = (n) => String(n || '').toLowerCase().replace(/\b(co|ltd|limited|inc|llc|corp|corporation|company|trading|factory)\b\.?/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
 const intEnv = (name, def) => { const v = Number(process.env[name]); return Number.isInteger(v) && v > 0 ? v : def; };
 const hoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
