@@ -269,17 +269,34 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     if (f.type === 'select') { const opts = (f.options || []).includes(cur) || !cur ? f.options : [cur, ...f.options]; return html`<select name="${name}"><option value=""></option>${opts.map((o) => html`<option${o === cur ? raw(' selected') : ''}>${o}</option>`)}</select>`; }
     return html`<input name="${name}" value="${cur}"${f.type === 'date' ? raw(' placeholder="YYYY-MM-DD"') : ''}>`;
   };
+  // Pop-up layout: [key, columns out of 6]
+  const SECTIONS = [
+    [['Product', '产品'], [['product_name', 6], ['supplier_sku', 2], ['category', 2], ['subcategory', 2], ['materials', 3], ['brand', 3], ['description', 6]]],
+    [['Price & terms', '价格与条款'], [['unit_price', 2], ['currency', 2], ['moq', 2], ['incoterm', 2], ['fob_port', 2], ['quote_valid_until', 2], ['payment_terms', 6], ['production_lead_days', 3], ['sample_lead_days', 3]]],
+    [['Packing & container', '包装与装柜'], [['units_per_inner', 2], ['units_per_carton', 2], ['carton_nw_kg', 2], ['carton_l_cm', 2], ['carton_w_cm', 2], ['carton_h_cm', 2], ['carton_gw_kg', 2], ['supplier_qty_20gp', 2], ['supplier_qty_40gp', 2], ['supplier_qty_40hq', 2]]],
+    [['Product details', '产品详情'], [['product_size_cm', 3], ['unit_net_weight_kg', 3], ['packaging_type', 3], ['hs_code', 3], ['country_of_origin', 3], ['certifications', 3], ['dangerous_goods', 6]]],
+    [['Notes', '备注'], [['factory_notes', 6]]],
+  ];
+  const placed = new Set(SECTIONS.flatMap(([, list]) => list.map(([k]) => k)));
+  const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placed.has(k));
+  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [k, 3])]] : SECTIONS;
   const dialog = (p) => {
     const rn = p.rowNumber; const imgs = p.images || [];
-    const mainFields = EDIT_KEYS.map((k) => PRODUCT_FIELDS.find((f) => f.key === k));
+    const control = (f) => (EDIT_KEYS.includes(f.key) ? mirror(rn, f) : extraField(rn, p, f));
     return html`<dialog class="rv-dialog" id="rv-dlg-${rn}" aria-label="Product details">
-      <div class="rv-dlg-head"><h3>${values[rn].product_name || T('Product', '产品')} <span class="muted">· ${T('row', '第')} ${rn}${T('', ' 行')}</span></h3><button type="button" class="btn small ghost" data-rv-close>${T('Done', '完成')}</button></div>
-      ${imgs.length ? html`<div class="rv-gallery">${imgs.map((_, i) => html`<a href="${imgUrl(rn, i, 'full')}" target="_blank" rel="noopener"><img src="${imgUrl(rn, i)}" alt="" loading="lazy"></a>`)}</div>` : html`<p class="muted">${T('No picture in the file for this row. Add photos on the product page after importing.', '文件中此行没有图片，导入后可在产品页面添加照片。')}</p>`}
-      <div class="rv-dlg-grid">
-        ${mainFields.map((f) => html`<label><span class="lbl">${T(f.en, f.cn)}</span>${mirror(rn, f)}</label>`)}
-        ${EXTRA_FIELDS.map((f) => html`<label class="${f.type === 'textarea' ? 'span2' : ''}"><span class="lbl">${T(f.en, f.cn)}</span>${extraField(rn, p, f)}</label>`)}
+      <header class="rv-dlg-head"><h3>${values[rn].product_name || T('Product', '产品')} <span class="rv-dlg-row">${T('Row', '第')} ${rn}${T('', ' 行')}</span></h3><button type="button" class="btn small" data-rv-close>${T('Done', '完成')}</button></header>
+      <div class="rv-dlg-body">
+        <aside class="rv-dlg-media">
+          ${imgs.length ? html`<a class="rv-hero" href="${imgUrl(rn, 0, 'full')}" target="_blank" rel="noopener" title="${T('Open full size', '查看大图')}"><img src="${imgUrl(rn, 0, 'full')}" alt="" loading="lazy"></a>
+            ${imgs.length > 1 ? html`<div class="rv-strip">${imgs.slice(1).map((_, i) => html`<a href="${imgUrl(rn, i + 1, 'full')}" target="_blank" rel="noopener"><img src="${imgUrl(rn, i + 1)}" alt="" loading="lazy"></a>`)}</div>` : ''}`
+            : html`<div class="rv-hero empty">${T('No picture in the file for this row. Add photos on the product page after importing.', '文件中此行没有图片，导入后可在产品页面添加照片。')}</div>`}
+        </aside>
+        <div class="rv-dlg-form">
+          ${sections.map(([title, list]) => html`<fieldset class="rv-sec"><legend>${T(title[0], title[1])}</legend><div class="rv-grid">
+            ${list.map(([key, span]) => { const f = PRODUCT_FIELDS.find((x) => x.key === key); return f ? html`<label class="c${span}"><span class="lbl">${T(f.en, f.cn)}</span>${control(f)}</label>` : ''; })}
+          </div></fieldset>`)}
+        </div>
       </div>
-      <div class="rv-dlg-foot"><button type="button" class="btn small" data-rv-close>${T('Done', '完成')}</button></div>
     </dialog>`;
   };
   const rows = parsed.products.map((p) => {
