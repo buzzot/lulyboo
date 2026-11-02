@@ -246,18 +246,126 @@
     };
     rv.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('rv-use')) sync(); });
     if (all) all.addEventListener('change', function () { uses().forEach(function (c) { c.checked = all.checked; }); sync(); });
-    // Pop-up with the full product: open from the picture, mirror the main fields both ways
+    // Pop-up with the full product: open from the picture, previous / next, mirror the main fields both ways
+    var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var field = function (rn, key) { return rv.querySelector('[name="r_' + rn + '_' + key + '"]') || rv.querySelector('[name="x_' + rn + '_' + key + '"]'); };
+    var num = function (rn, key) { var el = field(rn, key); var v = el ? String(el.value).trim().replace(',', '.') : ''; var n = v === '' ? null : Number(v); return n !== null && isFinite(n) ? n : null; };
+    var autosize = function (ta) {
+      ta.style.height = 'auto';
+      var cap = ta.closest('.rv-desc') && ta.closest('.rv-desc').classList.contains('open') ? Infinity : 220;
+      ta.style.height = Math.min(ta.scrollHeight + 2, cap) + 'px';
+      ta.style.overflowY = ta.scrollHeight + 2 > cap ? 'auto' : 'hidden';
+    };
+    var openDlg = function (d) {
+      if (!d || !d.showModal) return;
+      if (!d.open) d.showModal();
+      d.querySelectorAll('textarea[data-autosize]').forEach(autosize);
+      calc(d);
+      var f = d.querySelector('.rv-dlg-form'); if (f) f.scrollTop = 0;
+    };
+    // Calculated values (same rules as the product analysis: best of 6 carton orientations, capped by container payload)
+    var CONT = {}; try { CONT = JSON.parse(rv.getAttribute('data-containers') || '{}'); } catch (e) { CONT = {}; }
+    var fit = function (l, w, h, gw, c) {
+      var f = Math.floor; var o = [[l, w, h], [l, h, w], [w, l, h], [w, h, l], [h, l, w], [h, w, l]];
+      var best = 0; o.forEach(function (x) { var n = f(c.l / x[0]) * f(c.w / x[1]) * f(c.h / x[2]); if (n > best) best = n; });
+      var byW = gw > 0 ? f(c.payloadKg / gw) : Infinity;
+      return { cartons: Math.min(best, byW), by: byW < best ? 'weight' : 'size' };
+    };
+    var calc = function (d) {
+      var box = d.querySelector('[data-calc]'); if (!box) return;
+      var rn = box.getAttribute('data-rn');
+      var l = num(rn, 'carton_l_cm'), w = num(rn, 'carton_w_cm'), h = num(rn, 'carton_h_cm'), gw = num(rn, 'carton_gw_kg'), nw = num(rn, 'carton_nw_kg');
+      var upc = num(rn, 'units_per_carton'), inner = num(rn, 'units_per_inner'), unitW = num(rn, 'unit_net_weight_kg');
+      var hasDims = l > 0 && w > 0 && h > 0;
+      var cbm = hasDims ? l * w * h / 1e6 : null;
+      var issues = []; var missing = [];
+      if (!(upc > 0)) missing.push('units per carton'); if (!hasDims) missing.push('carton size'); if (!(gw > 0)) missing.push('gross weight');
+      if (missing.length) issues.push('Missing: ' + missing.join(', ') + ' (needed to calculate freight)');
+      if (nw !== null && gw !== null && nw > gw) issues.push('Net weight is higher than gross weight');
+      if (unitW && upc && nw && Math.abs(unitW * upc - nw) / nw > 0.25) issues.push('Unit weight × units per carton = ' + (Math.round(unitW * upc * 100) / 100) + ' kg, but the carton net weight is ' + nw + ' kg');
+      if (inner && upc && upc % inner !== 0) issues.push('Units per carton (' + upc + ') is not a multiple of the inner pack (' + inner + ')');
+      if (hasDims && gw && cbm > 0 && gw / cbm > 600) issues.push('Gross weight looks very high for this carton size (' + Math.round(gw / cbm) + ' kg/CBM)');
+      var rows = ['20GP', '40GP', '40HQ'].map(function (code) {
+        var sup = num(rn, 'supplier_qty_' + code.toLowerCase());
+        var c = CONT[code]; var r = hasDims && c ? fit(l, w, h, gw, c) : null;
+        var calcQty = r && upc > 0 ? r.cartons * upc : null;
+        var st = '<span class="rv-st muted">—</span>';
+        if (calcQty !== null && sup !== null) {
+          var diff = calcQty ? Math.abs(sup - calcQty) / calcQty : 1;
+          if (diff <= 0.05) st = '<span class="rv-st ok">✓ matches</span>';
+          else { st = '<span class="rv-st warn">⚠ supplier is ' + Math.round(diff * 100) + '% ' + (sup > calcQty ? 'higher' : 'lower') + '</span>'; issues.push(code + ': supplier says ' + sup + ' pcs, the carton size gives ' + calcQty + ' pcs'); }
+        } else if (calcQty !== null) st = '<span class="rv-st muted">not provided</span>';
+        else if (sup !== null) st = '<span class="rv-st muted">cannot check</span>';
+        return '<tr><th>' + code + '</th><td class="r">' + (sup === null ? '<span class="rv-na">—</span>' : sup) + '</td><td class="r">' + (r ? r.cartons + ' ctn' : '<span class="rv-na">—</span>') + '</td><td class="r">' + (calcQty === null ? '<span class="rv-na">—</span>' : '<b>' + calcQty + '</b>') + '</td><td>' + st + (r && r.by === 'weight' ? ' <span class="rv-st muted">weight-limited</span>' : '') + '</td></tr>';
+      });
+      box.innerHTML = '<div class="rv-calc-head"><span>Calculated by Lulyboo</span><span class="rv-calc-cbm">Carton CBM <b>' + (cbm === null ? '—' : (Math.round(cbm * 10000) / 10000) + ' m³') + '</b></span></div>' +
+        '<table class="rv-calc-t"><thead><tr><th></th><th class="r">Supplier qty</th><th class="r">Cartons</th><th class="r">Calculated qty</th><th>Check</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>' +
+        (issues.length ? '<ul class="rv-issues">' + issues.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '<p class="rv-ok">✓ No inconsistencies found</p>');
+      var badge = d.querySelector('[data-calc-badge]');
+      if (badge) { badge.hidden = !issues.length; badge.textContent = issues.length ? '⚠ ' + issues.length : ''; }
+    };
     rv.addEventListener('click', function (e) {
-      var o = e.target.closest && e.target.closest('[data-rv-open]');
-      if (o) { var d = document.getElementById(o.getAttribute('data-rv-open')); if (d && d.showModal) d.showModal(); return; }
-      var c = e.target.closest && e.target.closest('[data-rv-close]');
+      var t = e.target.closest ? e.target : null; if (!t) return;
+      var o = t.closest('[data-rv-open]');
+      if (o) { openDlg(document.getElementById(o.getAttribute('data-rv-open'))); return; }
+      var c = t.closest('[data-rv-close]');
       if (c) { var dd = c.closest('dialog'); if (dd) dd.close(); return; }
+      var nav = t.closest('[data-rv-nav]');
+      if (nav) { var tid = nav.getAttribute('data-rv-nav'); var cur = nav.closest('dialog'); var nx = tid && document.getElementById(tid); if (nx) { cur.close(); openDlg(nx); } return; }
+      var pic = t.closest('[data-rv-pic]');
+      if (pic) {
+        var side = pic.closest('.rv-dlg-media'); var hero = side.querySelector('[data-rv-hero]');
+        if (hero) { hero.href = pic.getAttribute('data-rv-pic'); hero.querySelector('img').src = pic.getAttribute('data-rv-pic'); }
+        side.querySelectorAll('[data-rv-pic]').forEach(function (b) { b.classList.toggle('on', b === pic); });
+        return;
+      }
+      var ex = t.closest('[data-rv-expand]');
+      if (ex) { var dsc = ex.closest('.rv-desc'); dsc.classList.toggle('open'); ex.textContent = dsc.classList.contains('open') ? 'Collapse' : 'Expand'; autosize(dsc.querySelector('textarea')); return; }
+      var ai = t.closest('[data-rv-ai]');
+      if (ai) { runAi(ai); return; }
+      var use = t.closest('[data-rv-ai-use]');
+      if (use) { var out = use.closest('[data-rv-ai-out]'); var ta = out.closest('.rv-desc').querySelector('textarea'); ta.value = out.getAttribute('data-clean') || ''; autosize(ta); out.hidden = true; return; }
+      var sg = t.closest('[data-rv-ai-apply]');
+      if (sg) { var f = field(sg.getAttribute('data-rn'), sg.getAttribute('data-key')); if (f) { f.value = sg.getAttribute('data-val'); f.dispatchEvent(new Event('input', { bubbles: true })); sg.textContent = 'Applied ✓'; sg.disabled = true; } return; }
+      var no = t.closest('[data-rv-ai-dismiss]');
+      if (no) { no.closest('[data-rv-ai-out]').hidden = true; return; }
       if (e.target.tagName === 'DIALOG') e.target.close(); // click on the backdrop
     });
+    // Optional AI clean-up of the description (and specs stated in it / on the picture). Nothing changes until "Use this".
+    var runAi = function (btn) {
+      var rn = btn.getAttribute('data-rn'); var d = btn.closest('dialog'); var out = d.querySelector('[data-rv-ai-out]');
+      var ta = d.querySelector('textarea[name="x_' + rn + '_description"]');
+      var tokenEl = rv.querySelector('input[name="token"]');
+      if (!ta.value.trim()) { out.hidden = false; out.innerHTML = '<p class="rv-ai-err">There is no description to clean up.</p>'; return; }
+      var label = btn.textContent; btn.disabled = true; btn.textContent = 'Working…'; out.hidden = false; out.innerHTML = '<p class="rv-na">Reading the description' + (d.querySelector('[data-rv-hero]') ? ' and the picture' : '') + '…</p>';
+      var body = new URLSearchParams({ token: tokenEl ? tokenEl.value : '', row: rn, text: ta.value, name: (field(rn, 'product_name') || {}).value || '', materials: (field(rn, 'materials') || {}).value || '', size: (field(rn, 'product_size_cm') || {}).value || '' });
+      fetch(rv.getAttribute('data-action') + '/ai-describe', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body, credentials: 'same-origin' })
+        .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Unexpected response' }; }); })
+        .then(function (j) {
+          if (!j.ok) { out.innerHTML = '<p class="rv-ai-err">' + esc(j.error || 'AI failed') + '</p>'; return; }
+          var chips = Object.keys(j.suggestions || {}).filter(function (k) { var f = field(rn, k); return f && !String(f.value).trim(); }).map(function (k) {
+            return '<li><span class="rv-na">' + esc(k.replace(/_/g, ' ')) + '</span> <b>' + esc(j.suggestions[k]) + '</b> <button type="button" class="rv-linkbtn" data-rv-ai-apply data-rn="' + esc(rn) + '" data-key="' + esc(k) + '" data-val="' + esc(j.suggestions[k]) + '">Fill</button></li>';
+          }).join('');
+          out.setAttribute('data-clean', j.description || '');
+          out.innerHTML = '<div class="rv-ai-head"><b>✦ AI suggestion</b><span class="rv-na">Review it, then use or dismiss</span></div><pre class="rv-ai-text">' + esc(j.description) + '</pre>' +
+            (chips ? '<ul class="rv-ai-sg">' + chips + '</ul>' : '') + '<div class="rv-ai-act"><button type="button" class="btn small" data-rv-ai-use>Use this description</button> <button type="button" class="btn small ghost" data-rv-ai-dismiss>Dismiss</button></div>';
+        })
+        .catch(function () { out.innerHTML = '<p class="rv-ai-err">Could not reach the server.</p>'; })
+        .then(function () { btn.disabled = false; btn.textContent = label; });
+    };
     var mirror = function (e) {
-      var k = e.target.getAttribute && e.target.getAttribute('data-sync'); if (!k) return;
-      rv.querySelectorAll('[data-sync="' + k + '"]').forEach(function (el) { if (el !== e.target) el.value = e.target.value; });
-      if (k.slice(-13) === '_product_name') { var h = e.target.closest('dialog'); var rn = k.split('_')[1]; var dlg = document.getElementById('rv-dlg-' + rn); if (dlg) { var t = dlg.querySelector('h3'); if (t && t.firstChild) t.firstChild.textContent = e.target.value + ' '; } }
+      var k = e.target.getAttribute && e.target.getAttribute('data-sync');
+      if (k) {
+        rv.querySelectorAll('[data-sync="' + k + '"]').forEach(function (el) { if (el !== e.target) el.value = e.target.value; });
+        if (k.slice(-13) === '_product_name') { var dlg = document.getElementById('rv-dlg-' + k.split('_')[1]); var t = dlg && dlg.querySelector('[data-rv-title]'); if (t) t.textContent = e.target.value; }
+      }
+      var nm = e.target.name || '';
+      var sku = /^x_(\d+)_supplier_sku$/.exec(nm);
+      if (sku) { var d2 = document.getElementById('rv-dlg-' + sku[1]); if (d2) { var chip = d2.querySelector('[data-rv-sku-chip]'); chip.hidden = !e.target.value.trim(); chip.querySelector('[data-rv-sku]').textContent = e.target.value; } }
+      if (e.target.matches && e.target.matches('textarea[data-autosize]')) autosize(e.target);
+      // recalculate the packing check for the product that was edited
+      var rnum = (k && /^r_(\d+)_/.exec(k)) || /^(?:x|r)_(\d+)_/.exec(nm);
+      if (rnum) { var dd2 = document.getElementById('rv-dlg-' + rnum[1]); if (dd2 && dd2.open) calc(dd2); }
     };
     rv.addEventListener('input', mirror); rv.addEventListener('change', mirror);
     // Unit inside the field: the selected unit converts what is shown; the stored value stays in cm / kg / days.

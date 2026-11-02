@@ -636,3 +636,72 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .rv-groupbar .lbl { margin-right: 4px; }
 
 @media (max-width: 520px) { .rv-grid .c3 { grid-column: 1 / -1; } }
+
+/* ── Import review modal v2 ─────────────────────────────── */
+.rv-dlg-head { padding: 10px 16px 10px 20px; gap: 16px; }
+.rv-dlg-title { min-width: 0; }
+.rv-dlg-title h3 { font-size: 1.02rem; margin: 0 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv-dlg-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rv-chip { font-size: .72rem; color: var(--muted); background: color-mix(in srgb, var(--line) 45%, transparent); padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.rv-chip b { color: var(--text, #222); font-weight: 600; }
+.rv-dlg-nav { display: flex; gap: 6px; align-items: center; flex: none; }
+.rv-navbtn { width: 32px; height: 32px; padding: 0; font-size: 1.15rem; line-height: 1; }
+.rv-navbtn[disabled] { opacity: .35; cursor: default; }
+.rv-dlg-body { grid-template-columns: 220px minmax(0, 1fr); }
+.rv-dlg-media { padding: 14px 12px 14px 16px; }
+.rv-hero img { max-height: 230px; }
+.rv-strip { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.rv-strip button { padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; line-height: 0; }
+.rv-strip button.on { border-color: var(--brand, #4a6cf7); }
+.rv-strip img { border: 0; border-radius: 6px; }
+.rv-side-h { margin: 16px 0 6px; font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.rv-docs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rv-docs li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px 6px; align-items: baseline; font-size: .78rem; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.rv-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rv-doc-tag { grid-column: 2; font-size: .66rem; color: var(--muted); }
+.rv-doc-ic { color: var(--muted); }
+.rv-dlg-form { padding: 0 20px 20px; }
+.rv-sec-badge { margin-left: 6px; font-size: .68rem; letter-spacing: 0; text-transform: none; font-weight: 600; background: #fff1d6; color: #8a5a00; padding: 1px 7px; border-radius: 999px; }
+.rv-sub { margin-top: 8px; }
+.rv-sub + .rv-sub { margin-top: 12px; }
+.rv-sub h5 { margin: 0 0 6px; font-size: .78rem; font-weight: 600; color: var(--text, #333); }
+.rv-sub h5::before { content: ''; display: inline-block; width: 3px; height: .85em; background: var(--brand, #4a6cf7); border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
+.rv-desc { margin-top: 10px; }
+.rv-desc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+.rv-desc-head .lbl { font-size: .72rem; font-weight: 500; color: var(--muted); }
+.rv-desc-tools { display: flex; gap: 12px; }
+.rv-linkbtn { background: none; border: 0; padding: 0; font: inherit; font-size: .76rem; color: var(--brand, #4a6cf7); cursor: pointer; }
+.rv-linkbtn:hover { text-decoration: underline; }
+.rv-linkbtn[disabled] { color: var(--muted); cursor: not-allowed; text-decoration: none; }
+.rv-desc textarea { width: 100%; box-sizing: border-box; font-size: .85rem; line-height: 1.45; padding: 7px 9px; min-height: 64px; resize: vertical; overflow-y: hidden; }
+.rv-ai-out { margin-top: 8px; border: 1px solid #cfd8ff; background: #f5f7ff; border-radius: 10px; padding: 10px 12px; font-size: .82rem; }
+.rv-ai-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.rv-ai-text { white-space: pre-wrap; font: inherit; margin: 0 0 8px; max-height: 220px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.rv-ai-sg { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.rv-ai-err { margin: 0; color: #a1281d; }
+.rv-ai-out .rv-na { color: var(--muted); }
+/* calculated panel */
+.rv-calc { margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--line) 18%, #fff); overflow: hidden; }
+.rv-calc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--line); }
+.rv-calc-head .rv-calc-cbm { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: .8rem; }
+.rv-calc-head b { color: var(--text, #222); }
+.rv-calc-t { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.rv-calc-t th, .rv-calc-t td { padding: 5px 12px; text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); white-space: nowrap; }
+.rv-calc-t thead th { font-size: .68rem; font-weight: 600; color: var(--muted); }
+.rv-calc-t tbody th { font-weight: 600; }
+.rv-calc-t .r { text-align: right; }
+.rv-calc-t tbody tr:last-child th, .rv-calc-t tbody tr:last-child td { border-bottom: 0; }
+.rv-st.ok { color: #1c6b3a; } .rv-st.warn { color: #a15b00; font-weight: 600; } .rv-st.muted, .rv-na { color: var(--muted); font-weight: 400; }
+.rv-issues { margin: 0; padding: 8px 12px 8px 28px; font-size: .78rem; color: #8a4b00; background: #fff8e8; border-top: 1px solid #f0d7a6; }
+.rv-calc .rv-ok { margin: 0; padding: 7px 12px; font-size: .78rem; color: #1c6b3a; border-top: 1px solid var(--line); }
+.rv-more { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.rv-more > summary { cursor: pointer; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: 4px 0 8px; list-style: none; }
+.rv-more > summary::before { content: '▸'; display: inline-block; margin-right: 6px; transition: transform .15s; }
+.rv-more[open] > summary::before { transform: rotate(90deg); }
+@media (max-width: 860px) { .rv-dlg-body { grid-template-columns: 1fr; } .rv-calc { overflow-x: auto; } }
+
+.rv-grid .c2 { grid-column: span 2; } .rv-grid .c5 { grid-column: span 5; }
+.rv-grid .c2 .rv-unit select, .rv-grid .c2 .rv-u { padding-left: 4px; padding-right: 2px; }
+.rv-hero.empty { padding: 14px 10px; font-size: .78rem; }
+@media (max-width: 860px) { .rv-grid .c2 { grid-column: span 6; } .rv-grid .c5 { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .rv-grid .c2 { grid-column: 1 / -1; } }

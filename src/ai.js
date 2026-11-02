@@ -251,6 +251,21 @@ async function draftDescription({ fields }) {
   const { result } = await callTool({ tool, maxTokens: 600, content: `Draft a short factual product description from only these supplier-provided details. Do not invent specifications.\n${JSON.stringify(fields)}` });
   return String(result.description || '').trim();
 }
+/** Clean up a pasted/imported product description and pull out specs that are written in it (or visible on the supplier's picture). Nothing is invented. */
+async function cleanDescription({ text, fields = {}, image = null }) {
+  const tool = { name: 'clean_description', description: 'Tidy a supplier product description and extract specs that are explicitly stated.',
+    input_schema: { type: 'object', properties: {
+      description: { type: 'string', description: 'Clean plain-text description: keep every factual detail, fix numbering/markdown/emoji noise, one feature per line, no marketing fluff added' },
+      suggestions: { type: 'object', description: 'Only values explicitly stated in the text or visible on the picture; omit anything uncertain', properties: {
+        materials: { type: 'string' }, product_size_cm: { type: 'string', description: 'L×W×H in cm' }, packaging_type: { type: 'string' }, certifications: { type: 'string' } } } },
+    required: ['description'] } };
+  const content = [{ type: 'text', text: `Supplier-provided description text:\n---\n${String(text || '').slice(0, 6000)}\n---\nKnown fields: ${JSON.stringify(fields)}\nClean the description. Do not invent specifications.` }];
+  if (image) content.push({ type: 'text', text: 'Supplier picture (use only for text or specs printed on it):' }, imageBlock(image));
+  const { result } = await callTool({ tool, content, maxTokens: 1500 });
+  const sg = result.suggestions && typeof result.suggestions === 'object' ? result.suggestions : {};
+  const clean = {}; for (const k of ['materials', 'product_size_cm', 'packaging_type', 'certifications']) if (typeof sg[k] === 'string' && sg[k].trim()) clean[k] = sg[k].trim().slice(0, 300);
+  return { description: String(result.description || '').trim(), suggestions: clean };
+}
 async function checkListing({ fields, photos }) {
   const tool = { name: 'listing_check', description: 'Pre-submission check of a factory quotation.',
     input_schema: { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' }, description: 'Concrete missing/inconsistent items the factory should fix, max 6' }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] } };
@@ -258,4 +273,4 @@ async function checkListing({ fields, photos }) {
   return { ok: !!result.ok, issues: (result.issues || []).slice(0, 6).map(String) };
 }
 
-module.exports = { callTool, draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };
+module.exports = { callTool, cleanDescription, draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };

@@ -331,6 +331,11 @@ module.exports = function supplierRoutes(router, { db, config }) {
     const body = r.page ? r.page : r.expired ? html`${importResult(IR.expiredResult(), null)}${importPage(req.base)}` : html`${importResult(r.done, req.base)}${importPage(req.base)}`;
     res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body }));
   }));
+  router.post('/portal/import/ai-describe', A(async (req, res) => {
+    const { fields } = await parseForm(req, { limitBytes: 64 * 1024 });
+    const r = await IR.aiDescribe(req.supplier.id, fields);
+    res.json(r.body, r.status);
+  }));
   router.get('/portal/import/image', A(async (req, res) => {
     const im = await IR.reviewImage(req.supplier.id, String(req.query.token || ''), req.query.row, req.query.i, req.query.s);
     if (!im) { res.statusCode = 404; return res.end('Not found'); }

@@ -894,6 +894,11 @@ module.exports = function adminRoutes(router, { db, config }) {
     const body = r.page ? r.page : importResult(r.expired ? IR.expiredResult() : r.done, null);
     res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${body}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
   }));
+  router.post('/admin/suppliers/:id/import/ai-describe', G(async (req, res) => {
+    const { fields } = await parseForm(req, { limitBytes: 64 * 1024 });
+    const r = await IR.aiDescribe(req.params.id, fields);
+    res.json(r.body, r.status);
+  }));
   router.get('/admin/suppliers/:id/import/image', G(async (req, res) => {
     const im = await IR.reviewImage(req.params.id, String(req.query.token || ''), req.query.row, req.query.i, req.query.s);
     if (!im) { res.statusCode = 404; return res.end('Not found'); }

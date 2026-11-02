@@ -6,6 +6,8 @@ const crypto = require('node:crypto');
 const { html, raw, t, m, biText } = require('./lib/html');
 const { CATEGORIES, CURRENCIES, PRODUCT_FIELDS, cleanProduct } = require('./fields');
 const sharp = require('sharp');
+const AI = require('./ai');
+const { CONTAINERS } = require('./calc');
 const { parseUpload } = require('./importer');
 const { saveProductImages } = require('./images');
 
@@ -17,7 +19,7 @@ const MAX_STAGED_BYTES = 150 * 1024 * 1024;
 const EDIT_KEYS = ['product_name', 'category', 'unit_price', 'currency', 'moq', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg', 'production_lead_days'];
 
 // Everything else on a product is editable in the pop-up (only changed values are applied).
-const EXTRA_FIELDS = PRODUCT_FIELDS.filter((f) => !EDIT_KEYS.includes(f.key) && f.key !== 'photo_link');
+const EXTRA_FIELDS = PRODUCT_FIELDS.filter((f) => !EDIT_KEYS.includes(f.key));
 const strVal = (v) => (v === null || v === undefined ? '' : String(v));
 
 // ── Staging (in memory) ────────────────────────────────────────
@@ -139,6 +141,24 @@ async function finishReview(db, supplierId, fields, view) {
   const result = await insertParsed(db, { ...parsed, products: chosen }, supplierId);
   staged.delete(stageKey(supplierId, token));
   return { done: result };
+}
+
+/** Optional AI clean-up of one row's description (and specs found in it / on its picture). Only for a staged upload that belongs to this supplier. */
+async function aiDescribe(supplierId, fields) {
+  const token = String(fields.token || '');
+  const entry = validToken(token) ? staged.get(stageKey(supplierId, token)) : null;
+  if (!entry || Date.now() - entry.at > TTL_MS) return { status: 410, body: { ok: false, error: 'This review expired. Upload the file again.' } };
+  if (!AI.enabled()) return { status: 503, body: { ok: false, error: 'AI is not enabled (ANTHROPIC_API_KEY is not set).' } };
+  const text = String(fields.text || '').trim();
+  if (!text) return { status: 400, body: { ok: false, error: 'There is no description to clean up.' } };
+  let image = null;
+  try { const im = await reviewImage(supplierId, token, fields.row, 0, 'full'); if (im) image = im.buffer; } catch { /* picture is optional */ }
+  try {
+    const known = { name: String(fields.name || '').slice(0, 200), materials: String(fields.materials || '').slice(0, 200), size: String(fields.size || '').slice(0, 100) };
+    return { status: 200, body: { ok: true, ...(await AI.cleanDescription({ text, fields: known, image })) } };
+  } catch (e) {
+    return { status: 502, body: { ok: false, error: /401|authentication/i.test(e.message) ? 'The AI key was rejected. Check ANTHROPIC_API_KEY in Railway.' : 'AI could not process this description right now.' } };
+  }
 }
 
 function cancelReview(supplierId, token) { if (validToken(token)) staged.delete(stageKey(supplierId, token)); }
@@ -269,7 +289,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     if (f.type === 'select') { const opts = (f.options || []).includes(cur) || !cur ? f.options : [cur, ...f.options]; return html`<select name="${name}"><option value=""></option>${opts.map((o) => html`<option${o === cur ? raw(' selected') : ''}>${o}</option>`)}</select>`; }
     return html`<input name="${name}" value="${cur}"${f.type === 'date' ? raw(' placeholder="YYYY-MM-DD"') : ''}>`;
   };
-  // ── Pop-up layout (12-column grid). Units sit inside the field; where a unit is selectable the value is
+  // ── Pop-up (12-column grid). Units sit inside the field; where a unit is selectable the value is
   // converted on screen and the stored value stays in cm / kg / days.
   const UNITS = {
     len: { list: ['cm', 'in', 'mm'], f: { cm: 1, in: 0.393701, mm: 10 } },
@@ -280,28 +300,30 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
   const fileLevel = FILE_LEVEL.filter((k) => tm[k] !== undefined);
   const LABEL = {
     unit_price: ['Unit price', '单价'], moq: ['MOQ', '起订量'], production_lead_days: ['Production lead time', '生产交期'], sample_lead_days: ['Sample lead time', '样品交期'],
-    units_per_inner: ['Units per inner pack', '内盒装数'], units_per_carton: ['Units per master carton', '外箱装数'], carton_nw_kg: ['Carton net weight', '外箱净重'], carton_gw_kg: ['Carton gross weight', '外箱毛重'],
+    units_per_inner: ['Units per inner pack', '内盒装数'], units_per_carton: ['Units per carton', '外箱装数'], carton_nw_kg: ['Net weight', '净重'], carton_gw_kg: ['Gross weight', '毛重'],
     unit_net_weight_kg: ['Unit net weight', '单件净重'], supplier_qty_20gp: ['Qty per 20GP', '20GP 装柜数量'], supplier_qty_40gp: ['Qty per 40GP', '40GP 装柜数量'], supplier_qty_40hq: ['Qty per 40HQ', '40HQ 装柜数量'],
-    product_size_cm: ['Product size (cm)', '产品尺寸（cm）'],
+    product_size_cm: ['Product size L×W×H (cm)', '产品尺寸 长×宽×高（cm）'], photo_link: ['Photo / catalog link', '图片 / 目录链接'],
   };
-  // [keys, columns of 12, unit]  unit: 'len' | 'wt' | 'time' | 'pcs' | 'price' | undefined
-  const SECTIONS = [
-    [['Product', '产品'], [[['product_name'], 6], [['supplier_sku'], 3], [['category'], 3], [['subcategory'], 3], [['materials'], 6], [['brand'], 3], [['description'], 12]]],
-    [['Price & terms', '价格与条款'], [[['unit_price'], 3, 'price'], [['moq'], 3, 'pcs'], [['production_lead_days'], 3, 'time'], [['sample_lead_days'], 3, 'time'],
-      [['incoterm'], 3], [['fob_port'], 3], [['quote_valid_until'], 3], [['payment_terms'], 12]]],
-    [['Packing & container', '包装与装柜'], [[['units_per_inner'], 3, 'pcs'], [['units_per_carton'], 3, 'pcs'], [['carton_nw_kg'], 3, 'wt'], [['carton_gw_kg'], 3, 'wt'],
-      [['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], 6, 'len', ['Carton size L × W × H', '外箱尺寸 长×宽×高']], [['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'], 6, 'pcs', ['Qty per container 20GP / 40GP / 40HQ', '每柜装箱量 20GP / 40GP / 40HQ']]]],
-    [['Product details', '产品详情'], [[['product_size_cm'], 3], [['unit_net_weight_kg'], 3, 'wt'], [['hs_code'], 3], [['country_of_origin'], 3], [['packaging_type'], 3], [['certifications'], 3], [['dangerous_goods'], 6]]],
-    [['Notes', '备注'], [[['factory_notes'], 12]]],
-  ];
-  const placed = new Set(SECTIONS.flatMap(([, list]) => list.flatMap(([ks]) => ks)));
-  const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placed.has(k) && k !== 'currency');
-  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [[k], 3])]] : SECTIONS;
+  const SUBS = {
+    product: [[['product_name'], 6], [['supplier_sku'], 3], [['category'], 3], [['subcategory'], 3], [['materials'], 6], [['brand'], 3]],
+    price: [[['unit_price'], 3, 'price'], [['moq'], 3, 'pcs'], [['production_lead_days'], 3, 'time'], [['sample_lead_days'], 3, 'time'], [['incoterm'], 3], [['fob_port'], 3], [['quote_valid_until'], 3], [['payment_terms'], 12]],
+    inner: [[['units_per_inner'], 3, 'pcs']],
+    carton: [[['units_per_carton'], 3, 'pcs'], [['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], 5, 'len', ['Carton size L × W × H', '外箱尺寸 长×宽×高']], [['carton_nw_kg'], 2, 'wt'], [['carton_gw_kg'], 2, 'wt']],
+    container: [[['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'], 6, 'pcs', ['Supplier qty per container 20GP / 40GP / 40HQ', '供应商提供的每柜数量 20GP / 40GP / 40HQ']]],
+    physical: [[['product_size_cm'], 6], [['unit_net_weight_kg'], 3, 'wt'], [['packaging_type'], 3]],
+    compliance: [[['hs_code'], 3], [['country_of_origin'], 3], [['certifications'], 6], [['dangerous_goods'], 12]],
+    more: [[['factory_notes'], 12], [['photo_link'], 12]],
+  };
+  const placedKeys = new Set(Object.values(SUBS).flatMap((l) => l.flatMap(([ks]) => ks)).concat(['description', 'currency']));
+  const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placedKeys.has(k));
   const fieldOf = (k) => PRODUCT_FIELDS.find((x) => x.key === k);
   const labelOf = (k) => { const f = fieldOf(k); return LABEL[k] ? T(LABEL[k][0], LABEL[k][1]) : T(f.en, f.cn); };
+  const aiOn = AI.enabled();
+  const total = parsed.products.length;
 
-  const dialog = (p) => {
+  const dialog = (p, idx) => {
     const rn = p.rowNumber; const imgs = p.images || [];
+    const prev = parsed.products[idx - 1]; const next = parsed.products[idx + 1];
     const curVal = (k) => (EDIT_KEYS.includes(k) ? values[rn][k] : (extra[rn]?.[k] !== undefined ? extra[rn][k] : strVal(p.row[k])));
     // The value that is submitted: the table input for the main fields, a hidden input for the others.
     const canon = (k) => (EDIT_KEYS.includes(k) ? { sel: `input[data-sync="r_${rn}_${k}"]`, hidden: '' } : { sel: `input[name="x_${rn}_${k}"]`, hidden: html`<input type="hidden" name="x_${rn}_${k}" value="${curVal(k)}">` });
@@ -323,18 +345,48 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
       } else inner = control(keys[0]);
       return html`<label class="c${span}"><span class="lbl">${lab}</span>${inner}</label>`;
     };
-    return html`<dialog class="rv-dialog" id="rv-dlg-${rn}" aria-label="Product details">
-      <header class="rv-dlg-head"><h3>${values[rn].product_name || T('Product', '产品')} <span class="rv-dlg-row">${T('Row', '第')} ${rn}${T('', ' 行')}</span></h3><button type="button" class="btn small" data-rv-close>${T('Done', '完成')}</button></header>
+    const grid = (key, extraKeys) => html`<div class="rv-grid">${(SUBS[key] || []).map(entry)}${(extraKeys || []).map((k) => entry([[k], 6]))}</div>`;
+    const sec = (title, body, opts = {}) => html`<fieldset class="rv-sec ${opts.cls || ''}"><legend>${title}${opts.badge ? html` <span class="rv-sec-badge" data-calc-badge hidden></span>` : ''}</legend>${body}</fieldset>`;
+    const sub = (title, body) => html`<div class="rv-sub"><h5>${title}</h5>${body}</div>`;
+    const descVal = curVal('description');
+    const doc = [];
+    if (fileName) doc.push(html`<li><span class="rv-doc-ic">▤</span><span class="rv-doc-name" title="${fileName}">${fileName}</span><span class="rv-doc-tag">${T('Source file', '源文件')}</span></li>`);
+    if (imgs.length) doc.push(html`<li><span class="rv-doc-ic">▣</span><span class="rv-doc-name">${imgs.length} ${T(imgs.length === 1 ? 'picture' : 'pictures', '张图片')}</span><span class="rv-doc-tag">${T('From file', '来自文件')}</span></li>`);
+    if (p.row.photo_link) doc.push(html`<li><span class="rv-doc-ic">↗</span><a class="rv-doc-name" href="${p.row.photo_link}" target="_blank" rel="noopener">${p.row.photo_link}</a><span class="rv-doc-tag">${T('Link', '链接')}</span></li>`);
+    return html`<dialog class="rv-dialog" id="rv-dlg-${rn}" data-rn="${rn}" aria-label="Product details">
+      <header class="rv-dlg-head">
+        <div class="rv-dlg-title"><h3 data-rv-title>${values[rn].product_name || T('Product', '产品')}</h3>
+          <div class="rv-dlg-meta"><span class="rv-chip" data-rv-sku-chip${curVal('supplier_sku') ? '' : raw(' hidden')}>${T('SKU', '货号')} <b data-rv-sku>${curVal('supplier_sku')}</b></span><span class="rv-chip">${T('Row', '第')} <b>${idx + 1}</b> / ${total}</span></div></div>
+        <div class="rv-dlg-nav">
+          <button type="button" class="btn small ghost rv-navbtn" data-rv-nav="${prev ? `rv-dlg-${prev.rowNumber}` : ''}" ${prev ? '' : raw('disabled')} aria-label="${T('Previous product', '上一个')}" title="${T('Previous product', '上一个')}">‹</button>
+          <button type="button" class="btn small ghost rv-navbtn" data-rv-nav="${next ? `rv-dlg-${next.rowNumber}` : ''}" ${next ? '' : raw('disabled')} aria-label="${T('Next product', '下一个')}" title="${T('Next product', '下一个')}">›</button>
+          <button type="button" class="btn" data-rv-close>${T('Done', '完成')}</button></div>
+      </header>
       <div class="rv-dlg-body">
         <aside class="rv-dlg-media">
-          ${imgs.length ? html`<a class="rv-hero" href="${imgUrl(rn, 0, 'full')}" target="_blank" rel="noopener" title="${T('Open full size', '查看大图')}"><img src="${imgUrl(rn, 0, 'full')}" alt="" loading="lazy"></a>
-            ${imgs.length > 1 ? html`<div class="rv-strip">${imgs.slice(1).map((_, i) => html`<a href="${imgUrl(rn, i + 1, 'full')}" target="_blank" rel="noopener"><img src="${imgUrl(rn, i + 1)}" alt="" loading="lazy"></a>`)}</div>` : ''}`
+          ${imgs.length ? html`<a class="rv-hero" data-rv-hero href="${imgUrl(rn, 0, 'full')}" target="_blank" rel="noopener" title="${T('Open full size', '查看大图')}"><img src="${imgUrl(rn, 0, 'full')}" alt="" loading="lazy"></a>
+            ${imgs.length > 1 ? html`<div class="rv-strip">${imgs.map((_, i) => html`<button type="button" class="${i ? '' : 'on'}" data-rv-pic="${imgUrl(rn, i, 'full')}" aria-label="${T('Picture', '图片')} ${i + 1}"><img src="${imgUrl(rn, i)}" alt="" loading="lazy"></button>`)}</div>` : ''}`
             : html`<div class="rv-hero empty">${T('No picture in the file for this row. Add photos on the product page after importing.', '文件中此行没有图片，导入后可在产品页面添加照片。')}</div>`}
+          ${doc.length ? html`<h5 class="rv-side-h">${T('Documents', '文档')}</h5><ul class="rv-docs">${doc}</ul>` : ''}
         </aside>
         <div class="rv-dlg-form">
-          ${sections.map(([title, list]) => html`<fieldset class="rv-sec"><legend>${T(title[0], title[1])}</legend>
-            ${title[0] === 'Price & terms' && fileLevel.length ? html`<p class="rv-hint">${T('Incoterm, port, payment terms and validity come from the file header above and apply to every product.', '贸易术语、港口、付款条款和有效期来自上方的文件抬头，适用于所有产品。')}</p>` : ''}
-            <div class="rv-grid">${list.map(entry)}</div></fieldset>`)}
+          ${sec(T('Product', '产品'), html`${grid('product')}
+            <div class="rv-desc">
+              <div class="rv-desc-head"><span class="lbl">${T('Description', '产品描述')}</span>
+                <span class="rv-desc-tools"><button type="button" class="rv-linkbtn" data-rv-expand>${T('Expand', '展开')}</button>
+                  <button type="button" class="rv-linkbtn rv-ai" data-rv-ai data-rn="${rn}" ${aiOn ? '' : raw('disabled title="AI is not enabled (add ANTHROPIC_API_KEY)"')}>✦ ${T('Clean up with AI', 'AI 整理')}</button></span></div>
+              <textarea name="x_${rn}_description" data-autosize rows="3">${descVal}</textarea>
+              <div class="rv-ai-out" data-rv-ai-out hidden></div>
+            </div>`)}
+          ${sec(T('Price & terms', '价格与条款'), html`${fileLevel.length ? html`<p class="rv-hint">${T('Incoterm, port, payment terms and validity are set once in the file header and apply to every product.', '贸易术语、港口、付款条款和有效期在文件抬头统一设置，适用于所有产品。')}</p>` : ''}${grid('price')}`)}
+          ${sec(T('Packing & container', '包装与装柜'), html`
+            ${sub(T('Inner packing', '内包装'), grid('inner'))}
+            ${sub(T('Master carton', '外箱'), grid('carton'))}
+            ${sub(T('Container loading', '装柜'), html`${grid('container')}
+              <div class="rv-calc" data-calc data-rn="${rn}"></div>`)}`, { badge: true, cls: 'rv-sec-pack' })}
+          ${sec(T('Physical specifications', '物理规格'), grid('physical'))}
+          ${sec(T('Compliance', '合规信息'), grid('compliance'))}
+          <details class="rv-sec rv-more"><summary>${T('More details (optional)', '更多信息（选填）')}</summary>${grid('more', leftovers)}</details>
         </div>
       </div>
     </dialog>`;
@@ -354,7 +406,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     </tr>${errs.length ? html`<tr class="rv-errrow"><td></td><td colspan="10"><b>${values[rn].product_name}:</b> ${errs.map((e) => html`<div>${biText(e)}</div>`)}</td></tr>` : ''}`;
   });
   const n = selected.size;
-  return html`<section class="card import-review" data-import-review>
+  return html`<section class="card import-review" data-import-review data-action="${action}" data-containers="${JSON.stringify(CONTAINERS)}">
     <h2>${T('Review before importing', '导入前请核对')}</h2>
     <p>${T(`${parsed.products.length} product${parsed.products.length === 1 ? '' : 's'} found in ${fileName || 'your file'}. Check the main fields, click a picture to see and edit everything about a product, and untick rows you do not want. Nothing is saved until you approve.`, `在 ${fileName || '文件'} 中找到 ${parsed.products.length} 个产品。请核对主要字段，点击图片可查看并编辑产品的全部信息，并取消勾选不需要的行。确认之前不会保存任何内容。`)}</p>
     ${notice ? html`<p class="flash error" role="alert">${biText(notice)}</p>` : ''}
@@ -370,7 +422,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
       <div class="table-wrap"><table class="list review-table"><thead><tr>
         <th><input type="checkbox" data-review-all aria-label="Select all"${n === parsed.products.length ? raw(' checked') : ''}></th><th>${T('Photo', '图片')}</th><th>${T('Product', '产品')}</th><th>${T('Category', '类别')}</th><th>${T('Price', '单价')}</th><th>${T('Cur.', '币种')}</th><th>${T('MOQ', '起订量')}</th><th>${T('Pcs / carton', '件/箱')}</th><th>${T('Carton L×W×H cm', '外箱 长×宽×高 cm')}</th><th>${T('Gross kg', '毛重 kg')}</th><th>${T('Prod. days', '交期(天)')}</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
-      ${parsed.products.map(dialog)}
+      ${parsed.products.map((p, i) => dialog(p, i))}
     </form>
     <form id="cancel-form" method="post" action="${action}/cancel"><input type="hidden" name="token" value="${token}"></form>
     <div class="import-actions"><button class="btn" form="review-form" data-approve>${T('Approve & import', '确认并导入')} <span data-count>${n}</span> ${T('products', '个产品')}</button>
@@ -380,4 +432,4 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
 
 const expiredResult = () => failed(m('This review expired (files are only kept for 30 minutes). Please upload the file again.', '此次审核已过期（文件仅保留 30 分钟），请重新上传文件。'));
 
-module.exports = { reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };
+module.exports = { aiDescribe, reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };

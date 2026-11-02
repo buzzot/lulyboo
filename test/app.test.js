@@ -1058,6 +1058,12 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   assert.match(r1, /data-rv-open="rv-dlg-\d+"/); assert.match(r1, /<dialog class="rv-dialog" id="rv-dlg-\d+"/);
   assert.match(r1, /name="x_\d+_description"/); assert.match(r1, /name="x_\d+_materials"/);
   assert.match(r1, /data-rv-cat-apply/);
+  // modal: prev/next, calculated packing panel, description tools, AI endpoint refuses without a key
+  assert.match(r1, /data-rv-nav=/); assert.match(r1, /data-calc data-rn=/); assert.match(r1, /data-containers=/); assert.match(r1, /data-rv-ai/); assert.match(r1, /Physical specifications/); assert.match(r1, /Compliance/); assert.match(r1, /Container loading/);
+  const aiRes = await req(base, 'POST', `/admin/suppliers/${s.id}/import/ai-describe`, { cookie, form: new URLSearchParams({ token: tokenOf(r1), row: rows[0].rn, text: 'hello' }) });
+  assert.equal(aiRes.status, 503);
+  const aiGone = await req(base, 'POST', `/admin/suppliers/${s.id}/import/ai-describe`, { cookie, form: new URLSearchParams({ token: 'a'.repeat(24), row: '1', text: 'x' }) });
+  assert.equal(aiGone.status, 410);
   // file-level terms are not repeated in the pop-up; units live inside the fields
   assert.doesNotMatch(r1, /name="x_\d+_(incoterm|fob_port|payment_terms|quote_valid_until)"/);
   assert.match(r1, /data-unit-group/); assert.match(r1, /class="rv-u-sel"/); assert.match(r1, /class="rv-u">pcs</);
