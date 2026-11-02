@@ -344,6 +344,63 @@ function normaliseValidity(o) {
   else if (Number.isNaN(Date.parse(qv))) delete o.quote_valid_until;
 }
 
+// ── File header: who the quotation is from (company, contact, address) ──
+const SEP = '(?:\\s*[:：#]\\s*(.*)|\\s*$)';
+const HEADER_LABELS = [
+  ['company', new RegExp('^(?:factory\\s*/\\s*company\\s*name|company\\s*name|factory\\s*name|supplier\\s*name|manufacturer|company|supplier|factory|seller|from)' + SEP, 'i')],
+  ['contact_name', new RegExp('^(?:contact\\s*person|contact\\s*name|contacts?|attn\\.?|attention|sales(?:\\s*rep)?)' + SEP, 'i')],
+  ['phone', new RegExp('^(?:phone\\s*/\\s*whatsapp\\s*/\\s*wechat|phone\\s*/\\s*wechat|phone\\s*/\\s*whatsapp|telephone|tel\\.?|phone|mobile|mob\\.?|whatsapp|wechat|cell)' + SEP, 'i')],
+  ['email', new RegExp('^(?:e-?mail(?:\\s*address)?)' + SEP, 'i')],
+  ['website', new RegExp('^(?:website|web\\s*site|web|url)' + SEP, 'i')],
+  ['address', new RegExp('^(?:factory\\s*address|company\\s*address|address|addr\\.?|add\\.?)' + SEP, 'i')],
+  ['_date', new RegExp('^(?:quotation\\s*date|quote\\s*date|date)' + SEP, 'i')],
+];
+const COMPANY_WORDS = /\b(co\.?\s*,?\s*ltd|limited|inc\.?|corp(?:oration)?|trading|industr(?:y|ies|ial)|enterprises?)\b|有限公司|股份|集团/i;
+function readHeader(rows, headerIdx) {
+  const out = {};
+  const labelOf = (txt) => {
+    for (const line of String(txt).split(/\r?\n/)) {
+      const l = stripCjk(line).replace(/\s+/g, ' ').trim(); if (!l) continue;
+      for (const [k, re] of HEADER_LABELS) { const mt = re.exec(l); if (mt) return { key: k, inline: (mt[1] || '').trim() }; }
+    }
+    return null;
+  };
+  const isLabelish = (v) => !!labelOf(v) || !!keyOfLabel(v) || (/[\u3400-\u9fff]/.test(String(v)) && /\n/.test(String(v)));
+  const limit = Math.min(headerIdx, 25);
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i];
+    row.forEach((cell, c) => {
+      const txt = String(cell ?? '').trim(); if (!txt) return;
+      // a cell holding several "Label: value" lines
+      const lines = txt.split(/\r?\n/);
+      if (lines.length > 1 && lines.filter((ln) => labelOf(ln)?.inline).length > 1) {
+        for (const ln of lines) { const lb = labelOf(ln); if (lb?.inline && lb.key[0] !== '_' && out[lb.key] === undefined) out[lb.key] = lb.inline; }
+        return;
+      }
+      const lb = labelOf(txt); if (!lb || out[lb.key] !== undefined) return;
+      let val = lb.inline;
+      if (!val) {
+        for (let k = c + 1; k < row.length; k++) { const v = row[k]; if (String(v ?? '').trim() === '') continue; if (!isLabelish(v)) val = String(v).trim(); break; }
+      }
+      if (!val) { const below = i + 1 < headerIdx ? rows[i + 1][c] : ''; if (below !== undefined && String(below).trim() && !isLabelish(below)) val = String(below).trim(); }
+      if (val && lb.key[0] !== '_') out[lb.key] = val;
+    });
+  }
+  const block = rows.slice(0, limit).flat().map((v) => String(v ?? '')).join('\n');
+  const cut = (v) => String(v).split(/\s+(?:e-?mail|tel|phone|mobile|add(?:ress)?|contact|fax|web(?:site)?)\s*[:：]/i)[0];
+  for (const k of Object.keys(out)) out[k] = cut(out[k]);
+  if (!out.email) { const em = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.exec(block); if (em) out.email = em[0]; }
+  if (!out.company) {
+    // A line that reads like a company name ("Ningbo Happy Baby Co., Ltd") in the title area
+    for (let i = 0; i < limit && !out.company; i++) for (const cell of rows[i]) {
+      const t = String(cell ?? '').trim();
+      if (t && t.length <= 120 && !/\n/.test(t) && COMPANY_WORDS.test(t) && !labelOf(t) && !isLabelish(t) && !/quotation|request|please/i.test(t)) { out.company = t; break; }
+    }
+  }
+  for (const k of Object.keys(out)) out[k] = String(out[k]).replace(/\s+/g, ' ').trim().slice(0, 300);
+  return out;
+}
+
 function splitComposite(input) {
   normaliseValidity(input);
   if (input._carton_size !== undefined) {
@@ -373,6 +430,7 @@ function mapRows(rows) {
     return { products: [], errors: [{ rowNumber: 1, messages: [m('Could not find the header row. Use the Lulyboo template (the first row must include "Product Name").', '找不到标题行。请使用 Lulyboo 模板（第一行须包含 “Product Name”）。')] }], unknownColumns: [], skipped: 0 };
   }
   const terms = readTerms(rows, headerIdx);
+  const header = readHeader(rows, headerIdx);
   const unknownColumns = rows[headerIdx]
     .filter((h, i) => String(h).trim() && !colKeys[i] && !IGNORED.has(norm(h)) && !/picture|image|photo|图片|照片/i.test(h))
     .map(String);
@@ -401,7 +459,7 @@ function mapRows(rows) {
     if (errs.length) errors.push({ rowNumber, messages: errs, name: input.product_name });
     else products.push({ rowNumber, row });
   }
-  return { products, errors, unknownColumns, skipped };
+  return { products, errors, unknownColumns, skipped, header, terms };
 }
 
 /** Attach pictures found in the workbook to the product rows they sit on (rowNumber = spreadsheet row). */
@@ -434,4 +492,4 @@ function parseUpload(file) {
   return mapRows(parseCsv(decodeText(file.buffer)));
 }
 
-module.exports = { parseCsv, parseXlsx, extractXlsxImages, mapRows, parseUpload, decodeText };
+module.exports = { readHeader, parseCsv, parseXlsx, extractXlsxImages, mapRows, parseUpload, decodeText };

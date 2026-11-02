@@ -246,6 +246,39 @@
     };
     rv.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('rv-use')) sync(); });
     if (all) all.addEventListener('change', function () { uses().forEach(function (c) { c.checked = all.checked; }); sync(); });
+    // Pop-up with the full product: open from the picture, mirror the main fields both ways
+    rv.addEventListener('click', function (e) {
+      var o = e.target.closest && e.target.closest('[data-rv-open]');
+      if (o) { var d = document.getElementById(o.getAttribute('data-rv-open')); if (d && d.showModal) d.showModal(); return; }
+      var c = e.target.closest && e.target.closest('[data-rv-close]');
+      if (c) { var dd = c.closest('dialog'); if (dd) dd.close(); return; }
+      if (e.target.tagName === 'DIALOG') e.target.close(); // click on the backdrop
+    });
+    var mirror = function (e) {
+      var k = e.target.getAttribute && e.target.getAttribute('data-sync'); if (!k) return;
+      rv.querySelectorAll('[data-sync="' + k + '"]').forEach(function (el) { if (el !== e.target) el.value = e.target.value; });
+      if (k.slice(-13) === '_product_name') { var h = e.target.closest('dialog'); var rn = k.split('_')[1]; var dlg = document.getElementById('rv-dlg-' + rn); if (dlg) { var t = dlg.querySelector('h3'); if (t && t.firstChild) t.firstChild.textContent = e.target.value + ' '; } }
+    };
+    rv.addEventListener('input', mirror); rv.addEventListener('change', mirror);
+    // Group assignment of the category
+    var catSel = rv.querySelector('[data-rv-cat]');
+    var apply = rv.querySelector('[data-rv-cat-apply]');
+    if (apply) apply.addEventListener('click', function () {
+      if (!catSel.value) { catSel.focus(); return; }
+      var n = 0;
+      uses().forEach(function (c) {
+        if (!c.checked) return;
+        var tr = c.closest('tr'); var s = tr && tr.querySelector('select[name$="_category"]');
+        if (s) { s.value = catSel.value; s.dispatchEvent(new Event('change', { bubbles: true })); n++; }
+      });
+      apply.textContent = apply.getAttribute('data-done') || apply.textContent;
+      if (!n) window.alert('Tick at least one row first.');
+    });
+    var nocat = rv.querySelector('[data-rv-nocat]');
+    if (nocat) nocat.addEventListener('click', function () {
+      uses().forEach(function (c) { var tr = c.closest('tr'); var s = tr && tr.querySelector('select[name$="_category"]'); c.checked = !!s && !s.value; });
+      sync();
+    });
     var form = rv.querySelector('[data-review-form]');
     if (form) {
       form.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.preventDefault(); });

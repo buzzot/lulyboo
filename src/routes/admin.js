@@ -894,6 +894,11 @@ module.exports = function adminRoutes(router, { db, config }) {
     const body = r.page ? r.page : importResult(r.expired ? IR.expiredResult() : r.done, null);
     res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${body}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
   }));
+  router.get('/admin/suppliers/:id/import/image', G(async (req, res) => {
+    const im = await IR.reviewImage(req.params.id, String(req.query.token || ''), req.query.row, req.query.i, req.query.s);
+    if (!im) { res.statusCode = 404; return res.end('Not found'); }
+    res.setHeader('Content-Type', im.type); res.setHeader('Cache-Control', 'private, max-age=600'); res.end(im.buffer);
+  }));
   router.post('/admin/suppliers/:id/import/cancel', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);
     if (!s) throw new HttpError(404, 'Supplier not found');

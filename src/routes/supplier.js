@@ -331,6 +331,11 @@ module.exports = function supplierRoutes(router, { db, config }) {
     const body = r.page ? r.page : r.expired ? html`${importResult(IR.expiredResult(), null)}${importPage(req.base)}` : html`${importResult(r.done, req.base)}${importPage(req.base)}`;
     res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body }));
   }));
+  router.get('/portal/import/image', A(async (req, res) => {
+    const im = await IR.reviewImage(req.supplier.id, String(req.query.token || ''), req.query.row, req.query.i, req.query.s);
+    if (!im) { res.statusCode = 404; return res.end('Not found'); }
+    res.setHeader('Content-Type', im.type); res.setHeader('Cache-Control', 'private, max-age=600'); res.end(im.buffer);
+  }));
   router.post('/portal/import/cancel', A(async (req, res) => {
     const { fields } = await parseForm(req);
     IR.cancelReview(req.supplier.id, fields.token);

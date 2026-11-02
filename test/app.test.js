@@ -1041,7 +1041,7 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
     return (await fetch(`${base}/admin/suppliers/${supplierId}/import`, { method: 'POST', body: fd, headers: { cookie } })).text();
   };
   const tokenOf = (h) => /name="token" value="([a-f0-9]{24})"/.exec(h)[1];
-  const rowsOf = (h) => [...h.matchAll(/name="r_(\d+)_product_name" value="([^"]*)"/g)].map((x) => ({ rn: x[1], name: x[2] }));
+  const rowsOf = (h) => [...h.matchAll(/name="r_(\d+)_product_name" data-sync="[^"]*" value="([^"]*)"/g)].map((x) => ({ rn: x[1], name: x[2] }));
 
   // 1. Upload shows the review with the main fields; nothing is saved yet
   const r1 = await upload(s.id);
@@ -1049,16 +1049,35 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   const rows = rowsOf(r1);
   assert.equal(rows.length, 2);
   assert.equal(db.tables.products?.length || 0, 0);
+  // standard file header overview, company check against the supplier we import for
+  assert.match(r1, /File header/); assert.match(r1, /Company name/); assert.match(r1, /Ningbo Happy Baby Co\./);
+  assert.match(r1, /Payment terms/); assert.match(r1, /30% deposit/); assert.match(r1, /Validity/);
+  assert.match(r1, /Company does not match/); assert.match(r1, /Review Factory/);
+  // no row-number column; a picture preview opens a pop-up with every field
+  assert.doesNotMatch(r1, /<th>Row<\/th>/);
+  assert.match(r1, /data-rv-open="rv-dlg-\d+"/); assert.match(r1, /<dialog class="rv-dialog" id="rv-dlg-\d+"/);
+  assert.match(r1, /name="x_\d+_description"/); assert.match(r1, /name="x_\d+_materials"/);
+  assert.match(r1, /data-rv-cat-apply/);
+  assert.doesNotMatch(r1, /<dialog[^>]*>[\s\S]*?name="r_\d+_unit_price"[\s\S]*?<\/dialog>/, 'pop-up copies of main fields are not submitted twice');
+  const imgSrc = /src="([^"]*\/import\/image\?[^"]*)"/.exec(r1);
+  if (imgSrc) {
+    const u = imgSrc[1].replace(/&amp;/g, '&');
+    const im = await fetch(`${base}${u}`, { headers: { cookie } });
+    assert.equal(im.status, 200); assert.equal(im.headers.get('content-type'), 'image/webp');
+    assert.equal((await fetch(`${base}${u.replace(`/suppliers/${s.id}/`, `/suppliers/${s2.id}/`)}`, { headers: { cookie } })).status, 404, 'preview is bound to the supplier');
+  }
 
   // 2. Approve only the first row, with an edited name and price
   const f2 = new URLSearchParams({ token: tokenOf(r1), [`use_${rows[0].rn}`]: '1' });
   for (const { rn, name } of rows) { f2.set(`r_${rn}_product_name`, name); }
   f2.set(`r_${rows[0].rn}_product_name`, 'Edited Name'); f2.set(`r_${rows[0].rn}_unit_price`, '9.99');
+  f2.set(`x_${rows[0].rn}_materials`, 'Edited material');
   const ok = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });
   assert.match(ok.text, /<strong>1<\/strong> products added/);
   assert.equal(db.tables.products.length, 1);
   assert.equal(db.tables.products[0].product_name, 'Edited Name'); assert.equal(db.tables.products[0].unit_price, 9.99);
   assert.equal(db.tables.products[0].supplier_id, s.id);
+  assert.equal(db.tables.products[0].materials, 'Edited material');
 
   // 3. The same token cannot be used twice
   const again = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });
@@ -1144,4 +1163,16 @@ test('archive, bulk delete and duplicate alert', async (t) => {
   r = await bulk('delete', [c.id, a2.id]);
   assert.deepEqual(db.tables.products.map((p) => p.product_name).sort(), ['Cute Animal Shape Design', 'Unique Item']);
   assert.ok(!db.tables.products.some((p) => p.id === c.id));
+});
+
+test('importer reads a standard file header; company names are compared loosely', () => {
+  const { readHeader } = require('../src/importer');
+  const { companyMatch } = require('../src/import-review');
+  const h = readHeader([['Shenzhen Youdeshun Technology Co., Ltd'], ['Add: Building 3, Longgang, Shenzhen'], ['Tel: 0755-123456   Email: admin@youdeshun.cn'], ['Contact: Jack Lee'], ['QUOTATION'], ['Product', 'Price']], 5);
+  assert.deepEqual(h, { address: 'Building 3, Longgang, Shenzhen', phone: '0755-123456', contact_name: 'Jack Lee', email: 'admin@youdeshun.cn', company: 'Shenzhen Youdeshun Technology Co., Ltd' });
+  assert.equal(readHeader([['FACTORY DETAILS'], ['Phone / WhatsApp', 'Website'], ['Product']], 2).company, undefined);
+  assert.equal(companyMatch('Ningbo Happy Baby Co., Ltd', 'Ningbo Happy Baby'), 'match');
+  assert.equal(companyMatch('Shenzhen Youdeshun Technology Co., Ltd', 'Youdeshun'), 'match');
+  assert.equal(companyMatch('Ningbo Happy Baby Co.', 'Review Factory'), 'mismatch');
+  assert.equal(companyMatch('', 'Review Factory'), 'unknown');
 });
