@@ -372,3 +372,26 @@ end $$;
 -- Archive: hidden from the product lists (kept in the Archive page); NULL = active
 alter table public.products add column if not exists archived_at timestamptz;
 create index if not exists products_archived_idx on public.products(archived_at);
+
+-- Source files of imports (the supplier's quotation spreadsheet), kept so it can be opened from the product / supplier pages
+create table if not exists public.supplier_documents (
+  id          uuid primary key default gen_random_uuid(),
+  supplier_id uuid not null references public.suppliers(id) on delete cascade,
+  name        text not null,
+  mime        text,
+  bytes       bigint,
+  path        text not null,
+  kind        text not null default 'quotation',
+  created_at  timestamptz not null default now()
+);
+create index if not exists supplier_documents_supplier_idx on public.supplier_documents(supplier_id);
+alter table public.supplier_documents enable row level security;
+alter table public.products add column if not exists source_document_id uuid references public.supplier_documents(id) on delete set null;
+do $$
+begin
+  if exists (select 1 from information_schema.tables where table_schema='storage' and table_name='buckets') then
+    insert into storage.buckets (id, name, public, file_size_limit)
+    values ('supplier-documents','supplier-documents', false, 26214400)
+    on conflict (id) do nothing;
+  end if;
+end $$;

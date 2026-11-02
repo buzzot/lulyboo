@@ -1058,6 +1058,10 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   assert.match(r1, /data-rv-open="rv-dlg-\d+"/); assert.match(r1, /<dialog class="rv-dialog" id="rv-dlg-\d+"/);
   assert.match(r1, /name="x_\d+_description"/); assert.match(r1, /name="x_\d+_materials"/);
   assert.match(r1, /data-rv-cat-apply/);
+  const srcLink = /href="([^"]*\/import\/source\?token=[a-f0-9]{24})"/.exec(r1);
+  assert.ok(srcLink, 'source file link in the review');
+  const pre = await fetch(`${base}${srcLink[1].replace(/&amp;/g, '&')}`, { headers: { cookie } });
+  assert.equal(pre.status, 200); assert.equal((await pre.arrayBuffer()).byteLength, fs.readFileSync(path.join(FIX, 'factory_quotation_filled.xlsx')).length);
   // modal: prev/next, calculated packing panel, description tools, AI endpoint refuses without a key
   assert.match(r1, /data-rv-nav=/); assert.match(r1, /data-calc data-rn=/); assert.match(r1, /data-containers=/); assert.match(r1, /data-rv-ai/); assert.match(r1, /Physical specifications/); assert.match(r1, /Compliance/); assert.match(r1, /Container loading/);
   const aiRes = await req(base, 'POST', `/admin/suppliers/${s.id}/import/ai-describe`, { cookie, form: new URLSearchParams({ token: tokenOf(r1), row: rows[0].rn, text: 'hello' }) });
@@ -1087,6 +1091,18 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   assert.equal(db.tables.products[0].product_name, 'Edited Name'); assert.equal(db.tables.products[0].unit_price, 9.99);
   assert.equal(db.tables.products[0].supplier_id, s.id);
   assert.equal(db.tables.products[0].materials, 'Edited material');
+
+  // the original file is kept and reachable by link (supplier page, product page, document URL)
+  assert.equal(db.tables.supplier_documents.length, 1);
+  const doc = db.tables.supplier_documents[0];
+  assert.equal(doc.name, 'quote.xlsx'); assert.equal(doc.supplier_id, s.id); assert.equal(db.tables.products[0].source_document_id, doc.id);
+  const dl = await fetch(`${base}/admin/documents/${doc.id}`, { headers: { cookie } });
+  assert.equal(dl.status, 200); assert.match(dl.headers.get('content-disposition'), /quote\.xlsx/);
+  assert.equal(Buffer.compare(Buffer.from(await dl.arrayBuffer()), fs.readFileSync(path.join(FIX, 'factory_quotation_filled.xlsx'))), 0);
+  const anon = await req(base, 'GET', `/admin/documents/${doc.id}`);
+  assert.notEqual(anon.status, 200, 'needs admin login'); assert.match(anon.location || '', /login/);
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text, new RegExp(`/admin/documents/${doc.id}`));
+  assert.match((await req(base, 'GET', `/admin/products/${db.tables.products[0].id}`, { cookie })).text, /Source file: quote\.xlsx/);
 
   // 3. The same token cannot be used twice
   const again = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });

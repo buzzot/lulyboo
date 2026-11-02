@@ -79,6 +79,12 @@ function createMemoryDb(seed = {}) {
         tables.product_images = t('product_images').filter((i) => pids.has(i.product_id));
       }
     },
+    docs: {
+      async upload(path, buf) { files.set('docs/' + path, buf); },
+      async signedUrls(paths) { return Object.fromEntries(paths.filter(Boolean).map((p) => [p, `https://x.supabase.co/storage/v1/object/sign/supplier-documents/${p}?token=t`])); },
+      async download(path) { return files.get('docs/' + path); },
+      async remove(paths) { for (const p of paths) files.delete('docs/' + p); },
+    },
     storage: {
       async upload(path, buf) { files.set(path, buf); },
       async signedUrls(paths) { return Object.fromEntries(paths.filter(Boolean).map((p) => [p, `https://x.supabase.co/storage/v1/object/sign/product-images/${p}?token=t`])); },

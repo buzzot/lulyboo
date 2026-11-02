@@ -15,6 +15,7 @@
 //          { col: ['lte', v] } etc.   → eq, neq, lt, lte, gt, gte, cs (array contains)
 
 const BUCKET = 'product-images';
+const DOCS_BUCKET = 'supplier-documents';
 
 function createSupabaseDb({ url, key }) {
   if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SECRET_KEY must be set');
@@ -63,6 +64,34 @@ function createSupabaseDb({ url, key }) {
     return p.toString();
   }
 
+  const storageFor = (BUCKET) => ({
+      async upload(path, buffer, contentType) {
+        await call('POST', `/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
+          body: buffer, headers: { 'Content-Type': contentType, 'x-upsert': 'true', 'cache-control': 'max-age=31536000' },
+        });
+      },
+      async signedUrls(paths, expiresIn = 3600) {
+        const uniq = [...new Set(paths.filter(Boolean))];
+        if (!uniq.length) return {};
+        const out = {};
+        for (let i = 0; i < uniq.length; i += 200) {
+          const res = await call('POST', `/storage/v1/object/sign/${BUCKET}`, { body: { expiresIn, paths: uniq.slice(i, i + 200) } });
+          for (const item of res || []) {
+            const u = item.signedURL || item.signedUrl;
+            if (u && !item.error) out[item.path] = u.startsWith('http') ? u : `${base}/storage/v1${u}`;
+          }
+        }
+        return out;
+      },
+      async download(path) {
+        const res = await call('GET', `/storage/v1/object/${BUCKET}/${encodeURI(path)}`, { raw: true });
+        return Buffer.from(await res.arrayBuffer());
+      },
+      async remove(paths) {
+        const list = paths.filter(Boolean);
+        if (list.length) await call('DELETE', `/storage/v1/object/${BUCKET}`, { body: { prefixes: list } });
+      },
+    });
   const db = {
     async list(table, opts = {}) {
       if (opts.limit) return call('GET', `/rest/v1/${table}?${qs(opts)}`);
@@ -92,34 +121,8 @@ function createSupabaseDb({ url, key }) {
       if (!filters || !Object.keys(filters).length) throw new Error('remove requires filters');
       await call('DELETE', `/rest/v1/${table}?${qs({ filters })}`);
     },
-    storage: {
-      async upload(path, buffer, contentType) {
-        await call('POST', `/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
-          body: buffer, headers: { 'Content-Type': contentType, 'x-upsert': 'true', 'cache-control': 'max-age=31536000' },
-        });
-      },
-      async signedUrls(paths, expiresIn = 3600) {
-        const uniq = [...new Set(paths.filter(Boolean))];
-        if (!uniq.length) return {};
-        const out = {};
-        for (let i = 0; i < uniq.length; i += 200) {
-          const res = await call('POST', `/storage/v1/object/sign/${BUCKET}`, { body: { expiresIn, paths: uniq.slice(i, i + 200) } });
-          for (const item of res || []) {
-            const u = item.signedURL || item.signedUrl;
-            if (u && !item.error) out[item.path] = u.startsWith('http') ? u : `${base}/storage/v1${u}`;
-          }
-        }
-        return out;
-      },
-      async download(path) {
-        const res = await call('GET', `/storage/v1/object/${BUCKET}/${encodeURI(path)}`, { raw: true });
-        return Buffer.from(await res.arrayBuffer());
-      },
-      async remove(paths) {
-        const list = paths.filter(Boolean);
-        if (list.length) await call('DELETE', `/storage/v1/object/${BUCKET}`, { body: { prefixes: list } });
-      },
-    },
+    storage: storageFor(BUCKET),
+    docs: storageFor(DOCS_BUCKET),
   };
   return db;
 }

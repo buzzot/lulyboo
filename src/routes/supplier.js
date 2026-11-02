@@ -331,6 +331,11 @@ module.exports = function supplierRoutes(router, { db, config }) {
     const body = r.page ? r.page : r.expired ? html`${importResult(IR.expiredResult(), null)}${importPage(req.base)}` : html`${importResult(r.done, req.base)}${importPage(req.base)}`;
     res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body }));
   }));
+  router.get('/portal/import/source', A(async (req, res) => {
+    const f = IR.stagedSource(req.supplier.id, String(req.query.token || ''));
+    if (!f) throw new HttpError(404, m('This upload expired. Please upload the file again.', '上传已过期，请重新上传文件。'));
+    res.statusCode = 200; res.setHeader('Content-Type', f.type); res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`); res.setHeader('Cache-Control', 'private, no-store'); res.end(f.buffer);
+  }));
   router.post('/portal/import/ai-describe', A(async (req, res) => {
     const { fields } = await parseForm(req, { limitBytes: 64 * 1024 });
     const r = await IR.aiDescribe(req.supplier.id, fields);

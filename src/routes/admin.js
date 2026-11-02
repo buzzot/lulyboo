@@ -150,6 +150,16 @@ function guard(config, fn) {
 }
 
 // ── Shared filter logic ───────────────────────────────────────
+function sendFile(res, buffer, name, type) {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.setHeader('Content-Length', buffer.length);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(buffer);
+}
+const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`);
+
 // ── Duplicates: same supplier + same product name (ignoring case and extra spaces) ──
 const normName = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
 function dupInfo(items) {
@@ -500,6 +510,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       db.list('ai_analyses', { filters: { product_ids: ['cs', [p.id]] }, order: 'created_at.desc', limit: 10 }),
     ]);
     p.supplier_name = supplier?.name;
+    const srcDoc = p.source_document_id ? await db.get('supplier_documents', p.source_document_id).catch(() => null) : null;
     // Test mode: ?test_duty=12.5 re-costs the product with that duty, nothing is saved.
     const tdRaw = F.parseNumber(req.query.test_duty);
     const testDuty = req.query.test_duty !== undefined && req.query.test_duty !== '' && tdRaw !== null && !Number.isNaN(tdRaw) && tdRaw >= 0 && tdRaw <= 500 ? tdRaw : null;
@@ -515,7 +526,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: html`
       <div class="head-row"><div><h1>${p.product_name} ${statusPill(p.status)}</h1>
-        <p class="muted"><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a>${p.supplier_sku ? ` · SKU ${p.supplier_sku}` : ''} · ${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''} · submitted ${fmt.date(p.created_at)}</p></div>
+        <p class="muted"><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a>${p.supplier_sku ? ` · SKU ${p.supplier_sku}` : ''} · ${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''} · submitted ${fmt.date(p.created_at)}${srcDoc ? html` · <a href="/admin/documents/${srcDoc.id}" download title="Original quotation file">Source file: ${srcDoc.name}</a>` : ''}</p></div>
         <div class="actions">
           <form method="post" action="/admin/products/bulk"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button class="btn ghost" name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
           <form method="post" action="/admin/products/${p.id}/ai-review"><button class="btn" data-busy>AI review</button></form>
@@ -734,6 +745,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     ]);
     const fl = takeFlash(req, res);
     const dup = dupInfo(items);
+    const docs = await db.list('supplier_documents', { filters: { supplier_id: s.id }, order: 'created_at.desc' }).catch(() => []);
     const imgs = await S.imagesFor(db, items.map(({ product: p }) => p.id));
     const urls = await db.storage.signedUrls(items.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
     res.html(page({
@@ -805,6 +817,9 @@ module.exports = function adminRoutes(router, { db, config }) {
           <div class="import-actions"><button class="btn small">Import</button>
             <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form>
       </section>
+      ${docs.length ? html`<section class="card"><h2>Documents</h2>
+        <ul class="doc-list">${docs.map((d) => html`<li><span class="doc-ic">▤</span><a href="/admin/documents/${d.id}" download>${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${fmtBytes(d.bytes)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
+          <form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form></li>`)}</ul></section>` : ''}
       <form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>`,
     }));
   }));
@@ -849,7 +864,26 @@ module.exports = function adminRoutes(router, { db, config }) {
     flash(res, 'ok', s.active ? 'Portal access blocked' : 'Portal access allowed');
     res.redirect(`/admin/suppliers/${s.id}`);
   }));
+  // ── Source files of imports
+  router.get('/admin/documents/:id', G(async (req, res) => {
+    if (!/^[\w-]{1,64}$/.test(req.params.id)) throw new HttpError(404, 'File not found');
+    const d = await db.get('supplier_documents', req.params.id);
+    if (!d) throw new HttpError(404, 'File not found');
+    const buf = await db.docs.download(d.path);
+    if (!buf) throw new HttpError(404, 'The stored file is missing');
+    sendFile(res, buf, d.name, d.mime);
+  }));
+  router.post('/admin/documents/:id/delete', G(async (req, res) => {
+    const d = await db.get('supplier_documents', req.params.id);
+    if (!d) throw new HttpError(404, 'File not found');
+    await db.docs.remove([d.path]).catch(() => {});
+    await db.remove('supplier_documents', { id: d.id });
+    flash(res, 'ok', `${d.name} deleted. Products imported from it are kept.`);
+    res.redirect(`/admin/suppliers/${d.supplier_id}`);
+  }));
   router.post('/admin/suppliers/:id/delete', G(async (req, res) => {
+    const docs = await db.list('supplier_documents', { filters: { supplier_id: req.params.id }, select: 'path' }).catch(() => []);
+    if (docs.length) await db.docs.remove(docs.map((x) => x.path)).catch(() => {});
     const prods = await db.list('products', { filters: { supplier_id: req.params.id }, select: 'id' });
     const imgs = await S.imagesFor(db, prods.map((p) => p.id));
     await deleteImages(db, Object.values(imgs).flat());
@@ -893,6 +927,11 @@ module.exports = function adminRoutes(router, { db, config }) {
     const r = await IR.finishReview(db, s.id, fields, { admin: true, action: `/admin/suppliers/${s.id}/import` });
     const body = r.page ? r.page : importResult(r.expired ? IR.expiredResult() : r.done, null);
     res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${body}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
+  }));
+  router.get('/admin/suppliers/:id/import/source', G(async (req, res) => {
+    const f = IR.stagedSource(req.params.id, String(req.query.token || ''));
+    if (!f) throw new HttpError(404, 'This review expired. Upload the file again.');
+    sendFile(res, f.buffer, f.name, f.type);
   }));
   router.post('/admin/suppliers/:id/import/ai-describe', G(async (req, res) => {
     const { fields } = await parseForm(req, { limitBytes: 64 * 1024 });

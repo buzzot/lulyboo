@@ -33,10 +33,29 @@ const stageKey = (supplierId, token) => `${supplierId}:${token}`;
 const validToken = (s) => /^[a-f0-9]{24}$/.test(String(s || ''));
 
 // ── Insert ─────────────────────────────────────────────────────
-async function insertParsed(db, parsed, supplierId) {
+const DOC_MIME = { '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.csv': 'text/csv; charset=utf-8', '.xls': 'application/vnd.ms-excel' };
+/** Keep the uploaded quotation so it can be opened later. Returns the document row, or null (with a note in `errors`) if it could not be saved. */
+async function saveSourceFile(db, supplierId, source, errors) {
+  if (!source || !source.buffer || !source.buffer.length) return null;
+  const name = String(source.name || 'quotation').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150) || 'quotation';
+  const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  const id = crypto.randomUUID(); const path = `${supplierId}/${id}${ext}`;
+  try {
+    await db.docs.upload(path, source.buffer, DOC_MIME[ext] || 'application/octet-stream');
+    try {
+      return await db.insert('supplier_documents', { id, supplier_id: supplierId, name, mime: DOC_MIME[ext] || null, bytes: source.buffer.length, path, kind: 'quotation' });
+    } catch (e) { await db.docs.remove([path]).catch(() => {}); throw e; }
+  } catch (e) {
+    errors.push({ rowNumber: 0, messages: [m('The original file could not be saved for later (run the latest supabase/schema.sql to enable this). The products were imported.', '无法保存原始文件（请运行最新的 supabase/schema.sql）。产品已导入。')] });
+    return null;
+  }
+}
+
+async function insertParsed(db, parsed, supplierId, source = null) {
   let inserted = 0; let photos = 0;
   const errors = [...parsed.errors];
-  const rows = parsed.products.map((p) => ({ ...p.row, supplier_id: supplierId, source: 'import' }));
+  const doc = await saveSourceFile(db, supplierId, source, errors);
+  const rows = parsed.products.map((p) => ({ ...p.row, supplier_id: supplierId, source: 'import', ...(doc ? { source_document_id: doc.id } : {}) }));
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
     const saved = await db.insert('products', chunk);
@@ -63,7 +82,7 @@ async function insertParsed(db, parsed, supplierId) {
 async function runImport(db, file, supplierId) {
   let parsed;
   try { parsed = parseUpload(file); } catch (e) { return failed(e.message); }
-  return insertParsed(db, parsed, supplierId);
+  return insertParsed(db, parsed, supplierId, { name: file.name, buffer: file.buffer });
 }
 
 const failed = (message) => ({ inserted: 0, skipped: 0, photos: 0, errors: [{ rowNumber: 0, messages: [message] }] });
@@ -138,7 +157,7 @@ async function finishReview(db, supplierId, fields, view) {
   }
   if (!selected.size) return { page: reviewPage({ ...view, token, fileName: entry.name, parsed, values, selected, rowErrors, dup, supplierName, extra, notice: m('Tick at least one product to import.', '请至少勾选一个要导入的产品。') }) };
   if (Object.keys(rowErrors).length) return { page: reviewPage({ ...view, token, fileName: entry.name, parsed, values, selected, rowErrors, dup, supplierName, extra, notice: m('Fix the highlighted rows, then approve again.', '请先修正标红的行，然后再次确认导入。') }) };
-  const result = await insertParsed(db, { ...parsed, products: chosen }, supplierId);
+  const result = await insertParsed(db, { ...parsed, products: chosen }, supplierId, { name: entry.name, buffer: entry.buffer });
   staged.delete(stageKey(supplierId, token));
   return { done: result };
 }
@@ -159,6 +178,14 @@ async function aiDescribe(supplierId, fields) {
   } catch (e) {
     return { status: 502, body: { ok: false, error: /401|authentication/i.test(e.message) ? 'The AI key was rejected. Check ANTHROPIC_API_KEY in Railway.' : 'AI could not process this description right now.' } };
   }
+}
+
+/** The uploaded file, while it is still waiting for approval. */
+function stagedSource(supplierId, token) {
+  const entry = validToken(token) ? staged.get(stageKey(supplierId, token)) : null;
+  if (!entry || Date.now() - entry.at > TTL_MS) return null;
+  const ext = (String(entry.name).match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  return { name: entry.name, buffer: entry.buffer, type: DOC_MIME[ext] || 'application/octet-stream' };
 }
 
 function cancelReview(supplierId, token) { if (validToken(token)) staged.delete(stageKey(supplierId, token)); }
@@ -350,7 +377,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     const sub = (title, body) => html`<div class="rv-sub"><h5>${title}</h5>${body}</div>`;
     const descVal = curVal('description');
     const doc = [];
-    if (fileName) doc.push(html`<li><span class="rv-doc-ic">▤</span><span class="rv-doc-name" title="${fileName}">${fileName}</span><span class="rv-doc-tag">${T('Source file', '源文件')}</span></li>`);
+    if (fileName) doc.push(html`<li><span class="rv-doc-ic">▤</span><a class="rv-doc-name" href="${action}/source?token=${token}" title="${T('Download', '下载')} ${fileName}" download>${fileName}</a><span class="rv-doc-tag">${T('Source file · will be saved with the import', '源文件 · 导入时一并保存')}</span></li>`);
     if (imgs.length) doc.push(html`<li><span class="rv-doc-ic">▣</span><span class="rv-doc-name">${imgs.length} ${T(imgs.length === 1 ? 'picture' : 'pictures', '张图片')}</span><span class="rv-doc-tag">${T('From file', '来自文件')}</span></li>`);
     if (p.row.photo_link) doc.push(html`<li><span class="rv-doc-ic">↗</span><a class="rv-doc-name" href="${p.row.photo_link}" target="_blank" rel="noopener">${p.row.photo_link}</a><span class="rv-doc-tag">${T('Link', '链接')}</span></li>`);
     return html`<dialog class="rv-dialog" id="rv-dlg-${rn}" data-rn="${rn}" aria-label="Product details">
@@ -432,4 +459,4 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
 
 const expiredResult = () => failed(m('This review expired (files are only kept for 30 minutes). Please upload the file again.', '此次审核已过期（文件仅保留 30 分钟），请重新上传文件。'));
 
-module.exports = { aiDescribe, reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };
+module.exports = { stagedSource, aiDescribe, reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };
