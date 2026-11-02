@@ -282,22 +282,21 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     unit_price: ['Unit price', '单价'], moq: ['MOQ', '起订量'], production_lead_days: ['Production lead time', '生产交期'], sample_lead_days: ['Sample lead time', '样品交期'],
     units_per_inner: ['Units per inner pack', '内盒装数'], units_per_carton: ['Units per master carton', '外箱装数'], carton_nw_kg: ['Carton net weight', '外箱净重'], carton_gw_kg: ['Carton gross weight', '外箱毛重'],
     unit_net_weight_kg: ['Unit net weight', '单件净重'], supplier_qty_20gp: ['Qty per 20GP', '20GP 装柜数量'], supplier_qty_40gp: ['Qty per 40GP', '40GP 装柜数量'], supplier_qty_40hq: ['Qty per 40HQ', '40HQ 装柜数量'],
-    product_size_cm: ['Product size L×W×H (cm)', '产品尺寸 长×宽×高（cm）'],
+    product_size_cm: ['Product size (cm)', '产品尺寸（cm）'],
   };
   // [keys, columns of 12, unit]  unit: 'len' | 'wt' | 'time' | 'pcs' | 'price' | undefined
   const SECTIONS = [
-    [['Product', '产品'], [[['product_name'], 12], [['supplier_sku'], 4], [['category'], 4], [['subcategory'], 4], [['materials'], 6], [['brand'], 6], [['description'], 12]]],
-    [['Price & terms', '价格与条款'], [[['unit_price'], 4, 'price'], [['moq'], 4, 'pcs'], [['production_lead_days'], 4, 'time'], [['sample_lead_days'], 4, 'time'],
+    [['Product', '产品'], [[['product_name'], 6], [['supplier_sku'], 3], [['category'], 3], [['subcategory'], 3], [['materials'], 6], [['brand'], 3], [['description'], 12]]],
+    [['Price & terms', '价格与条款'], [[['unit_price'], 3, 'price'], [['moq'], 3, 'pcs'], [['production_lead_days'], 3, 'time'], [['sample_lead_days'], 3, 'time'],
       [['incoterm'], 3], [['fob_port'], 3], [['quote_valid_until'], 3], [['payment_terms'], 12]]],
-    [['Packing & container', '包装与装柜'], [[['units_per_inner'], 4, 'pcs'], [['units_per_carton'], 4, 'pcs'], [['carton_nw_kg'], 4, 'wt'],
-      [['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], 8, 'len', ['Carton size L × W × H', '外箱尺寸 长×宽×高']], [['carton_gw_kg'], 4, 'wt'],
-      [['supplier_qty_20gp'], 4, 'pcs'], [['supplier_qty_40gp'], 4, 'pcs'], [['supplier_qty_40hq'], 4, 'pcs']]],
-    [['Product details', '产品详情'], [[['product_size_cm'], 6], [['unit_net_weight_kg'], 3, 'wt'], [['hs_code'], 3], [['packaging_type'], 4], [['country_of_origin'], 4], [['certifications'], 4], [['dangerous_goods'], 12]]],
+    [['Packing & container', '包装与装柜'], [[['units_per_inner'], 3, 'pcs'], [['units_per_carton'], 3, 'pcs'], [['carton_nw_kg'], 3, 'wt'], [['carton_gw_kg'], 3, 'wt'],
+      [['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], 6, 'len', ['Carton size L × W × H', '外箱尺寸 长×宽×高']], [['supplier_qty_20gp', 'supplier_qty_40gp', 'supplier_qty_40hq'], 6, 'pcs', ['Qty per container 20GP / 40GP / 40HQ', '每柜装箱量 20GP / 40GP / 40HQ']]]],
+    [['Product details', '产品详情'], [[['product_size_cm'], 3], [['unit_net_weight_kg'], 3, 'wt'], [['hs_code'], 3], [['country_of_origin'], 3], [['packaging_type'], 3], [['certifications'], 3], [['dangerous_goods'], 6]]],
     [['Notes', '备注'], [[['factory_notes'], 12]]],
   ];
   const placed = new Set(SECTIONS.flatMap(([, list]) => list.flatMap(([ks]) => ks)));
   const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placed.has(k) && k !== 'currency');
-  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [[k], 4])]] : SECTIONS;
+  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [[k], 3])]] : SECTIONS;
   const fieldOf = (k) => PRODUCT_FIELDS.find((x) => x.key === k);
   const labelOf = (k) => { const f = fieldOf(k); return LABEL[k] ? T(LABEL[k][0], LABEL[k][1]) : T(f.en, f.cn); };
 
@@ -313,6 +312,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
       const lab = label ? T(label[0], label[1]) : labelOf(keys[0]);
       let inner;
       if (unit === 'price') inner = html`<div class="rv-unit">${mirror(rn, fieldOf('unit_price'))}${mirror(rn, fieldOf('currency'))}</div>`;
+      else if (unit === 'pcs' && keys.length > 1) inner = html`<div class="rv-unit">${keys.map((k, i) => html`${i ? html`<span class="rv-x">/</span>` : ''}<input name="x_${rn}_${k}" value="${curVal(k)}" placeholder="${k.replace(/^supplier_qty_/, '').toUpperCase()}" inputmode="numeric" aria-label="${labelOf(k)}">`)}<span class="rv-u">${T('pcs', '件')}</span></div>`;
       else if (unit === 'pcs') inner = html`<div class="rv-unit">${control(keys[0])}<span class="rv-u">${T('pcs', '件')}</span></div>`;
       else if (UNITS[unit]) {
         const U = UNITS[unit]; const cs = keys.map(canon);
