@@ -1058,6 +1058,9 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   assert.match(r1, /data-rv-open="rv-dlg-\d+"/); assert.match(r1, /<dialog class="rv-dialog" id="rv-dlg-\d+"/);
   assert.match(r1, /name="x_\d+_description"/); assert.match(r1, /name="x_\d+_materials"/);
   assert.match(r1, /data-rv-cat-apply/);
+  // file-level terms are not repeated in the pop-up; units live inside the fields
+  assert.doesNotMatch(r1, /name="x_\d+_(incoterm|fob_port|payment_terms|quote_valid_until)"/);
+  assert.match(r1, /data-unit-group/); assert.match(r1, /class="rv-u-sel"/); assert.match(r1, /class="rv-u">pcs</);
   assert.doesNotMatch(r1, /<dialog[^>]*>[\s\S]*?name="r_\d+_unit_price"[\s\S]*?<\/dialog>/, 'pop-up copies of main fields are not submitted twice');
   const imgSrc = /src="([^"]*\/import\/image\?[^"]*)"/.exec(r1);
   if (imgSrc) {

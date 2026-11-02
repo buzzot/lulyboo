@@ -269,20 +269,60 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     if (f.type === 'select') { const opts = (f.options || []).includes(cur) || !cur ? f.options : [cur, ...f.options]; return html`<select name="${name}"><option value=""></option>${opts.map((o) => html`<option${o === cur ? raw(' selected') : ''}>${o}</option>`)}</select>`; }
     return html`<input name="${name}" value="${cur}"${f.type === 'date' ? raw(' placeholder="YYYY-MM-DD"') : ''}>`;
   };
-  // Pop-up layout: [key, columns out of 6]
+  // ── Pop-up layout (12-column grid). Units sit inside the field; where a unit is selectable the value is
+  // converted on screen and the stored value stays in cm / kg / days.
+  const UNITS = {
+    len: { list: ['cm', 'in', 'mm'], f: { cm: 1, in: 0.393701, mm: 10 } },
+    wt: { list: ['kg', 'lb', 'g'], f: { kg: 1, lb: 2.204623, g: 1000 } },
+    time: { list: ['days', 'weeks'], f: { days: 1, weeks: 1 / 7 } },
+  };
+  const FILE_LEVEL = ['incoterm', 'fob_port', 'payment_terms', 'quote_valid_until']; // shown in the file header already
+  const fileLevel = FILE_LEVEL.filter((k) => tm[k] !== undefined);
+  const LABEL = {
+    unit_price: ['Unit price', '单价'], moq: ['MOQ', '起订量'], production_lead_days: ['Production lead time', '生产交期'], sample_lead_days: ['Sample lead time', '样品交期'],
+    units_per_inner: ['Units per inner pack', '内盒装数'], units_per_carton: ['Units per master carton', '外箱装数'], carton_nw_kg: ['Carton net weight', '外箱净重'], carton_gw_kg: ['Carton gross weight', '外箱毛重'],
+    unit_net_weight_kg: ['Unit net weight', '单件净重'], supplier_qty_20gp: ['Qty per 20GP', '20GP 装柜数量'], supplier_qty_40gp: ['Qty per 40GP', '40GP 装柜数量'], supplier_qty_40hq: ['Qty per 40HQ', '40HQ 装柜数量'],
+    product_size_cm: ['Product size L×W×H (cm)', '产品尺寸 长×宽×高（cm）'],
+  };
+  // [keys, columns of 12, unit]  unit: 'len' | 'wt' | 'time' | 'pcs' | 'price' | undefined
   const SECTIONS = [
-    [['Product', '产品'], [['product_name', 6], ['supplier_sku', 2], ['category', 2], ['subcategory', 2], ['materials', 3], ['brand', 3], ['description', 6]]],
-    [['Price & terms', '价格与条款'], [['unit_price', 2], ['currency', 2], ['moq', 2], ['incoterm', 2], ['fob_port', 2], ['quote_valid_until', 2], ['payment_terms', 6], ['production_lead_days', 3], ['sample_lead_days', 3]]],
-    [['Packing & container', '包装与装柜'], [['units_per_inner', 2], ['units_per_carton', 2], ['carton_nw_kg', 2], ['carton_l_cm', 2], ['carton_w_cm', 2], ['carton_h_cm', 2], ['carton_gw_kg', 2], ['supplier_qty_20gp', 2], ['supplier_qty_40gp', 2], ['supplier_qty_40hq', 2]]],
-    [['Product details', '产品详情'], [['product_size_cm', 3], ['unit_net_weight_kg', 3], ['packaging_type', 3], ['hs_code', 3], ['country_of_origin', 3], ['certifications', 3], ['dangerous_goods', 6]]],
-    [['Notes', '备注'], [['factory_notes', 6]]],
+    [['Product', '产品'], [[['product_name'], 12], [['supplier_sku'], 4], [['category'], 4], [['subcategory'], 4], [['materials'], 6], [['brand'], 6], [['description'], 12]]],
+    [['Price & terms', '价格与条款'], [[['unit_price'], 4, 'price'], [['moq'], 4, 'pcs'], [['production_lead_days'], 4, 'time'], [['sample_lead_days'], 4, 'time'],
+      [['incoterm'], 3], [['fob_port'], 3], [['quote_valid_until'], 3], [['payment_terms'], 12]]],
+    [['Packing & container', '包装与装柜'], [[['units_per_inner'], 4, 'pcs'], [['units_per_carton'], 4, 'pcs'], [['carton_nw_kg'], 4, 'wt'],
+      [['carton_l_cm', 'carton_w_cm', 'carton_h_cm'], 8, 'len', ['Carton size L × W × H', '外箱尺寸 长×宽×高']], [['carton_gw_kg'], 4, 'wt'],
+      [['supplier_qty_20gp'], 4, 'pcs'], [['supplier_qty_40gp'], 4, 'pcs'], [['supplier_qty_40hq'], 4, 'pcs']]],
+    [['Product details', '产品详情'], [[['product_size_cm'], 6], [['unit_net_weight_kg'], 3, 'wt'], [['hs_code'], 3], [['packaging_type'], 4], [['country_of_origin'], 4], [['certifications'], 4], [['dangerous_goods'], 12]]],
+    [['Notes', '备注'], [[['factory_notes'], 12]]],
   ];
-  const placed = new Set(SECTIONS.flatMap(([, list]) => list.map(([k]) => k)));
-  const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placed.has(k));
-  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [k, 3])]] : SECTIONS;
+  const placed = new Set(SECTIONS.flatMap(([, list]) => list.flatMap(([ks]) => ks)));
+  const leftovers = [...EDIT_KEYS, ...EXTRA_FIELDS.map((f) => f.key)].filter((k) => !placed.has(k) && k !== 'currency');
+  const sections = leftovers.length ? [...SECTIONS, [['Other', '其他'], leftovers.map((k) => [[k], 4])]] : SECTIONS;
+  const fieldOf = (k) => PRODUCT_FIELDS.find((x) => x.key === k);
+  const labelOf = (k) => { const f = fieldOf(k); return LABEL[k] ? T(LABEL[k][0], LABEL[k][1]) : T(f.en, f.cn); };
+
   const dialog = (p) => {
     const rn = p.rowNumber; const imgs = p.images || [];
-    const control = (f) => (EDIT_KEYS.includes(f.key) ? mirror(rn, f) : extraField(rn, p, f));
+    const curVal = (k) => (EDIT_KEYS.includes(k) ? values[rn][k] : (extra[rn]?.[k] !== undefined ? extra[rn][k] : strVal(p.row[k])));
+    // The value that is submitted: the table input for the main fields, a hidden input for the others.
+    const canon = (k) => (EDIT_KEYS.includes(k) ? { sel: `input[data-sync="r_${rn}_${k}"]`, hidden: '' } : { sel: `input[name="x_${rn}_${k}"]`, hidden: html`<input type="hidden" name="x_${rn}_${k}" value="${curVal(k)}">` });
+    const control = (k) => { const f = fieldOf(k); return EDIT_KEYS.includes(k) ? mirror(rn, f) : extraField(rn, p, f); };
+    const entry = ([keys, span, unit, label]) => {
+      if (keys.some((k) => FILE_LEVEL.includes(k) && fileLevel.includes(k))) return '';
+      if (keys.some((k) => !fieldOf(k))) return '';
+      const lab = label ? T(label[0], label[1]) : labelOf(keys[0]);
+      let inner;
+      if (unit === 'price') inner = html`<div class="rv-unit">${mirror(rn, fieldOf('unit_price'))}${mirror(rn, fieldOf('currency'))}</div>`;
+      else if (unit === 'pcs') inner = html`<div class="rv-unit">${control(keys[0])}<span class="rv-u">${T('pcs', '件')}</span></div>`;
+      else if (UNITS[unit]) {
+        const U = UNITS[unit]; const cs = keys.map(canon);
+        inner = html`<div class="rv-unit" data-unit-group data-unit="${U.list[0]}" data-factors="${JSON.stringify(U.f)}" data-canon="${cs.map((c) => c.sel).join('|')}">
+          ${keys.map((k, i) => html`${i ? html`<span class="rv-x">×</span>` : ''}<input class="rv-disp" inputmode="decimal" value="${curVal(k)}" aria-label="${labelOf(k)}">`)}
+          ${cs.map((c) => c.hidden)}
+          <select class="rv-u-sel" aria-label="Unit">${U.list.map((u) => html`<option${u === U.list[0] ? raw(' selected') : ''}>${u}</option>`)}</select></div>`;
+      } else inner = control(keys[0]);
+      return html`<label class="c${span}"><span class="lbl">${lab}</span>${inner}</label>`;
+    };
     return html`<dialog class="rv-dialog" id="rv-dlg-${rn}" aria-label="Product details">
       <header class="rv-dlg-head"><h3>${values[rn].product_name || T('Product', '产品')} <span class="rv-dlg-row">${T('Row', '第')} ${rn}${T('', ' 行')}</span></h3><button type="button" class="btn small" data-rv-close>${T('Done', '完成')}</button></header>
       <div class="rv-dlg-body">
@@ -292,9 +332,9 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
             : html`<div class="rv-hero empty">${T('No picture in the file for this row. Add photos on the product page after importing.', '文件中此行没有图片，导入后可在产品页面添加照片。')}</div>`}
         </aside>
         <div class="rv-dlg-form">
-          ${sections.map(([title, list]) => html`<fieldset class="rv-sec"><legend>${T(title[0], title[1])}</legend><div class="rv-grid">
-            ${list.map(([key, span]) => { const f = PRODUCT_FIELDS.find((x) => x.key === key); return f ? html`<label class="c${span}"><span class="lbl">${T(f.en, f.cn)}</span>${control(f)}</label>` : ''; })}
-          </div></fieldset>`)}
+          ${sections.map(([title, list]) => html`<fieldset class="rv-sec"><legend>${T(title[0], title[1])}</legend>
+            ${title[0] === 'Price & terms' && fileLevel.length ? html`<p class="rv-hint">${T('Incoterm, port, payment terms and validity come from the file header above and apply to every product.', '贸易术语、港口、付款条款和有效期来自上方的文件抬头，适用于所有产品。')}</p>` : ''}
+            <div class="rv-grid">${list.map(entry)}</div></fieldset>`)}
         </div>
       </div>
     </dialog>`;

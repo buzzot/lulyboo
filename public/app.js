@@ -260,6 +260,31 @@
       if (k.slice(-13) === '_product_name') { var h = e.target.closest('dialog'); var rn = k.split('_')[1]; var dlg = document.getElementById('rv-dlg-' + rn); if (dlg) { var t = dlg.querySelector('h3'); if (t && t.firstChild) t.firstChild.textContent = e.target.value + ' '; } }
     };
     rv.addEventListener('input', mirror); rv.addEventListener('change', mirror);
+    // Unit inside the field: the selected unit converts what is shown; the stored value stays in cm / kg / days.
+    var groups = Array.prototype.slice.call(rv.querySelectorAll('[data-unit-group]'));
+    var round = function (n) { return String(Math.round(n * 10000) / 10000); };
+    var canonEls = function (g) { return g.getAttribute('data-canon').split('|').map(function (sel) { return rv.querySelector(sel); }); };
+    var disps = function (g) { return Array.prototype.slice.call(g.querySelectorAll('.rv-disp')); };
+    var factor = function (g) { var f = JSON.parse(g.getAttribute('data-factors')); return f[g.querySelector('.rv-u-sel').value] || 1; };
+    var render = function (g) {
+      var c = canonEls(g); var d = disps(g); var f = factor(g);
+      d.forEach(function (el, i) { var v = c[i] ? c[i].value : ''; el.value = (v === '' || f === 1 || isNaN(Number(v))) ? v : round(Number(v) * f); });
+    };
+    groups.forEach(function (g) {
+      g.addEventListener('input', function (e) {
+        if (!e.target.classList.contains('rv-disp')) return;
+        var d = disps(g); var i = d.indexOf(e.target); var c = canonEls(g)[i]; var f = factor(g);
+        var v = e.target.value.trim(); var n = Number(v.replace(',', '.'));
+        c.value = (v === '' || f === 1 || isNaN(n)) ? v : round(n / f);
+        c.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      g.querySelector('.rv-u-sel').addEventListener('change', function () { render(g); });
+    });
+    // Edits made in the table update the pop-up fields as well
+    rv.addEventListener('input', function (e) {
+      if (!e.target.getAttribute || !e.target.getAttribute('data-sync')) return;
+      groups.forEach(function (g) { if (canonEls(g).indexOf(e.target) > -1) render(g); });
+    });
     // Group assignment of the category
     var catSel = rv.querySelector('[data-rv-cat]');
     var apply = rv.querySelector('[data-rv-cat-apply]');
