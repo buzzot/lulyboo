@@ -158,6 +158,64 @@
     });
   }
 
+  // Spreadsheet upload box: drag & drop, click to choose, or paste (a copied file, or copied spreadsheet cells -> CSV).
+  (function () {
+  var fz = document.querySelector('[data-filedrop]');
+  if (fz && window.DataTransfer) {
+    var fin = fz.querySelector('input[type=file]');
+    var chip = fz.querySelector('[data-file]');
+    var allowed = (fin.getAttribute('accept') || '').split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(function (s) { return s.charAt(0) === '.'; });
+    var FMAX = 20 * 1024 * 1024;
+    var esc2 = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var size = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; };
+    var msg = document.createElement('p'); msg.className = 'dz-note'; msg.setAttribute('role', 'status'); fz.after(msg);
+    var showFile = function () {
+      var f = fin.files && fin.files[0];
+      fz.classList.toggle('has-file', !!f);
+      chip.hidden = !f;
+      chip.innerHTML = f ? '<span class="dz-name">' + esc2(f.name) + '</span> <small>' + size(f.size) + '</small><button type="button" class="dz-remove" aria-label="Remove file">×</button>' : '';
+      if (f) chip.querySelector('button').addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation(); fin.value = ''; msg.innerHTML = ''; showFile();
+      });
+    };
+    var take = function (f) {
+      var ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+      if (allowed.length && allowed.indexOf(ext) < 0) { msg.innerHTML = L('“' + esc2(f.name) + '” is not allowed. Use ' + allowed.join(' or ') + '.', '“' + esc2(f.name) + '” 格式不支持，请使用 ' + allowed.join(' 或 ') + '。'); return false; }
+      if (f.size > FMAX) { msg.innerHTML = L('“' + esc2(f.name) + '” is over 20 MB.', '“' + esc2(f.name) + '” 超过 20 MB。'); return false; }
+      var d = new DataTransfer(); d.items.add(f); fin.files = d.files; msg.innerHTML = ''; showFile(); return true;
+    };
+    var takeList = function (list) {
+      if (!list || !list.length) return;
+      var ok = take(list[0]);
+      if (ok && list.length > 1) msg.innerHTML = L('Only one file at a time. Using the first.', '一次只能上传一个文件，已使用第一个。');
+    };
+    // Copied spreadsheet cells arrive as tab-separated text: turn them into a CSV file.
+    var tsvToCsv = function (text) {
+      var rows = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n');
+      return rows.map(function (r) { return r.split('\t').map(function (c) { return /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(','); }).join('\r\n') + '\r\n';
+    };
+    fin.addEventListener('change', function () { msg.innerHTML = ''; showFile(); });
+    ['dragenter', 'dragover'].forEach(function (ev) { fz.addEventListener(ev, function (e) { e.preventDefault(); fz.classList.add('over'); }); });
+    ['dragleave', 'dragend'].forEach(function (ev) { fz.addEventListener(ev, function () { fz.classList.remove('over'); }); });
+    fz.addEventListener('drop', function (e) { e.preventDefault(); e.stopPropagation(); fz.classList.remove('over'); takeList(e.dataTransfer && e.dataTransfer.files); });
+    // A near-miss drop elsewhere on the page uploads here instead of opening the file in the browser tab
+    window.addEventListener('dragover', function (e) { e.preventDefault(); });
+    window.addEventListener('drop', function (e) { if (!fz.contains(e.target)) { e.preventDefault(); takeList(e.dataTransfer && e.dataTransfer.files); } });
+    document.addEventListener('paste', function (e) {
+      var t = e.target;
+      if (t && t.closest && t.closest('input:not([type=file]), textarea, select, [contenteditable]')) return; // typing somewhere else
+      var cd = e.clipboardData; if (!cd) return;
+      if (cd.files && cd.files.length) { e.preventDefault(); takeList(cd.files); return; }
+      var text = cd.getData && cd.getData('text/plain');
+      if (text && text.indexOf('\t') >= 0 && text.replace(/\n+$/, '').indexOf('\n') >= 0) {
+        e.preventDefault();
+        take(new File([tsvToCsv(text)], 'pasted-data.csv', { type: 'text/csv' }));
+      }
+    });
+    showFile();
+  }
+  })();
+
   // Step-by-step product wizard: one step at a time, validated before moving on. No reloads.
   var wiz = document.querySelector('[data-wizard]');
   if (wiz) {

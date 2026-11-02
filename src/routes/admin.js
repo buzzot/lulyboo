@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { html, raw, fmt } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash, sign, unsign } = require('../lib/http');
-const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill } = require('../views/layout');
+const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, fileDrop } = require('../views/layout');
 const F = require('../fields');
 const { analyzeProduct } = require('../calc');
 const S = require('../services');
@@ -709,8 +709,10 @@ module.exports = function adminRoutes(router, { db, config }) {
         <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
         <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}"></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>
-        <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="inline-form"><input type="file" name="file" accept=".xlsx,.csv" required><button class="btn small">Import</button>
-          <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></form>
+        <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
+          ${fileDrop({ main: raw('Drag &amp; drop an .xlsx or .csv here, or <u>choose a file</u>'), hint: 'Or paste (Ctrl/⌘+V) a copied file, or copied spreadsheet cells including the header row · max 20 MB' })}
+          <div class="import-actions"><button class="btn small">Import</button>
+            <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form>
       </section>
       <form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>`,
     }));

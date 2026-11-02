@@ -3,7 +3,7 @@
 const { html, raw, fmt, t, m, biText, confirmAttr } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
 const { icon } = require('../views/icons');
-const { page, productFields, groupFields, photoSection } = require('../views/layout');
+const { page, productFields, groupFields, photoSection, fileDrop } = require('../views/layout');
 const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = require('../fields');
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
@@ -381,9 +381,9 @@ function importPage(base) {
       <li>${t('Fill in your factory details and terms once at the top, then one row per product.', '在顶部填写一次工厂信息和条款，然后每个产品填写一行。')}</li>
       <li>${t('Put each product photo in the Photo column of its row (Excel: Insert → Pictures → Place in Cell). Upload the .xlsx below: products and photos are imported together.', '请把每个产品的照片放在该行的“照片”列（Excel：插入 → 图片 → 放入单元格）。在下方上传 .xlsx 文件，产品和照片会一起导入。')}</li>
     </ol>
-    <form method="post" enctype="multipart/form-data" action="${base}/import" class="inline-form">
-      <input type="file" name="file" accept=".xlsx,.csv,text/csv" required>
-      <button class="btn">${t('Upload', '上传')}</button>
+    <form method="post" enctype="multipart/form-data" action="${base}/import" class="import-form">
+      ${fileDrop({ accept: '.xlsx,.csv,text/csv', main: t(raw('Drag &amp; drop your .xlsx or .csv here, or <u>choose a file</u>'), raw('将 .xlsx 或 .csv 文件拖到此处，或<u>点击选择文件</u>')), hint: t('You can also paste (Ctrl/⌘+V) a copied file · max 20 MB', '也可直接粘贴（Ctrl/⌘+V）已复制的文件 · 不超过 20 MB') })}
+      <div class="import-actions"><button class="btn">${t('Upload', '上传')}</button></div>
     </form>
   </section>`;
 }

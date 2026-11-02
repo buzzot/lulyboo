@@ -242,7 +242,10 @@ test('end-to-end: admin creates supplier, supplier submits, admin reviews and an
   assert.equal(own.status, 200);
   assert.doesNotMatch(own.text, /our_wholesale|review_notes/);
 
-  // Supplier bulk upload (factory quotation form)
+  // Supplier bulk upload (factory quotation form), shown as a drag-and-drop / paste box
+  const bulkPage = await req(base, 'GET', '/portal/import', { cookie: scookie });
+  assert.equal(bulkPage.status, 200);
+  assert.match(bulkPage.text, /data-filedrop/); assert.match(bulkPage.text, /accept="\.xlsx,\.csv,text\/csv"/);
   const fd2 = new FormData();
   fd2.append('file', new Blob([fs.readFileSync(path.join(FIX, 'factory_quotation_filled.xlsx'))]), 'quote.xlsx');
   const imp = await fetch(`${base}/portal/import`, { method: 'POST', body: fd2, headers: { cookie: scookie } });
@@ -688,6 +691,10 @@ test('supplier page: bulk-set status on ticked products and return to the suppli
   const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
   const page = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie });
   assert.match(page.text, /formaction="\/admin\/products\/bulk"/);
+  // The product import is a drag-and-drop / paste box (still a normal file input underneath)
+  assert.match(page.text, /data-filedrop/);
+  assert.match(page.text, /<input type="file" name="file" accept="\.xlsx,\.csv" required>/);
+  assert.match(page.text, /Quotation form/);
   const r = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'status'], ['status', 'Shortlisted'], ['back', `/admin/suppliers/${s.id}`], ['ids', a.id], ['ids', b.id]]) });
   assert.equal(r.status, 303); assert.equal(r.location, `/admin/suppliers/${s.id}`);
   const st = Object.fromEntries(db.tables.products.map((p) => [p.product_name, p.status]));

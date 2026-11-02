@@ -207,9 +207,21 @@ function pager({ total, page, perPage, baseQuery }) {
 
 const statusPill = (s) => html`<span class="pill s-${String(s || '').toLowerCase().replace(/\s+/g, '-')}">${s}</span>`;
 
+// Single-file upload box: drag & drop, click to choose, or paste (a copied file, or spreadsheet cells as CSV).
+// Works without JS too (it is still a normal file input). app.js enhances [data-filedrop].
+function fileDrop({ name = 'file', accept = '.xlsx,.csv', main, hint, required = true }) {
+  return html`<label class="dropzone compact" data-filedrop>
+    <input type="file" name="${name}" accept="${accept}" ${required ? raw('required') : ''}>
+    <span class="dz-icon" aria-hidden="true">⬆</span>
+    <span class="dz-main">${main}</span>
+    <span class="dz-hint">${hint}</span>
+    <span class="dz-file" data-file hidden></span>
+  </label>`;
+}
+
 function errorPage(status, message, req = null) {
   const head = status === 404 ? t('Not found', '页面不存在') : t('Something went wrong', '出现错误');
   return page({ title: `Error ${status}`, req, body: html`<section class="card narrow"><h1>${head}</h1><p>${biText(message)}</p></section>` });
 }
 
-module.exports = { page, adminNav, productFields, groupFields, imageGrid, photoSection, pager, statusPill, errorPage, bi, input };
+module.exports = { page, adminNav, productFields, groupFields, imageGrid, photoSection, pager, statusPill, fileDrop, errorPage, bi, input };
