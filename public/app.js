@@ -216,6 +216,29 @@
   }
   })();
 
+  // Import review: live count, select-all, no accidental approve with Enter, no double submit.
+  (function () {
+    var rv = document.querySelector('[data-import-review]'); if (!rv) return;
+    var uses = function () { return Array.prototype.slice.call(rv.querySelectorAll('.rv-use')); };
+    var countEl = rv.querySelector('[data-count]'); var all = rv.querySelector('[data-review-all]');
+    var approve = rv.querySelector('[data-approve]');
+    var sync = function () {
+      var u = uses(); var n = u.filter(function (c) { return c.checked; }).length;
+      if (countEl) countEl.textContent = n;
+      if (all) all.checked = n === u.length && n > 0;
+      u.forEach(function (c) { var tr = c.closest('tr'); if (tr) tr.classList.toggle('rv-off', !c.checked); });
+      if (approve) approve.disabled = n === 0;
+    };
+    rv.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('rv-use')) sync(); });
+    if (all) all.addEventListener('change', function () { uses().forEach(function (c) { c.checked = all.checked; }); sync(); });
+    var form = rv.querySelector('[data-review-form]');
+    if (form) {
+      form.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.preventDefault(); });
+      form.addEventListener('submit', function () { if (approve) setTimeout(function () { approve.disabled = true; }, 0); });
+    }
+    sync();
+  })();
+
   // Step-by-step product wizard: one step at a time, validated before moving on. No reloads.
   var wiz = document.querySelector('[data-wizard]');
   if (wiz) {

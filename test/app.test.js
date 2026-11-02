@@ -249,7 +249,15 @@ test('end-to-end: admin creates supplier, supplier submits, admin reviews and an
   const fd2 = new FormData();
   fd2.append('file', new Blob([fs.readFileSync(path.join(FIX, 'factory_quotation_filled.xlsx'))]), 'quote.xlsx');
   const imp = await fetch(`${base}/portal/import`, { method: 'POST', body: fd2, headers: { cookie: scookie } });
-  assert.match(await imp.text(), /<strong>2<\/strong> products added/);
+  const review = await imp.text();
+  assert.match(review, /Review before importing/);
+  assert.equal(db.tables.products.length, 1); // nothing is saved until the supplier approves
+  const rvToken = /name="token" value="([a-f0-9]{24})"/.exec(review)[1];
+  const rvRows = [...review.matchAll(/name="use_(\d+)"/g)].map((x) => x[1]);
+  assert.equal(rvRows.length, 2);
+  const rvForm = new URLSearchParams({ token: rvToken }); rvRows.forEach((rn) => rvForm.append(`use_${rn}`, '1'));
+  const approved = await req(base, 'POST', '/portal/import/confirm', { cookie: scookie, form: rvForm });
+  assert.match(approved.text, /<strong>2<\/strong> products added/);
   assert.equal(db.tables.products.length, 3);
 
   // Isolation: another supplier's user cannot read or change these products
@@ -1017,4 +1025,74 @@ test('integration API safeguards: audit log, key rotation, rate limits, bad-key 
   await req(base, 'POST', `/admin/suppliers/${s.id}/approve`, { cookie, form: {} });
   assert.equal(db.tables.suppliers[0].needs_review, false);
   assert.doesNotMatch((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text, /Created automatically/);
+});
+
+// ── Import review: check and approve before anything is saved ─────
+test('import review: edits are applied, unticked rows are skipped, duplicates start unticked, bad input and stale tokens are refused', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Review Factory' });
+  const s2 = await db.insert('suppliers', { name: 'Other Factory' });
+  const upload = async (supplierId) => {
+    const fd = new FormData();
+    fd.append('file', new Blob([fs.readFileSync(path.join(FIX, 'factory_quotation_filled.xlsx'))]), 'quote.xlsx');
+    return (await fetch(`${base}/admin/suppliers/${supplierId}/import`, { method: 'POST', body: fd, headers: { cookie } })).text();
+  };
+  const tokenOf = (h) => /name="token" value="([a-f0-9]{24})"/.exec(h)[1];
+  const rowsOf = (h) => [...h.matchAll(/name="r_(\d+)_product_name" value="([^"]*)"/g)].map((x) => ({ rn: x[1], name: x[2] }));
+
+  // 1. Upload shows the review with the main fields; nothing is saved yet
+  const r1 = await upload(s.id);
+  assert.match(r1, /Review before importing/); assert.match(r1, /Approve &amp; import <span data-count>2<\/span>/);
+  const rows = rowsOf(r1);
+  assert.equal(rows.length, 2);
+  assert.equal(db.tables.products?.length || 0, 0);
+
+  // 2. Approve only the first row, with an edited name and price
+  const f2 = new URLSearchParams({ token: tokenOf(r1), [`use_${rows[0].rn}`]: '1' });
+  for (const { rn, name } of rows) { f2.set(`r_${rn}_product_name`, name); }
+  f2.set(`r_${rows[0].rn}_product_name`, 'Edited Name'); f2.set(`r_${rows[0].rn}_unit_price`, '9.99');
+  const ok = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });
+  assert.match(ok.text, /<strong>1<\/strong> products added/);
+  assert.equal(db.tables.products.length, 1);
+  assert.equal(db.tables.products[0].product_name, 'Edited Name'); assert.equal(db.tables.products[0].unit_price, 9.99);
+  assert.equal(db.tables.products[0].supplier_id, s.id);
+
+  // 3. The same token cannot be used twice
+  const again = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });
+  assert.match(again.text, /review expired/); assert.equal(db.tables.products.length, 1);
+
+  // 4. Uploading again: a row whose name is already in the list starts unticked
+  await db.insert('products', { supplier_id: s.id, product_name: rows[1].name, is_draft: false, status: 'New' });
+  const r2 = await upload(s.id);
+  const tick = (h, rn) => new RegExp(`name="use_${rn}" value="1" checked`).test(h);
+  assert.equal(tick(r2, rows[0].rn), true); assert.equal(tick(r2, rows[1].rn), false);
+  assert.match(r2, /Already in the list/);
+
+  // 5. A bad value is refused with the review shown again, nothing saved
+  const before = db.tables.products.length;
+  const f5 = new URLSearchParams({ token: tokenOf(r2), [`use_${rows[0].rn}`]: '1', [`r_${rows[0].rn}_unit_price`]: 'abc', [`r_${rows[0].rn}_product_name`]: rows[0].name });
+  const bad = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f5 });
+  assert.match(bad.text, /not a valid number/); assert.match(bad.text, /Review before importing/);
+  assert.equal(db.tables.products.length, before);
+  // ...and ticking nothing is refused too
+  const none = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: new URLSearchParams({ token: tokenOf(r2) }) });
+  assert.match(none.text, /Tick at least one product/); assert.equal(db.tables.products.length, before);
+
+  // 6. A token belongs to one supplier only
+  const other = await req(base, 'POST', `/admin/suppliers/${s2.id}/import/confirm`, { cookie, form: new URLSearchParams({ token: tokenOf(r2), [`use_${rows[0].rn}`]: '1' }) });
+  assert.match(other.text, /review expired/); assert.equal(db.tables.products.length, before);
+
+  // 7. Cancel discards the staged file
+  const c = await req(base, 'POST', `/admin/suppliers/${s.id}/import/cancel`, { cookie, form: new URLSearchParams({ token: tokenOf(r2) }) });
+  assert.equal(c.status, 303);
+  const gone = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: new URLSearchParams({ token: tokenOf(r2), [`use_${rows[0].rn}`]: '1' }) });
+  assert.match(gone.text, /review expired/);
+
+  // 8. A file with nothing readable goes straight to the problem list (no review to approve)
+  const fdBad = new FormData(); fdBad.append('file', new Blob(['just,some,text\n1,2,3\n']), 'bad.csv');
+  const bd = await (await fetch(`${base}/admin/suppliers/${s.id}/import`, { method: 'POST', body: fdBad, headers: { cookie } })).text();
+  assert.match(bd, /Could not find the header row/); assert.doesNotMatch(bd, /Review before importing/);
 });

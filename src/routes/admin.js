@@ -8,7 +8,8 @@ const F = require('../fields');
 const { analyzeProduct } = require('../calc');
 const S = require('../services');
 const { saveProductImages, deleteImages } = require('../images');
-const { runImport, importResult } = require('./supplier');
+const IR = require('../import-review');
+const { importResult } = IR;
 const { renderAnalysis } = require('../views/ai');
 const A = require('../auth');
 const { createInvite, INVITE_DAYS } = require('./supplier-auth');
@@ -791,8 +792,25 @@ module.exports = function adminRoutes(router, { db, config }) {
     const { files } = await parseForm(req, { limitBytes: 15 * 1024 * 1024 });
     const file = files.file?.[0];
     if (!file) { flash(res, 'error', 'Choose a file'); return res.redirect(`/admin/suppliers/${s.id}`); }
-    const result = await runImport(db, file, s.id);
-    res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${importResult(result, null)}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
+    // Step 1: read the file and show the main fields for checking. Nothing is saved until you approve.
+    const r = await IR.startReview(db, file, s.id, { admin: true, action: `/admin/suppliers/${s.id}/import` });
+    res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${r.page ? r.page : importResult(r.result, null)}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
+  }));
+  router.post('/admin/suppliers/:id/import/confirm', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id);
+    if (!s) throw new HttpError(404, 'Supplier not found');
+    const { fields } = await parseForm(req, { limitBytes: 4 * 1024 * 1024 });
+    const r = await IR.finishReview(db, s.id, fields, { admin: true, action: `/admin/suppliers/${s.id}/import` });
+    const body = r.page ? r.page : importResult(r.expired ? IR.expiredResult() : r.done, null);
+    res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${body}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
+  }));
+  router.post('/admin/suppliers/:id/import/cancel', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id);
+    if (!s) throw new HttpError(404, 'Supplier not found');
+    const { fields } = await parseForm(req);
+    IR.cancelReview(s.id, fields.token);
+    flash(res, 'info', 'Import cancelled. Nothing was saved.');
+    res.redirect(`/admin/suppliers/${s.id}`);
   }));
 };
 

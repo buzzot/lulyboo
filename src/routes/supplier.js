@@ -8,7 +8,8 @@ const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = requi
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
 const { saveProductImages, deleteImages } = require('../images');
-const { parseUpload } = require('../importer');
+const IR = require('../import-review');
+const { importResult } = IR;
 const ai = require('../ai');
 
 const LOCKED = ['Selected', 'Rejected'];
@@ -317,8 +318,24 @@ module.exports = function supplierRoutes(router, { db, config }) {
     const { files } = await parseForm(req, { limitBytes: 15 * 1024 * 1024 });
     const file = files.file?.[0];
     if (!file) { flash(res, 'error', m('Choose a file', '请选择文件')); return res.redirect(`${req.base}/import`); }
-    const result = await runImport(db, file, req.supplier.id);
-    res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body: html`${importResult(result, req.base)}${importPage(req.base)}` }));
+    // Step 1: read the file and show what was found. Nothing is saved until the supplier approves.
+    const r = await IR.startReview(db, file, req.supplier.id, { admin: false, action: `${req.base}/import` });
+    const body = r.page ? r.page : html`${importResult(r.result, req.base)}${importPage(req.base)}`;
+    res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body }));
+  }));
+
+  // Step 2: approve (with any edits) → save. The staged file is tied to this supplier, so a token cannot be used by another account.
+  router.post('/portal/import/confirm', A(async (req, res) => {
+    const { fields } = await parseForm(req, { limitBytes: 4 * 1024 * 1024 });
+    const r = await IR.finishReview(db, req.supplier.id, fields, { admin: false, action: `${req.base}/import` });
+    const body = r.page ? r.page : r.expired ? html`${importResult(IR.expiredResult(), null)}${importPage(req.base)}` : html`${importResult(r.done, req.base)}${importPage(req.base)}`;
+    res.html(page({ title: 'Bulk upload', nav: nav('import'), req, body }));
+  }));
+  router.post('/portal/import/cancel', A(async (req, res) => {
+    const { fields } = await parseForm(req);
+    IR.cancelReview(req.supplier.id, fields.token);
+    flash(res, 'info', m('Upload cancelled. Nothing was saved.', '已取消上传，未保存任何内容。'));
+    res.redirect(`${req.base}/import`);
   }));
 
   // ── Company profile
@@ -388,43 +405,5 @@ function importPage(base) {
   </section>`;
 }
 
-function importResult(r, base) {
-  return html`<section class="card ${r.inserted ? 'ok-card' : 'warn-card'}">
-    <h2>${t('Import result', '导入结果')}</h2>
-    <p>${t(html`<strong>${r.inserted}</strong> products added${r.photos ? ` · ${r.photos} photos imported` : ''}${r.skipped ? ` · ${r.skipped} example/header rows skipped` : ''}`, html`已添加 <strong>${r.inserted}</strong> 个产品${r.photos ? `，导入 ${r.photos} 张照片` : ''}${r.skipped ? `，跳过 ${r.skipped} 行示例/标题` : ''}`)}</p>
-    ${r.unknownColumns?.length ? html`<p class="muted">${t('Columns not recognised (ignored):', '无法识别的列（已忽略）：')} ${r.unknownColumns.join(', ')}</p>` : ''}
-    ${r.errors.length ? html`<h3>${t('Rows with problems', '有问题的行')}</h3><ul class="errors">${r.errors.map((e) => html`<li>${e.rowNumber ? html`${t('Row', '第')} ${e.rowNumber}${t('', ' 行')}${e.name ? ` (${e.name})` : ''}: ` : ''}${biText(e.messages.join('; '))}</li>`)}</ul>` : ''}
-    ${base ? html`<p><a href="${base}">${t('View my products', '查看我的产品')} →</a></p>` : ''}
-  </section>`;
-}
-
-async function runImport(db, file, supplierId) {
-  let parsed;
-  try { parsed = parseUpload(file); } catch (e) { return { inserted: 0, skipped: 0, photos: 0, errors: [{ rowNumber: 0, messages: [e.message] }] }; }
-  let inserted = 0; let photos = 0;
-  const errors = [...parsed.errors];
-  const rows = parsed.products.map((p) => ({ ...p.row, supplier_id: supplierId, source: 'import' }));
-  for (let i = 0; i < rows.length; i += 200) {
-    const chunk = rows.slice(i, i + 200);
-    const saved = await db.insert('products', chunk);
-    inserted += chunk.length;
-    // Pictures that were embedded in the spreadsheet row go with the product they sit on.
-    for (let k = 0; k < chunk.length; k++) {
-      const src = parsed.products[i + k];
-      if (!src.images || !src.images.length || !saved[k]) continue;
-      try {
-        const r = await saveProductImages(db, { supplierId, productId: saved[k].id, files: src.images, maxImages: MAX_IMAGES });
-        photos += r.saved;
-        if (r.errors.length) errors.push({ rowNumber: src.rowNumber, name: src.row.product_name, messages: r.errors });
-      } catch (e) {
-        errors.push({ rowNumber: src.rowNumber, name: src.row.product_name, messages: [m('Photos could not be saved. Add them on the product page.', '照片保存失败，请在产品页面重新添加。')] });
-      }
-    }
-  }
-  if (parsed.photosUnmatched) errors.push({ rowNumber: 0, messages: [m(`${parsed.photosUnmatched} picture(s) were not on a product row and were ignored.`, `有 ${parsed.photosUnmatched} 张图片不在产品行内，已忽略。`)] });
-  if (parsed.photosUnsupported) errors.push({ rowNumber: 0, messages: [m(`${parsed.photosUnsupported} picture(s) are in an unsupported format (e.g. EMF/WMF) and were ignored. Use JPG or PNG.`, `有 ${parsed.photosUnsupported} 张图片格式不受支持（如 EMF/WMF），已忽略。请使用 JPG 或 PNG。`)] });
-  return { inserted, photos, skipped: parsed.skipped, errors, unknownColumns: parsed.unknownColumns };
-}
-
-module.exports.runImport = runImport;
-module.exports.importResult = importResult;
+module.exports.runImport = IR.runImport;
+module.exports.importResult = IR.importResult;
