@@ -293,7 +293,7 @@ module.exports = function toolRoutes(router, { db, config }) {
   router.post('/admin/pricing', G(async (req, res) => {
     const { fields } = await parseForm(req, { limitBytes: 2_000_000 });
     const ids = String(fields.ids || '').split(',').filter(Boolean);
-    const { items } = await S.loadAnalyzed(db, { filters: { id: ['in', ids] } });
+    const { items } = await S.loadAnalyzed(db, { filters: { id: ['in', ids] }, archived: 'include' });
     let changed = 0;
     for (const { product: p, analysis: a } of items) {
       let wh = num(fields[`wh_${p.id}`]);
@@ -363,7 +363,7 @@ module.exports = function toolRoutes(router, { db, config }) {
 
   router.post('/admin/products/:id/ai-review', AIG(async (req, res) => {
     needAi();
-    const { items, ctx } = await S.loadAnalyzed(db, { filters: { id: req.params.id } });
+    const { items, ctx } = await S.loadAnalyzed(db, { filters: { id: req.params.id }, archived: 'include' });
     const it = items[0];
     if (!it) throw new HttpError(404, 'Product not found');
     const imgs = await coverImages([it.product.id]);
@@ -393,7 +393,7 @@ module.exports = function toolRoutes(router, { db, config }) {
     await parseForm(req, { limitBytes: 1_000_000 }).catch(() => null);
     const ids = String(req.query.ids || '').split(',').filter(Boolean).slice(0, 8);
     if (ids.length < 2) { flash(res, 'warn', 'Select 2–8 products to compare'); return res.redirect('/admin/products'); }
-    const { items } = await S.loadAnalyzed(db, { filters: { id: ['in', ids] } });
+    const { items } = await S.loadAnalyzed(db, { filters: { id: ['in', ids] }, archived: 'include' });
     const imgs = await coverImages(ids);
     const run = await AI.compareProducts({ items, images: imgs });
     const an = await save('compare', { title: `Compare: ${items.map((i) => i.product.product_name).join(' vs ').slice(0, 200)}`, productIds: ids, run, names: namesOf(items) });

@@ -33,6 +33,11 @@
     var f = e.target;
     var src = e.submitter && e.submitter.hasAttribute('data-confirm') ? e.submitter : f;
     var msg = (isZh() && src.getAttribute('data-confirm-zh')) || src.getAttribute('data-confirm');
+    if (msg && msg.indexOf('{n}') > -1) {
+      var n = f.querySelectorAll('input[name="ids"]:checked').length;
+      if (!n) { e.preventDefault(); window.alert('Select at least one product first.'); return; }
+      msg = msg.replace('{n}', n);
+    }
     if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
     var btn = e.submitter;
     if (btn && btn.hasAttribute('data-busy')) {
@@ -56,6 +61,16 @@
     count();
   });
   document.addEventListener('change', function (e) { if (e.target.name === 'ids') count(); });
+  // Duplicate alert: tick only the extra copies (the oldest of each group stays unticked)
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-select-dups]');
+    if (!b) return;
+    document.querySelectorAll('input[name="ids"]').forEach(function (c) { c.checked = c.hasAttribute('data-dupextra'); });
+    if (all) all.checked = false;
+    count();
+    var first = document.querySelector('input[data-dupextra]');
+    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
 
   // Copy portal link
   document.querySelectorAll('[data-copybtn]').forEach(function (b) {

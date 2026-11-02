@@ -93,7 +93,7 @@ async function startReview(db, file, supplierId, view) {
 }
 
 async function duplicateRows(db, supplierId, parsed) {
-  const existing = await db.list('products', { filters: { supplier_id: supplierId }, select: 'product_name' });
+  const existing = (await db.list('products', { filters: { supplier_id: supplierId }, select: 'product_name,archived_at' })).filter((p) => !p.archived_at);
   const have = new Set(existing.map((p) => String(p.product_name || '').trim().toLowerCase()));
   return new Set(parsed.products.filter((p) => have.has(String(p.row.product_name || '').trim().toLowerCase())).map((p) => p.rowNumber));
 }

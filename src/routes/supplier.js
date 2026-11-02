@@ -62,7 +62,7 @@ module.exports = function supplierRoutes(router, { db, config }) {
   const pctOf = (p, nImgs) => Math.round(((COMPLETE_KEYS.filter((k) => p[k] !== null && p[k] !== undefined && String(p[k]).trim() !== '').length + (nImgs || p.photo_link ? 1 : 0)) / (COMPLETE_KEYS.length + 1)) * 100);
 
   router.get('/portal', A(async (req, res) => {
-    const all = await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc' });
+    const all = (await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc' })).filter((p) => !p.archived_at);
     const imgs = await imagesFor(db, all.map((p) => p.id));
     const rows = all.map((p) => ({ ...p, st: stateOf(p), pct: pctOf(p, imgs[p.id]?.length) }));
     const count = (k) => rows.filter((r) => r.st === k).length;

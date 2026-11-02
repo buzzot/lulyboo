@@ -150,8 +150,41 @@ function guard(config, fn) {
 }
 
 // ── Shared filter logic ───────────────────────────────────────
-function applyFilters(items, q) {
+// ── Duplicates: same supplier + same product name (ignoring case and extra spaces) ──
+const normName = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
+function dupInfo(items) {
+  const groups = new Map();
+  for (const { product: p } of items) {
+    const n = normName(p.product_name); if (!n) continue;
+    const k = `${p.supplier_id}|${n}`;
+    (groups.get(k) || groups.set(k, []).get(k)).push(p);
+  }
+  const byId = new Map(); const list = [];
+  for (const arr of groups.values()) {
+    if (arr.length < 2) continue;
+    // The oldest copy is the one to keep; the rest are "extra".
+    const sorted = [...arr].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)));
+    sorted.forEach((p, i) => byId.set(p.id, { count: arr.length, extra: i > 0 }));
+    list.push({ name: arr[0].product_name, supplier: arr[0].supplier_name, count: arr.length });
+  }
+  list.sort((a, b) => b.count - a.count);
+  return { byId, groups: list };
+}
+function dupAlert(info, { link = '', withSupplier = false } = {}) {
+  if (!info.groups.length) return '';
+  const n = info.byId.size; const g = info.groups.length;
+  return html`<div class="flash warn dup-alert" role="alert"><b>Possible duplicates:</b> ${n} products share a name with another product from the same supplier (${g} group${g === 1 ? '' : 's'}). Check them first: ticking the extra copies keeps the oldest of each group, then you can Archive or Delete the ticked ones.
+    <div class="dup-list">${info.groups.slice(0, 5).map((x) => html`<span class="dup-chip">${x.name}${withSupplier && x.supplier ? ` · ${x.supplier}` : ''} ×${x.count}</span>`)}${g > 5 ? html` <span class="sub">+${g - 5} more</span>` : ''}</div>
+    <div class="dup-actions"><button type="button" class="btn small" data-select-dups>Tick the extra copies</button>${link ? html` <a class="btn small ghost" href="${link}">Show only duplicates</a>` : ''}</div></div>`;
+}
+const dupPill = (info, id) => { const d = info.byId.get(id); return d ? html` <span class="pill s-dup" title="Same name as ${d.count - 1} other product(s) from this supplier">Duplicate ×${d.count}</span>` : ''; };
+// Archive / delete buttons for the bulk bars. `formaction` is needed where the surrounding form posts elsewhere.
+const archiveButtons = (formaction = '') => html`<button class="btn small ghost" name="action" value="archive" ${formaction ? raw(`formaction="${formaction}"`) : ''} title="Hide from the lists. You can restore it from the Archive.">Archive</button>
+  <button class="btn small danger-btn" name="action" value="delete" ${formaction ? raw(`formaction="${formaction}"`) : ''} data-confirm="Delete {n} selected product(s) and their photos? This cannot be undone. (Archive keeps them.)">Delete</button>`;
+
+function applyFilters(items, q, dup = null) {
   let out = items;
+  if (q.dupes === '1' && dup) out = out.filter((i) => dup.byId.has(i.product.id));
   if (q.status) out = out.filter((i) => i.product.status === q.status);
   if (q.category) out = out.filter((i) => (i.product.category || '') === q.category);
   if (q.supplier) out = out.filter((i) => i.product.supplier_id === q.supplier);
@@ -168,8 +201,10 @@ function applyFilters(items, q) {
     price: (a, b) => (a.analysis.unit_price_usd ?? Infinity) - (b.analysis.unit_price_usd ?? Infinity),
     score: (a, b) => (b.product.score ?? 0) - (a.product.score ?? 0),
     moq: (a, b) => (a.product.moq ?? Infinity) - (b.product.moq ?? Infinity),
+    archived: (a, b) => String(b.product.archived_at).localeCompare(String(a.product.archived_at)),
+    name: (a, b) => `${a.product.supplier_id}|${normName(a.product.product_name)}`.localeCompare(`${b.product.supplier_id}|${normName(b.product.product_name)}`),
   };
-  return [...out].sort(by[q.sort] || by.newest);
+  return [...out].sort(by[q.sort] || (q.dupes === '1' ? by.name : by.newest));
 }
 
 function filterBar(q, ctx, suppliers, action = '/admin/products') {
@@ -310,8 +345,9 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   // ── Products list
   router.get('/admin/products', G(async (req, res) => {
-    const { ctx, items, suppliers } = await S.loadAnalyzed(db);
-    const filtered = applyFilters(items, req.query);
+    const { ctx, items, suppliers, archivedCount } = await S.loadAnalyzed(db);
+    const dup = dupInfo(items);
+    const filtered = applyFilters(items, req.query, dup);
     const pageNo = Math.max(1, Number(req.query.page) || 1);
     const slice = filtered.slice((pageNo - 1) * PER_PAGE, pageNo * PER_PAGE);
     const imgs = await S.imagesFor(db, slice.map((i) => i.product.id));
@@ -320,7 +356,8 @@ module.exports = function adminRoutes(router, { db, config }) {
     res.html(page({
       title: 'Products', nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: html`
-      <div class="head-row"><h1>Products</h1><div class="actions"><a class="btn ghost small" href="/admin/export.csv?${exportQ}">Export CSV</a></div></div>
+      <div class="head-row"><h1>Products</h1><div class="actions"><a class="btn ghost small" href="/admin/archive">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn ghost small" href="/admin/export.csv?${exportQ}">Export CSV</a></div></div>
+      ${dupAlert(dup, { link: req.query.dupes === '1' ? '' : '/admin/products?dupes=1', withSupplier: true })}${req.query.dupes === '1' ? html`<p class="sub">Showing duplicates only. <a href="/admin/products">Show all products</a></p>` : ''}
       ${filterBar(req.query, ctx, suppliers)}
       <form method="post" action="/admin/products/bulk" id="bulk">
       <div class="bulkbar">
@@ -329,13 +366,14 @@ module.exports = function adminRoutes(router, { db, config }) {
         <button class="btn small" name="action" value="status">Apply</button>
         <button class="btn small ghost" name="action" value="compare">Compare</button>
         <button class="btn small ghost" name="action" value="ai_compare" data-busy>AI compare</button>
+        ${archiveButtons()}
       </div>
       <div class="table-wrap"><table class="list">
         <thead><tr><th><input type="checkbox" data-checkall></th><th></th><th>Product</th><th>Category</th><th class="r">Factory price</th><th class="r">Landed</th><th class="r">Sugg. wholesale</th><th class="r">Margin</th><th class="r">MOQ</th><th class="r">Units/40HQ</th><th>Status</th><th>Score</th></tr></thead>
         <tbody>${slice.map(({ product: p, analysis: a }) => html`<tr>
-          <td><input type="checkbox" name="ids" value="${p.id}"></td>
+          <td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td>
           <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="" loading="lazy">` : html`<span class="noimg">—</span>`}</td>
-          <td><a href="/admin/products/${p.id}">${p.product_name}</a>${a.issues.length ? html` <span class="warn-dot" title="${a.issues.join('\n')}">${a.issues.length}</span>` : ''}
+          <td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}${a.issues.length ? html` <span class="warn-dot" title="${a.issues.join('\n')}">${a.issues.length}</span>` : ''}
             <div class="sub"><a href="/admin/suppliers/${p.supplier_id}">${p.supplier_name}</a>${p.supplier_sku ? ` · ${p.supplier_sku}` : ''}</div></td>
           <td>${p.category || '—'}<div class="sub">${p.subcategory || ''}</div></td>
           <td class="r">${fmt.money(p.unit_price, p.currency)}${p.currency !== 'USD' && a.unit_price_usd !== null ? html`<div class="sub">${fmt.money(a.unit_price_usd)}</div>` : ''}<div class="sub">${p.incoterm || ''}</div></td>
@@ -353,9 +391,27 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   router.post('/admin/products/bulk', G(async (req, res) => {
     const { fields } = await parseForm(req);
-    const ids = [].concat(fields.ids || []);
-    const back = /^\/admin\/[\w\/-]*$/.test(String(fields.back || '')) ? fields.back : '/admin/products';
+    const ids = [].concat(fields.ids || []).map(String).filter((id) => /^[\w-]{1,64}$/.test(id));
+    const back = /^\/admin\/[\w\/-]*$/.test(String(fields.back || '')) ? fields.back : fields.action === 'unarchive' ? '/admin/archive' : '/admin/products';
     if (!ids.length) { flash(res, 'warn', 'Select at least one product'); return res.redirect(back); }
+    if (fields.action === 'archive' || fields.action === 'unarchive') {
+      const on = fields.action === 'archive';
+      try { await db.update('products', { id: ['in', ids] }, { archived_at: on ? new Date().toISOString() : null }); } catch (e) {
+        if (/archived_at/.test(String(e.message))) { flash(res, 'error', 'Archive needs a one-time database update: run the "archived_at" lines at the end of supabase/schema.sql in Supabase, then try again.'); return res.redirect(back); }
+        throw e;
+      }
+      S.invalidate?.();
+      flash(res, 'ok', on ? `${ids.length} product(s) archived. They are hidden from the lists; find them under Archive.` : `${ids.length} product(s) restored.`);
+      return res.redirect(back);
+    }
+    if (fields.action === 'delete') {
+      const imgs = Object.values(await S.imagesFor(db, ids)).flat();
+      await deleteImages(db, imgs);
+      await db.remove('products', { id: ['in', ids] });
+      S.invalidate?.();
+      flash(res, 'ok', `${ids.length} product(s) deleted`);
+      return res.redirect(back);
+    }
     if (fields.action === 'status') {
       if (!F.STATUSES.includes(fields.status)) { flash(res, 'warn', 'Choose a status'); return res.redirect(back); }
       await db.update('products', { id: ['in', ids] }, { status: fields.status });
@@ -407,6 +463,34 @@ module.exports = function adminRoutes(router, { db, config }) {
     }));
   }));
 
+  // ── Archive
+  router.get('/admin/archive', G(async (req, res) => {
+    const { ctx, items, suppliers } = await S.loadAnalyzed(db, { archived: 'only' });
+    const q = { ...req.query, sort: req.query.sort || 'archived' };
+    const filtered = applyFilters(items, q);
+    const imgs = await S.imagesFor(db, filtered.map(({ product: p }) => p.id));
+    const urls = await db.storage.signedUrls(filtered.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
+    const supOpts = suppliers.filter((x) => items.some(({ product: p }) => p.supplier_id === x.id));
+    res.html(page({
+      title: 'Archive', nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
+      body: html`
+      <div class="head-row"><div><h1>Archive (${items.length})</h1><p class="muted">Archived products are hidden from the product lists, comparisons and the supplier's portal. Restore them any time.</p></div>
+        <div class="actions"><a class="btn ghost small" href="/admin/products">Back to products</a></div></div>
+      <form method="get" class="filters"><select name="supplier" aria-label="Supplier"><option value="">All suppliers</option>${supOpts.map((x) => html`<option value="${x.id}" ${req.query.supplier === x.id ? raw('selected') : ''}>${x.name}</option>`)}</select>
+        <input type="search" name="q" value="${req.query.q || ''}" placeholder="Search"><button class="btn small ghost">Filter</button></form>
+      <form method="post" action="/admin/products/bulk"><input type="hidden" name="back" value="/admin/archive">
+        <div class="bulkbar"><span data-selcount>0 selected</span>
+          <button class="btn small" name="action" value="unarchive">Restore</button>
+          <button class="btn small danger-btn" name="action" value="delete" data-confirm="Delete {n} selected product(s) and their photos permanently? This cannot be undone.">Delete</button></div>
+        ${filtered.length ? html`<div class="table-wrap"><table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Supplier</th><th>Category</th><th class="r">Price</th><th>Archived</th></tr></thead>
+        <tbody>${filtered.map(({ product: p }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}"></td>
+          <td class="thumb-cell">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg">—</span>`}</td>
+          <td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.supplier_name || '—'}</td><td>${p.category || '—'}</td>
+          <td class="r">${fmt.money(p.unit_price, p.currency)}</td><td>${fmt.date(p.archived_at)}</td></tr>`)}</tbody></table></div>` : html`<p class="muted">Nothing archived.</p>`}
+      </form>`,
+    }));
+  }));
+
   // ── Product detail
   router.get('/admin/products/:id', G(async (req, res) => {
     const p = await db.get('products', req.params.id);
@@ -433,6 +517,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       <div class="head-row"><div><h1>${p.product_name} ${statusPill(p.status)}</h1>
         <p class="muted"><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a>${p.supplier_sku ? ` · SKU ${p.supplier_sku}` : ''} · ${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''} · submitted ${fmt.date(p.created_at)}</p></div>
         <div class="actions">
+          <form method="post" action="/admin/products/bulk"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button class="btn ghost" name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
           <form method="post" action="/admin/products/${p.id}/ai-review"><button class="btn" data-busy>AI review</button></form>
           <form method="post" action="/admin/products/${p.id}/ai-similar"><button class="btn ghost" data-busy>Find similar (AI)</button></form>
         </div></div>
@@ -440,6 +525,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       ${testDuty !== null ? html`<div class="flash warn test-banner"><strong>TEST MODE</strong> — costs below use a duty of <strong>${testDuty}%</strong>. Nothing is saved. Real landed cost: ${fmt.money(realA.landed_cost)} at ${realA.duty_pct}% (${realA.duty_source}).
         <form method="post" action="/admin/products/${p.id}/duty/apply-override" class="inline"><input type="hidden" name="duty" value="${testDuty}"><button class="btn small">Apply ${testDuty}% as manual override</button></form>
         <a class="btn ghost small" href="/admin/products/${p.id}">Exit test mode</a></div>` : ''}
+      ${p.archived_at ? html`<div class="flash info">This product is archived and hidden from the product lists and the supplier's portal. <a href="/admin/archive">Open the Archive</a></div>` : ''}
       ${a.issues.length ? html`<div class="flash warn"><strong>Check:</strong> ${a.issues.join(' · ')}</div>` : ''}
 
       ${productDetails({ p, imgs, urls })}
@@ -560,11 +646,12 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   // ── Suppliers (CRM)
   router.get('/admin/suppliers', G(async (req, res) => {
-    const [suppliers, products, acts] = await Promise.all([
+    let [suppliers, products, acts] = await Promise.all([
       db.list('suppliers', { order: 'name.asc' }),
-      db.list('products', { select: 'id,supplier_id,status' }),
+      db.list('products', { select: 'id,supplier_id,status,archived_at' }),
       db.list('supplier_activities', { select: 'supplier_id,activity_date,follow_up_date,done', order: 'activity_date.desc' }),
     ]);
+    products = products.filter((p) => !p.archived_at);
     const users = await db.list('supplier_users', { select: 'supplier_id,status' });
     const portal = (s) => {
       if (!s.active) return 'Off';
@@ -639,13 +726,14 @@ module.exports = function adminRoutes(router, { db, config }) {
   router.get('/admin/suppliers/:id', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);
     if (!s) throw new HttpError(404, 'Supplier not found');
-    const [{ items }, acts, users, reqs] = await Promise.all([
+    const [{ items, archivedCount }, acts, users, reqs] = await Promise.all([
       S.loadAnalyzed(db, { filters: { supplier_id: s.id } }),
       db.list('supplier_activities', { filters: { supplier_id: s.id }, order: 'activity_date.desc,created_at.desc' }),
       db.list('supplier_users', { filters: { supplier_id: s.id }, order: 'created_at.asc' }),
       db.list('info_requests', { filters: { supplier_id: s.id }, order: 'created_at.desc', limit: 20 }),
     ]);
     const fl = takeFlash(req, res);
+    const dup = dupInfo(items);
     const imgs = await S.imagesFor(db, items.map(({ product: p }) => p.id));
     const urls = await db.storage.signedUrls(items.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
     res.html(page({
@@ -699,16 +787,18 @@ module.exports = function adminRoutes(router, { db, config }) {
         </section>
       </div>
       <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
-        <div class="actions"><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
+        <div class="actions"><a class="btn small ghost" href="/admin/archive?supplier=${s.id}">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
+        ${dupAlert(dup)}
         ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
         <form method="post" action="/admin/suppliers/${s.id}/request">
         <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
         <div class="bulkbar"><span data-selcount>0 selected</span>
           <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
           <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
-          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button></div>
+          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
+          ${archiveButtons('/admin/products/bulk')}</div>
         <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}"></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a></td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
+        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>
         <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
           ${fileDrop({ main: raw('Drag &amp; drop an .xlsx or .csv here, or <u>choose a file</u>'), hint: 'Or paste (Ctrl/⌘+V) a copied file, or copied spreadsheet cells including the header row · max 20 MB' })}

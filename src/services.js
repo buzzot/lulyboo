@@ -39,7 +39,8 @@ async function imagesFor(db, productIds) {
 }
 
 /** All products with supplier names and analysis. Fine for thousands of rows. */
-async function loadAnalyzed(db, { filters = {}, includeDrafts = false } = {}) {
+// archived: 'exclude' (default, the normal lists) | 'only' (the Archive page) | 'include' (look up by id)
+async function loadAnalyzed(db, { filters = {}, includeDrafts = false, archived = 'exclude' } = {}) {
   if (!includeDrafts) filters = { ...filters, is_draft: false };
   const [ctx, products, suppliers] = await Promise.all([
     getCtx(db),
@@ -47,11 +48,13 @@ async function loadAnalyzed(db, { filters = {}, includeDrafts = false } = {}) {
     db.list('suppliers', { select: 'id,name,crm_status,rating,country' }),
   ]);
   const supById = Object.fromEntries(suppliers.map((s) => [s.id, s]));
-  const items = products.map((p) => {
+  const archivedCount = products.filter((p) => p.archived_at).length;
+  const shown = archived === 'include' ? products : archived === 'only' ? products.filter((p) => p.archived_at) : products.filter((p) => !p.archived_at);
+  const items = shown.map((p) => {
     p.supplier_name = supById[p.supplier_id]?.name || '—';
     return { product: p, analysis: analyzeProduct(p, ctx) };
   });
-  return { ctx, items, suppliers, supById };
+  return { ctx, items, suppliers, supById, archivedCount };
 }
 
 module.exports = { hashToken, newToken, getCtx, imagesFor, loadAnalyzed, invalidate };

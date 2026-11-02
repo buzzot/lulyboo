@@ -1096,3 +1096,52 @@ test('import review: edits are applied, unticked rows are skipped, duplicates st
   const bd = await (await fetch(`${base}/admin/suppliers/${s.id}/import`, { method: 'POST', body: fdBad, headers: { cookie } })).text();
   assert.match(bd, /Could not find the header row/); assert.doesNotMatch(bd, /Review before importing/);
 });
+
+test('archive, bulk delete and duplicate alert', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const s = await db.insert('suppliers', { name: 'Dup Co' });
+  const mk = (n, extra = {}) => db.insert('products', { supplier_id: s.id, product_name: n, is_draft: false, status: 'New', ...extra });
+  const a = await mk('Cute Animal Shape Design');
+  const a2 = await mk('  cute animal  shape design ');
+  const b = await mk('Unique Item');
+  const c = await mk('Another');
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const bulk = (action, ids, back) => req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', action], ...(back ? [['back', back]] : []), ...ids.map((i) => ['ids', i])]) });
+
+  // Duplicate alert on both lists; the newer copy is the one pre-marked as "extra"
+  for (const url of ['/admin/products', `/admin/suppliers/${s.id}`]) {
+    const p = await req(base, 'GET', url, { cookie });
+    assert.match(p.text, /Possible duplicates/);
+    assert.match(p.text, /data-select-dups/);
+    assert.match(p.text, /Duplicate ×2/);
+    assert.equal((p.text.match(/data-dupextra/g) || []).length, 1);
+    assert.match(p.text, /value="delete"/);
+  }
+  const only = await req(base, 'GET', '/admin/products?dupes=1', { cookie });
+  assert.ok(!only.text.includes('Unique Item'));
+
+  // Archive: hidden from lists, shown in the Archive, restorable
+  let r = await bulk('archive', [a2.id, b.id]);
+  assert.equal(r.status, 303);
+  assert.ok(db.tables.products.find((p) => p.id === b.id).archived_at);
+  const list = await req(base, 'GET', '/admin/products', { cookie });
+  assert.ok(!list.text.includes('Unique Item'));
+  assert.doesNotMatch(list.text, /Possible duplicates/, 'archiving the extra copy clears the alert');
+  assert.match(list.text, /Archive \(2\)/);
+  const arch = await req(base, 'GET', '/admin/archive', { cookie });
+  assert.match(arch.text, /Unique Item/); assert.ok(!arch.text.includes('>Another<'));
+  const sp = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie });
+  assert.ok(!sp.text.includes('Unique Item'));
+  r = await bulk('unarchive', [b.id], '/admin/archive');
+  assert.equal(r.location, '/admin/archive');
+  assert.equal(db.tables.products.find((p) => p.id === b.id).archived_at, null);
+
+  // Delete only removes ticked products; nothing ticked is refused
+  assert.equal((await bulk('delete', [])).status, 303);
+  assert.equal(db.tables.products.length, 4);
+  r = await bulk('delete', [c.id, a2.id]);
+  assert.deepEqual(db.tables.products.map((p) => p.product_name).sort(), ['Cute Animal Shape Design', 'Unique Item']);
+  assert.ok(!db.tables.products.some((p) => p.id === c.id));
+});

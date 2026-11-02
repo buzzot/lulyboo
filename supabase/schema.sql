@@ -368,3 +368,7 @@ begin
     on conflict (id) do nothing;
   end if;
 end $$;
+
+-- Archive: hidden from the product lists (kept in the Archive page); NULL = active
+alter table public.products add column if not exists archived_at timestamptz;
+create index if not exists products_archived_idx on public.products(archived_at);
