@@ -202,6 +202,7 @@ module.exports = function requestRoutes(router, { db, config }) {
         ${msgs.length ? html`<ul class="feed req-log">${msgs.map((m) => html`<li class="${m.direction}"><span class="date">${fmt.date(m.created_at)}</span> <b>${m.direction === 'out' ? 'Sent to supplier' : m.direction === 'in' ? `Reply${m.from_email ? ` from ${m.from_email}` : ''}` : 'Note'}</b>
           ${m.subject ? html`<div class="sub">${m.subject}</div>` : ''}
           <div class="req-body">${m.body || ''}</div>
+          ${m.original && m.original !== m.body ? html`<details class="orig"><summary>Show original message</summary><pre>${m.original}</pre></details>` : ''}
           ${attLinks(m)}</li>`)}</ul>` : html`<p class="muted">Nothing logged yet.</p>`}
       </section>`,
     }));
@@ -234,11 +235,16 @@ module.exports = function requestRoutes(router, { db, config }) {
 
   // Log one inbound reply on its request (used by every inbound provider) and tell the admin on Telegram.
   const plain = (htmlBody) => String(htmlBody || '').replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  async function logReply(r, { from, toList, subject, text, htmlBody, attachments }) {
+  async function logReply(r, { from, toList, subject, text, htmlBody, attachments, original }) {
     const body = (text || plain(htmlBody)).trim().slice(0, 20000) || '(no text: open the original email)';
     const dupe = (await db.list('info_request_messages', { filters: { request_id: r.id, direction: 'in' } })).some((x) => x.body === body && x.from_email === from && x.subject === subject);
     if (dupe) return { duplicate: true };
-    await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments });
+    const inRow = { request_id: r.id, direction: 'in', from_email: from, to_emails: toList, subject, body, attachments };
+    const orig = String(original || '').trim().slice(0, 50000);
+    if (orig && orig !== body) {
+      try { await db.insert('info_request_messages', { ...inRow, original: orig }); }
+      catch (e) { console.error('Saving original message failed (run the "original" column SQL?):', e.message); await db.insert('info_request_messages', inRow); }
+    } else await db.insert('info_request_messages', inRow);
     await db.update('info_requests', { id: r.id }, { status: r.status === 'Sent' ? 'Replied' : r.status, updated_at: new Date().toISOString() });
     await C.completeRequestTasks(db, r.id);
     if (tg.enabled()) {
@@ -308,7 +314,9 @@ module.exports = function requestRoutes(router, { db, config }) {
     if (!r) return res.json({ ok: true, matched: false }); // 200 so Mailgun does not retry
     const attachments = [];
     for (const file of Object.values(parsed.files).flat()) attachments.push(await saveAttachment(r.ref, file));
-    const out = await logReply(r, { from, toList, subject, text, htmlBody: f['body-html'], attachments });
+    const full = String(f['body-plain'] || '');
+    const original = full ? `From: ${from}\nTo: ${toList.join(', ')}\nSubject: ${subject}${f.Date ? `\nDate: ${f.Date}` : ''}\n\n${full}` : '';
+    const out = await logReply(r, { from, toList, subject, text, htmlBody: f['body-html'], attachments, original });
     res.json({ ok: true, matched: true, ref, ...out });
   });
 };

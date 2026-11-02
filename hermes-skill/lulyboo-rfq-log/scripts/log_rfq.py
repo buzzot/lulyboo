@@ -35,6 +35,14 @@ def main():
         payload = json.loads(raw)
     except ValueError as e:
         print(json.dumps({"ok": False, "error": f"Input is not valid JSON: {e}"})); return 2
+    # Optional: "original_file" = path of the exact sent email saved by send_rfq.py (only inside ~/.hermes/rfq-sent, max 100 KB)
+    of = payload.pop("original_file", None) if isinstance(payload, dict) else None
+    if of:
+        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        root = os.path.realpath(os.path.join(home, "rfq-sent")); path = os.path.realpath(os.path.expanduser(str(of)))
+        if path.startswith(root + os.sep) and os.path.getsize(path) <= 100000:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                payload["original_message"] = fh.read()
     req = urllib.request.Request(base + "/api/v1/rfq", data=json.dumps(payload).encode("utf-8"), method="POST",
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
     try:

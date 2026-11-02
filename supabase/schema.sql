@@ -395,3 +395,6 @@ begin
     on conflict (id) do nothing;
   end if;
 end $$;
+
+-- Original (verbatim) message text shown under "Show original message" in the Communication log
+alter table public.info_request_messages add column if not exists original text;

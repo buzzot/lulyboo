@@ -58,3 +58,7 @@ from the portal. Never try to look up suppliers, prices or products there.
 - Never print, log or repeat the value of `LULYBOO_API_KEY`.
 - Record only RFQs you actually sent. Do not record drafts or messages you did not send.
 - Do not send customer personal data; supplier business contact details only.
+
+
+## Original message
+When the RFQ was sent with `send_rfq.py`, it prints `Original message saved: <path>`. Add that path to the JSON as `"original_file": "<path>"` (keep `message` as the short text). `log_rfq.py` attaches the exact email to the record so the admin can open it with "Show original message".

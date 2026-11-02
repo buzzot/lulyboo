@@ -31,6 +31,7 @@ ENV_FILE = HERMES_HOME / ".env"
 DEFAULT_LOG = Path.home() / "sourcing" / "rfq-log.csv"
 # Supplier replies go here so the Lulyboo portal records them (override: --reply-to / EMAIL_REPLY_TO).
 DEFAULT_REPLY_TO = "requests@in.lulyboo.space"
+SENT_DIR = HERMES_HOME / "rfq-sent"   # exact copy of every email that was sent (the Lulyboo portal shows it as "original message")
 LOG_FIELDS = ["date", "product", "supplier", "contact", "email", "subject",
               "message_id", "status", "notes"]
 
@@ -149,6 +150,26 @@ def save_to_sent(creds: dict, msg: EmailMessage) -> str:
     return ""
 
 
+def save_original(creds: dict, msg: EmailMessage, to_addr: str, body: str, attachments: list) -> str:
+    """Write the email exactly as sent (headers + body + attachment names) so it can be attached to the portal record."""
+    try:
+        SENT_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(SENT_DIR, 0o700)
+        safe = "".join(c if c.isalnum() or c in "@.-_" else "_" for c in to_addr)[:80]
+        path = SENT_DIR / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{safe}.txt"
+        lines = [f"From: {msg['From']}", f"To: {msg['To']}"]
+        if msg["Reply-To"]:
+            lines.append(f"Reply-To: {msg['Reply-To']}")
+        lines += [f"Date: {msg['Date']}", f"Subject: {msg['Subject']}"]
+        if attachments:
+            lines.append("Attachments: " + ", ".join(Path(a).name for a in attachments))
+        path.write_text("\n".join(lines) + "\n\n" + body, encoding="utf-8")
+        os.chmod(path, 0o600)
+        return str(path)
+    except OSError:
+        return ""
+
+
 def load_recipients(args) -> list[dict]:
     out: list[dict] = []
     for addr in args.to or []:
@@ -215,6 +236,7 @@ def main() -> int:
     reply_to = (args.reply_to or creds["reply_to"] or DEFAULT_REPLY_TO).strip()
 
     results = []
+    originals = {}
     for rec in recipients:
         row = {
             "date": datetime.now().isoformat(timespec="seconds"),
@@ -251,6 +273,8 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - report any SMTP failure verbatim
             row["status"] = "FAILED"
             row["notes"] = f"{type(exc).__name__}: {exc}"
+        if row["status"] == "SENT":
+            originals[rec["email"]] = save_original(creds, msg, rec["email"], body, args.attach)
         if row["status"] == "SENT" and not args.no_save_copy:
             # The email is already sent; a failed copy is reported but never changes SENT.
             row["notes"] = save_to_sent(creds, msg)
@@ -260,7 +284,7 @@ def main() -> int:
 
     if args.json:
         print(json.dumps({"dry_run": not args.send, "results": results,
-                          "log": str(log_path)}, indent=2))
+                          "original_files": originals, "log": str(log_path)}, indent=2))
         return 0 if all(r["status"] in {"SENT", "DRY_RUN"} for r in results) else 1
 
     mode = "SEND" if args.send else "DRY-RUN (nothing was sent)"
@@ -279,6 +303,9 @@ def main() -> int:
     for row in results:
         print(f"[{row['status']}] {row['email']}  ({row['supplier'] or 'supplier'})"
               + (f"  {row['notes']}" if row["notes"] else ""))
+    for addr, path in originals.items():
+        if path:
+            print(f"Original message saved: {path}   (pass it to log_rfq as \"original_file\")")
     print(f"\nLog: {log_path}")
     return 0 if all(r["status"] in {"SENT", "DRY_RUN"} for r in results) else 1
 

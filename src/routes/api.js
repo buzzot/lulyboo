@@ -63,6 +63,7 @@ module.exports = function apiRoutes(router, { db, config }) {
     if (!sName) throw new ApiError(400, 'supplier.name is required');
     if (sEmail && !EMAIL_RE.test(sEmail)) throw new ApiError(400, 'supplier.email is not a valid email address');
     const message = str(b.message, 20000);
+    const original = str(b.original_message, 50000);
     const products = (Array.isArray(b.products) ? b.products : []).slice(0, 50).map((p) => (typeof p === 'string' ? { name: p } : p)).filter((p) => p && str(p.name, 300));
     const title = str(b.title, 300) || (products[0] ? `RFQ: ${str(products[0].name, 200)}` : '');
     if (!title) throw new ApiError(400, 'title is required (or send at least one product)');
@@ -108,7 +109,11 @@ module.exports = function apiRoutes(router, { db, config }) {
       const buf = Buffer.from(String(a?.content_base64 || ''), 'base64');
       if (buf.length) attachments.push(await saveAttachment(ref, { name: str(a.filename, 200) || 'file', type: str(a.content_type, 100), buffer: buf }));
     }
-    await db.insert('info_request_messages', { request_id: row.id, direction: 'out', from_email: null, to_emails: sEmail ? [sEmail] : [], subject: title, body: bodyText, attachments, created_at: sentAt });
+    const msgRow = { request_id: row.id, direction: 'out', from_email: null, to_emails: sEmail ? [sEmail] : [], subject: title, body: bodyText, attachments, created_at: sentAt };
+    if (original) {
+      try { await db.insert('info_request_messages', { ...msgRow, original }); }
+      catch (e) { console.error('Saving original message failed (run the "original" column SQL?):', e.message); await db.insert('info_request_messages', msgRow); }
+    } else await db.insert('info_request_messages', msgRow);
     await db.insert('supplier_activities', { supplier_id: supplier.id, type: ACTIVITY_TYPE[channel], summary: `RFQ ${ref} sent via ${channel}: ${title}`.slice(0, 5000), activity_date: sentAt.slice(0, 10), done: true });
     const days = b.follow_up_days === undefined ? 3 : Math.min(60, Math.max(0, Number(b.follow_up_days) || 0));
     if (days > 0) await db.insert('crm_tasks', { supplier_id: supplier.id, request_id: row.id, type: 'Follow-up', title: `Follow up RFQ ${ref}: ${title}`.slice(0, 300), due_date: C.addDays(C.localNow().date, days) });

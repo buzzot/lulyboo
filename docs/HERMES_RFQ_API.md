@@ -33,6 +33,7 @@ Required: `supplier.name`, and `title` (or at least one product). Everything els
 |---|---|
 | `supplier` | Matched by email first, then by company name (ignoring Co., Ltd, punctuation). **If no match, a new supplier is created** with status "Contacted". An existing supplier only has blank fields filled in; nothing is overwritten. |
 | `channel` | Telegram, WhatsApp, WeChat, Email, Phone or Other |
+| `original_message` | Optional. The email exactly as sent (headers + body). The admin sees it under "Show original message". `log_rfq.py` fills it from `"original_file"` (the file `send_rfq.py` saves in `~/.hermes/rfq-sent/`) |
 | `external_id` | Hermes' own id for this message. Sending the same one again never creates a duplicate |
 | `follow_up_days` | Days until the CRM follow-up task (default 3, `0` = none) |
 | `sent_at` | When it was really sent (default: now) |

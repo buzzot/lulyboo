@@ -983,6 +983,12 @@ test('integration API: Hermes records RFQs (write-only), creates new suppliers, 
   const detail2 = await req(base, 'GET', `/admin/requests/${j1.request_id}`, { cookie });
   assert.match(detail2.text, /as RFQ via telegram to a@b\.example/i);
   assert.doesNotMatch(detail2.text, /to a@b\.example to a@b\.example/i);
+  // Original message: stored, shown behind "Show original message", escaped; summary-only entries show no toggle
+  assert.doesNotMatch(detail2.text, /Show original message/);
+  const j3 = await (await call({ supplier: { name: 'Orig Co' }, title: 'RFQ orig', message: 'Short summary', original_message: 'From: a\nSubject: Hi <b>x</b>\n\nFull verbatim text', external_id: 'o-1' })).json();
+  assert.equal(db.tables.info_request_messages.find((m) => m.request_id === j3.request_id).original.includes('Full verbatim text'), true);
+  const d3 = await req(base, 'GET', `/admin/requests/${j3.request_id}`, { cookie });
+  assert.match(d3.text, /Show original message/); assert.match(d3.text, /Full verbatim text/); assert.match(d3.text, /Hi &lt;b&gt;x&lt;\/b&gt;/);
 });
 
 test('integration API safeguards: audit log, key rotation, rate limits, bad-key throttle, supplier review flag', async (t) => {

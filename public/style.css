@@ -506,6 +506,7 @@ table.product-table td { vertical-align: middle; }
 .req-log li.out{border-left:3px solid #c9c9c9;padding-left:12px}
 .req-log li.note{border-left:3px solid #e0b34a;padding-left:12px}
 .req-body{white-space:pre-wrap;margin-top:6px;font-size:14px}
+.orig{margin-top:8px}.orig summary{cursor:pointer;font-size:13px;color:var(--brand,#2f6f5e);font-weight:600}.orig pre{white-space:pre-wrap;word-break:break-word;background:#f6f5f2;border:1px solid #e3e0d8;border-radius:8px;padding:12px;margin:8px 0 0;font:13px/1.5 ui-monospace,Menlo,monospace;max-height:420px;overflow:auto}
 ul.plain{list-style:none;padding:0;margin:6px 0 12px}
 ul.plain li{padding:3px 0}
 
