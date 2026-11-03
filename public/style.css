@@ -916,3 +916,26 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 @media(max-width:1180px){.pp-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1000px){.pp-layout{grid-template-columns:minmax(0,1fr)}.pp-side{position:static;max-height:none;order:-1}.fits{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.pd-grid{grid-template-columns:minmax(0,1fr)}.specs{grid-template-columns:minmax(0,1fr)}.two-col{grid-template-columns:minmax(0,1fr)}.pp-head{grid-template-columns:minmax(0,1fr)}.pp-actions{justify-content:flex-start}.pp-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.pd-photos{max-width:320px}}
+
+/* Duty & HTS panel */
+.dt-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.dt-meta{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 8px;font-size:13px}
+.dt-meta li{display:inline-flex;gap:5px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:#fafaf8}.dt-meta li span{color:var(--muted)}.dt-meta .dt-note{border:0;background:none;color:var(--muted);padding-left:2px}
+.dt-top .help-btn{margin:0}
+.dt-tools{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;align-items:stretch}
+.dt-tool{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:12px;margin:0}
+.dt-head{display:flex;gap:10px;align-items:flex-start}.dt-head b{display:block;font-size:14px}.dt-head small{display:block;color:var(--muted);font-size:12.5px;line-height:1.4;margin-top:1px}
+.dt-num{flex:none;width:22px;height:22px;border-radius:50%;background:var(--brand-soft);color:var(--brand-dark,#b6453a);font-size:12px;font-weight:700;display:grid;place-items:center}
+.dt-row{display:flex;gap:8px;align-items:stretch;margin-top:auto}
+.dt-row>input,.dt-row .inp-unit{flex:1;min-width:0}
+.dt-row input{height:40px;box-sizing:border-box;width:100%}
+.dt-row .btn{height:40px;padding:0 16px;display:inline-flex;align-items:center;white-space:nowrap;margin:0}
+.dt-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 0;padding:10px 14px;background:var(--brand-soft);border:1px solid var(--brand-line,#f0c9c3);border-radius:10px;font-size:14px}
+.dt-empty{margin:14px 0 0;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;color:var(--muted);font-size:14px}
+.duty-kv{margin-top:16px;grid-template-columns:200px minmax(0,1fr);gap:0 16px}.duty-kv dt,.duty-kv dd{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.duty-kv .strong{border-top:0;font-size:15px}
+@media(max-width:900px){.dt-tools{grid-template-columns:minmax(0,1fr)}.duty-kv{grid-template-columns:minmax(0,1fr)}.duty-kv dt{border-bottom:0;padding-bottom:0}}
+@media(max-width:520px){.dt-row{flex-wrap:wrap}.dt-row .btn{flex:1}}
+/* One control height across the Review form and duty tools */
+.rv-form select,.rv-form input:not([type=checkbox]),.dt-row input{height:40px;box-sizing:border-box;padding-top:0;padding-bottom:0;font:inherit;font-size:14px;width:100%}
+.rv-form textarea{font:inherit;font-size:14px}

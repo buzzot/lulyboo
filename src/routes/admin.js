@@ -113,13 +113,24 @@ function dutyPanel({ p, a, testDuty, aiOn }) {
   const code = p.hts_verified_code || p.hs_code || '';
   return html`<details class="card fold duty-card" id="duty" ${testDuty !== null || !d ? raw('open') : ''}>
     <summary><h2 class="inline">Duty &amp; HTS</h2> <span class="pill ${a.duty_source === 'manual' ? 's-reviewing' : a.duty_source === 'AI / USITC' ? 's-selected' : ''}">using ${a.duty_pct}% · ${a.duty_source}</span></summary>
-    <p class="muted">${dutyHelp()}</p>
-    <p class="muted">Main source: US tariff schedule (USITC) read by AI. A manual override always wins. Supplier's HS code: <strong>${p.hs_code || '—'}</strong> · Origin: <strong>${p.country_of_origin || 'not given (China assumed)'}</strong></p>
-    <form method="post" action="/admin/products/${p.id}/duty/research" class="inline-form">
-      <label><span class="lbl">① HTS code to verify (the tariff code, e.g. 9503.00.00.73)</span><input name="hts" value="${code}" placeholder="e.g. 9503.00.00.73" inputmode="text" autocomplete="off"></label>
-      <button class="btn" data-busy ${aiOn ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check with USITC + AI</button>
-      ${code ? html`<a class="btn ghost" target="_blank" rel="noopener" href="${usitcLink(code)}">Open on hts.usitc.gov ↗</a>` : ''}
-    </form>
+    <div class="dt-top">
+      <ul class="dt-meta"><li><span>Supplier HS code</span> <b>${p.hs_code || '—'}</b></li><li><span>Origin</span> <b>${p.country_of_origin || 'not given (China assumed)'}</b></li><li><span>Source</span> <b>US tariff schedule (USITC), read by AI</b></li><li class="dt-note">A manual override always wins</li></ul>
+      ${dutyHelp()}
+    </div>
+    <div class="dt-tools">
+      <form method="post" action="/admin/products/${p.id}/duty/research" class="dt-tool">
+        <div class="dt-head"><span class="dt-num">1</span><div><b>Verify HTS code</b><small>The tariff code, e.g. 9503.00.00.73. AI checks it against the USITC schedule.</small></div></div>
+        <div class="dt-row"><input name="hts" value="${code}" placeholder="e.g. 9503.00.00.73" inputmode="text" autocomplete="off" aria-label="HTS code to verify">
+          <button class="btn" data-busy ${aiOn ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check with USITC + AI</button>
+          ${code ? html`<a class="btn ghost" target="_blank" rel="noopener" href="${usitcLink(code)}">Open USITC ↗</a>` : ''}</div>
+      </form>
+      <form method="get" action="/admin/products/${p.id}#duty" class="dt-tool">
+        <div class="dt-head"><span class="dt-num">2</span><div><b>Test a different duty rate</b><small>Type a percentage, not an HTS code. What-if only, nothing is saved.</small></div></div>
+        <div class="dt-row"><span class="inp-unit"><input name="test_duty" type="number" step="0.01" min="0" max="500" value="${testDuty ?? ''}" placeholder="e.g. ${a.duty_pct}" aria-label="Duty rate in percent"><i>%</i></span>
+          <button class="btn ghost">Test</button></div>
+      </form>
+    </div>
+    ${manual ? html`<form method="post" action="/admin/products/${p.id}/duty/clear-override" class="dt-bar"><span>Manual override <b>${p.duty_rate_pct}%</b> is active.</span> <button class="btn ghost small">Clear override${p.duty_ai_pct !== null && p.duty_ai_pct !== undefined ? ` (back to AI ${p.duty_ai_pct}%)` : ''}</button></form>` : ''}
     ${d ? html`
       <dl class="kv duty-kv">
         <dt>HTS line</dt><dd><strong>${d.hts_code}</strong> <span class="sub">${d.hts_description || ''}</span></dd>
@@ -131,14 +142,7 @@ function dutyPanel({ p, a, testDuty, aiOn }) {
       ${d.classification_note ? html`<p class="muted">${d.classification_note}</p>` : ''}
       ${(d.review_flags || []).length ? html`<div class="flash warn"><strong>Verify:</strong><ul class="plain">${d.review_flags.map((f) => html`<li>${f}</li>`)}</ul></div>` : ''}
       ${(d.alternatives || []).length ? html`<details><summary>Other tariff lines considered (${d.alternatives.length})</summary><ul class="plain">${d.alternatives.map((x) => html`<li><strong>${x.htsno}</strong> ${x.general} <span class="sub">${x.description}</span></li>`)}</ul></details>` : ''}
-    ` : html`<p class="muted">Not researched yet. Enter or confirm the HTS code in box ① above and press “Check with USITC + AI”.</p>`}
-    <div class="duty-actions">
-      <form method="get" action="/admin/products/${p.id}#duty" class="inline-form">
-        <label><span class="lbl">② Test a different duty RATE in % (what-if, not saved): type a percentage, not an HTS code</span><input name="test_duty" type="number" step="0.01" min="0" max="500" value="${testDuty ?? ''}" placeholder="e.g. ${a.duty_pct}"></label>
-        <button class="btn ghost">Test</button>
-      </form>
-      ${manual ? html`<form method="post" action="/admin/products/${p.id}/duty/clear-override" class="inline-form"><span class="sub">Manual override ${p.duty_rate_pct}% is active.</span> <button class="btn ghost small">Clear override${p.duty_ai_pct !== null && p.duty_ai_pct !== undefined ? ` (back to AI ${p.duty_ai_pct}%)` : ''}</button></form>` : ''}
-    </div>
+    ` : html`<p class="dt-empty">Not researched yet. Confirm the code in step 1 and press “Check with USITC + AI”.</p>`}
   </details>`;
 }
 
