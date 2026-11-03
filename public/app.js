@@ -630,4 +630,73 @@
     var openHash = function () { var el = location.hash && document.querySelector(location.hash); if (el && el.tagName === 'DETAILS') el.open = true; };
     window.addEventListener('hashchange', openHash); openHash();
   })();
+
+  // Product workspace: tabs (no extra requests: all panels are in the page), sticky header, AI description, unsaved-change guard
+  (function () {
+    var root = document.querySelector('[data-pw]'); if (!root) return;
+    var key = 'lb-tab-' + root.getAttribute('data-product');
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.pw-tab'));
+    var panels = Array.prototype.slice.call(root.querySelectorAll('[data-panel]'));
+    var names = panels.map(function (p) { return p.getAttribute('data-panel'); });
+    var store = function (v) { try { if (v === undefined) return sessionStorage.getItem(key); sessionStorage.setItem(key, v); } catch (e) { return null; } };
+    var show = function (name, focus) {
+      if (names.indexOf(name) < 0) name = 'overview';
+      tabs.forEach(function (t) { var on = t.getAttribute('data-tab') === name; t.setAttribute('aria-selected', on ? 'true' : 'false'); t.tabIndex = on ? 0 : -1; if (on && focus) t.focus(); });
+      panels.forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== name; });
+      store(name);
+    };
+    var fromHash = function () {
+      var h = (location.hash || '').slice(1); if (!h) return false;
+      var el = document.getElementById(h); if (!el) return false;
+      var panel = h.indexOf('tab-') === 0 ? el : el.closest('[data-panel]');
+      if (!panel) return false;
+      show(panel.getAttribute('data-panel'));
+      for (var d = el; d && d !== root; d = d.parentElement) if (d.tagName === 'DETAILS') d.open = true;
+      if (h.indexOf('tab-') !== 0) el.scrollIntoView();
+      return true;
+    };
+    tabs.forEach(function (t, i) {
+      t.addEventListener('click', function () { show(t.getAttribute('data-tab')); try { history.replaceState(null, '', '#tab-' + t.getAttribute('data-tab')); } catch (e) {} });
+      t.addEventListener('keydown', function (e) {
+        var n = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null;
+        if (n === null) return; e.preventDefault(); var t2 = tabs[(n + tabs.length) % tabs.length]; show(t2.getAttribute('data-tab'), true);
+      });
+    });
+    if (!fromHash()) show(store() || 'overview');
+    window.addEventListener('hashchange', fromHash);
+    document.addEventListener('click', function (e) {
+      var g = e.target.closest && e.target.closest('[data-goto-tab]'); if (g) { e.preventDefault(); show(g.getAttribute('data-goto-tab')); window.scrollTo(0, 0); }
+      var o = e.target.closest && e.target.closest('[data-open-edit]'); if (o) { e.preventDefault(); show('overview'); var ed = document.getElementById('edit'); if (ed) { ed.open = true; ed.scrollIntoView(); } var mm = document.querySelector('.more-menu'); if (mm) mm.open = false; }
+      var mm2 = document.querySelector('.more-menu'); if (mm2 && mm2.open && !mm2.contains(e.target)) mm2.open = false;
+    });
+    // Forms that jump to a tab after posting (AI actions land on Review)
+    document.querySelectorAll('form[data-go-tab]').forEach(function (f) { f.addEventListener('submit', function () { store(f.getAttribute('data-go-tab')); }); });
+    // Compact sticky header
+    var head = document.querySelector('[data-pw-head]');
+    if (head) { var onScroll = function () { head.classList.toggle('stuck', window.scrollY > 80); }; window.addEventListener('scroll', onScroll, { passive: true }); onScroll(); }
+    // Unsaved changes: Save is disabled until something changes; leaving the page warns
+    var dirtyCount = 0;
+    root.querySelectorAll('form[data-guard]').forEach(function (f) {
+      var save = f.querySelector('[data-save]'), note = f.querySelector('[data-dirty-note]'), dirty = false;
+      var snap = function () { return new URLSearchParams(new FormData(f)).toString(); };
+      var base = snap();
+      if (save) save.disabled = true;
+      var check = function () { var d = snap() !== base; if (d !== dirty) { dirtyCount += d ? 1 : -1; dirty = d; } if (save) save.disabled = !d; if (note) note.hidden = !d; };
+      f.addEventListener('input', check); f.addEventListener('change', check);
+      f.addEventListener('submit', function () { if (dirty) { dirtyCount--; dirty = false; } });
+    });
+    window.addEventListener('beforeunload', function (e) { if (dirtyCount > 0) { e.preventDefault(); e.returnValue = ''; } });
+    // AI description suggestion (needs approval before anything is saved)
+    var btn = root.querySelector('[data-ai-describe]');
+    if (btn) {
+      var box = root.querySelector('[data-ai-box]'), txt = root.querySelector('[data-ai-text]'), msg = root.querySelector('[data-ai-msg]');
+      btn.addEventListener('click', function () {
+        msg.hidden = true; btn.disabled = true; var label = btn.textContent; btn.textContent = 'Working…';
+        fetch(btn.getAttribute('data-url'), { method: 'POST', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+          if (j.ok) { txt.value = j.description; box.hidden = false; txt.focus(); } else { msg.textContent = j.error || 'AI could not clean up the description.'; msg.hidden = false; }
+        }).catch(function () { msg.textContent = 'AI could not be reached. Try again.'; msg.hidden = false; }).then(function () { btn.disabled = false; btn.textContent = label; });
+      });
+      var dis = root.querySelector('[data-ai-discard]'); if (dis) dis.addEventListener('click', function () { box.hidden = true; });
+    }
+  })();
 })();

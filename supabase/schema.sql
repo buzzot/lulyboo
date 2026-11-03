@@ -396,6 +396,10 @@ begin
   end if;
 end $$;
 
+-- Product documents (certificates, test reports, specifications) attached to one product
+alter table public.supplier_documents add column if not exists product_id uuid references public.products(id) on delete cascade;
+create index if not exists supplier_documents_product_idx on public.supplier_documents(product_id);
+
 -- Original (verbatim) message text shown under "Show original message" in the Communication log
 alter table public.info_request_messages add column if not exists original text;
 

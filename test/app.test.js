@@ -1354,3 +1354,55 @@ test('dashboard: grouped nav, KPIs, attention counts and filters match the data'
   const bad = await req(base, 'GET', '/admin', { cookie });
   assert.equal(bad.status, 200); assert.match(bad.text, /could not be loaded/);
 });
+
+test('product workspace: five tabs, split saves, product documents and inline preview', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const login = await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } });
+  const cookie = login.cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'WS Co', active: true });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Widget', is_draft: false, status: 'New', unit_price: 2, currency: 'USD', description: 'one\ntwo', target_stores: ['Ross'], review_notes: 'keep' });
+  const page = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  for (const id of ['overview', 'costing', 'logistics', 'review', 'documents']) assert.match(page, new RegExp(`id="tab-${id}"`));
+  assert.match(page, /AI review/); assert.match(page, /Find similar/); assert.match(page, /data-confirm="Archive this product/);
+
+  // costing save must not touch review fields; review save must not touch pricing
+  await req(base, 'POST', `/admin/products/${p.id}/review`, { cookie, form: { section: 'costing', our_wholesale_usd: '5', planned_qty: '1000', logistics_option_id: '' } });
+  let row = db.tables.products.find((x) => x.id === p.id);
+  assert.equal(row.our_wholesale_usd, 5); assert.equal(row.planned_qty, 1000); assert.deepEqual(row.target_stores, ['Ross']); assert.equal(row.review_notes, 'keep');
+  await req(base, 'POST', `/admin/products/${p.id}/review`, { cookie, form: { section: 'review', stores_present: '1', status: 'Shortlisted', score: '4', review_notes: 'good' } });
+  row = db.tables.products.find((x) => x.id === p.id);
+  assert.equal(row.status, 'Shortlisted'); assert.equal(row.score, 4); assert.deepEqual(row.target_stores, []); assert.equal(row.our_wholesale_usd, 5); assert.equal(row.unit_price, 2);
+  await req(base, 'POST', `/admin/products/${p.id}/review`, { cookie, form: { section: 'review', status: 'Rejected' } });
+  row = db.tables.products.find((x) => x.id === p.id);
+  assert.equal(row.status, 'Rejected'); assert.equal(row.review_notes, 'good', 'quick action leaves notes alone');
+
+  // approved description is saved only through the explicit endpoint
+  await req(base, 'POST', `/admin/products/${p.id}/description`, { cookie, form: { description: 'Clean text' } });
+  assert.equal(db.tables.products.find((x) => x.id === p.id).description, 'Clean text');
+
+  // product documents: upload, listed with category, preview inline, download, delete
+  const fd = new FormData(); fd.append('kind', 'certificate'); fd.append('file', new Blob([Buffer.from('%PDF-1.4 test')]), 'cert.pdf');
+  const up = await fetch(`${base}/admin/products/${p.id}/documents`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' });
+  assert.equal(up.status, 303);
+  const doc = db.tables.supplier_documents.find((d) => d.product_id === p.id);
+  assert.ok(doc); assert.equal(doc.kind, 'certificate'); assert.equal(doc.name, 'cert.pdf');
+  const after = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  assert.match(after, /cert\.pdf/); assert.match(after, new RegExp(`/admin/documents/${doc.id}\\?inline=1`));
+  const inl = await fetch(`${base}/admin/documents/${doc.id}?inline=1`, { headers: { cookie } });
+  assert.match(inl.headers.get('content-disposition'), /^inline/); assert.equal(inl.headers.get('content-type'), 'application/pdf');
+  assert.match((await fetch(`${base}/admin/documents/${doc.id}`, { headers: { cookie } })).headers.get('content-disposition'), /^attachment/);
+  const bad = new FormData(); bad.append('kind', 'other'); bad.append('file', new Blob(['x']), 'run.exe');
+  await fetch(`${base}/admin/products/${p.id}/documents`, { method: 'POST', headers: { cookie }, body: bad, redirect: 'manual' });
+  assert.equal(db.tables.supplier_documents.filter((d) => d.product_id === p.id).length, 1, 'exe refused');
+  await req(base, 'POST', `/admin/products/${p.id}/documents/${doc.id}/delete`, { cookie });
+  assert.equal(db.tables.supplier_documents.filter((d) => d.product_id === p.id).length, 0);
+
+  // make a photo the main one
+  await db.insert('product_images', { id: 'i1', product_id: p.id, path: 'a', thumb_path: 'a', sort: 0 });
+  await db.insert('product_images', { id: 'i2', product_id: p.id, path: 'b', thumb_path: 'b', sort: 1 });
+  await req(base, 'POST', `/admin/products/${p.id}/photos/i2/primary`, { cookie });
+  assert.equal(db.tables.product_images.find((i) => i.id === 'i2').sort, 0);
+  assert.equal(db.tables.product_images.find((i) => i.id === 'i1').sort, 1);
+});

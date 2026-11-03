@@ -100,52 +100,69 @@ module.exports = function toolRoutes(router, { db, config }) {
     res.html(page({
       title: 'Logistics', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true,
       body: html`<h1>Logistics</h1>
-      <section class="card"><h2>Quick calculator</h2>
-        <form method="get" class="calc-form">
-          <label><span class="lbl">Carton L (cm)</span><input name="l" type="number" step="any" value="${q.l || ''}" required></label>
-          <label><span class="lbl">W (cm)</span><input name="w" type="number" step="any" value="${q.w || ''}" required></label>
-          <label><span class="lbl">H (cm)</span><input name="h" type="number" step="any" value="${q.h || ''}" required></label>
-          <label><span class="lbl">Gross kg / carton</span><input name="gw" type="number" step="any" value="${q.gw || ''}"></label>
-          <label><span class="lbl">Units / carton</span><input name="upc" type="number" step="1" value="${q.upc || ''}" required></label>
-          <label><span class="lbl">Order qty</span><input name="qty" type="number" step="1" value="${q.qty || ''}" placeholder="full container"></label>
-          <label><span class="lbl">Unit price</span><input name="price" type="number" step="any" value="${q.price || ''}"></label>
-          <label><span class="lbl">Currency</span><select name="currency">${F.CURRENCIES.map((c) => html`<option ${c === (q.currency || 'USD') ? raw('selected') : ''}>${c}</option>`)}</select></label>
-          <label><span class="lbl">Category</span><select name="category"><option value="">—</option>${ctx.categoryNames.map((c) => html`<option ${c === q.category ? raw('selected') : ''}>${c}</option>`)}</select></label>
-          <label><span class="lbl">Duty %</span><input name="duty" type="number" step="any" value="${q.duty || ''}" placeholder="category"></label>
-          <div><button class="btn">Calculate</button></div>
+      <section class="card lg-calc"><div class="lg-h"><h2>Quick calculator</h2><span class="muted small">Estimate container fit and landed cost for any carton, without saving a product.</span></div>
+        <form method="get" class="lc-form">
+          <fieldset><legend>Carton</legend>
+            <label><span class="lbl">Length</span><span class="inp-unit"><input name="l" type="number" step="any" value="${q.l || ''}" required><i>cm</i></span></label>
+            <label><span class="lbl">Width</span><span class="inp-unit"><input name="w" type="number" step="any" value="${q.w || ''}" required><i>cm</i></span></label>
+            <label><span class="lbl">Height</span><span class="inp-unit"><input name="h" type="number" step="any" value="${q.h || ''}" required><i>cm</i></span></label>
+            <label><span class="lbl">Gross weight</span><span class="inp-unit"><input name="gw" type="number" step="any" value="${q.gw || ''}"><i>kg</i></span></label>
+            <label><span class="lbl">Units / carton</span><span class="inp-unit"><input name="upc" type="number" step="1" value="${q.upc || ''}" required><i>pcs</i></span></label>
+          </fieldset>
+          <fieldset><legend>Order &amp; cost</legend>
+            <label><span class="lbl">Order qty</span><span class="inp-unit"><input name="qty" type="number" step="1" value="${q.qty || ''}" placeholder="full container"><i>units</i></span></label>
+            <label><span class="lbl">Unit price</span><span class="inp-unit"><input name="price" type="number" step="any" value="${q.price || ''}"><i>each</i></span></label>
+            <label><span class="lbl">Currency</span><select name="currency">${F.CURRENCIES.map((c) => html`<option ${c === (q.currency || 'USD') ? raw('selected') : ''}>${c}</option>`)}</select></label>
+            <label><span class="lbl">Category</span><select name="category"><option value="">None</option>${ctx.categoryNames.map((c) => html`<option ${c === q.category ? raw('selected') : ''}>${c}</option>`)}</select></label>
+            <label><span class="lbl">Duty override</span><span class="inp-unit"><input name="duty" type="number" step="any" value="${q.duty || ''}" placeholder="category"><i>%</i></span></label>
+          </fieldset>
+          <div class="lc-go"><button class="btn">Calculate</button>${calc ? html`<a class="btn ghost" href="/admin/logistics">Clear</a>` : ''}</div>
         </form>
         ${calc ? html`
           <div class="fits">${['20GP', '40GP', '40HQ'].map((c) => { const f = calc.fits[c]; return html`<div class="fit"><b>${c}</b>${f ? html`<span>${fmt.num(f.cartons)} cartons</span><span>${fmt.num(f.units)} units</span><small>limited by ${f.limitedBy} · ${f.fillPct}% full · ${f.orientation.join('×')}</small>` : '—'}</div>`; })}
             <div class="fit"><b>Carton</b><span>${calc.carton_cbm} CBM</span><span>${calc.unit_cbm} CBM/unit</span></div></div>
-          <table class="list compact"><thead><tr><th>Option</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th>Notes</th></tr></thead>
-          <tbody>${calc.scenarios.map((s) => html`<tr><td>${s.name}</td><td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td><td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="sub">${s.notes.join(' · ')}</td></tr>`)}</tbody></table>
+          <div class="table-wrap"><table class="list compact"><thead><tr><th>Option</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th>Notes</th></tr></thead>
+          <tbody>${calc.scenarios.map((s) => html`<tr><td>${s.name}</td><td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td><td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="sub">${s.notes.join(' · ')}</td></tr>`)}</tbody></table></div>
           ${calc.pricing.suggested_wholesale ? html`<p>Suggested wholesale at ${calc.pricing.target_margin_pct}% margin: <b>${fmt.money(calc.pricing.suggested_wholesale)}</b></p>` : ''}` : ''}
       </section>
 
-      <section class="card"><h2>Freight options & rates</h2>
-        <p class="muted">The rates loaded at setup are examples only. Replace them with your forwarder's current quotes. Fees per shipment cover the customs broker, drayage, port and terminal charges. The calculation also adds US customs fees (MPF 0.3464% + HMF 0.125% for ocean).</p>
-        <form method="post" action="/admin/logistics"><div class="table-wrap"><table class="list edit">
-          <thead><tr><th>Name</th><th>Mode</th><th>Origin</th><th>Destination</th><th>Rate (USD)</th><th>Min charge</th><th>Fees / shipment</th><th>Transit days</th><th>Valid until</th><th>Active</th><th>Default</th><th>Delete</th></tr></thead>
-          <tbody>${ctx.options.map((o) => html`<tr>
-            <td><input name="name_${o.id}" value="${o.name}" required></td>
-            <td><select name="mode_${o.id}">${modeOpts.map(([k, m]) => html`<option value="${k}" ${k === o.mode ? raw('selected') : ''}>${m.label}</option>`)}</select><div class="sub">${MODES[o.mode]?.unit}</div></td>
-            <td><input name="origin_${o.id}" value="${o.origin || ''}"></td><td><input name="dest_${o.id}" value="${o.destination || ''}"></td>
-            <td><input name="rate_${o.id}" type="number" step="0.01" min="0" value="${o.rate_usd}" required>
-              ${Freight.MODE_INFO[o.mode] ? html`<div><button class="btn ghost small" type="submit" formaction="/admin/logistics/${o.id}/check-rate" formmethod="post" formnovalidate data-busy ${AI.enabled() ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check market rate</button></div>` : ''}
-              ${o.notes ? html`<div class="sub">${o.notes}</div>` : ''}</td>
-            <td><input name="min_${o.id}" type="number" step="0.01" min="0" value="${o.min_charge_usd}"></td>
-            <td><input name="fees_${o.id}" type="number" step="0.01" min="0" value="${o.fees_per_shipment_usd}"></td>
-            <td><input name="days_${o.id}" type="number" step="1" min="0" value="${o.transit_days ?? ''}" class="tiny"></td>
-            <td><input name="valid_${o.id}" type="date" value="${o.valid_until || ''}"></td>
-            <td><input type="checkbox" name="active" value="${o.id}" ${o.active !== false ? raw('checked') : ''}></td>
-            <td><input type="radio" name="default" value="${o.id}" ${o.id === ctx.settings.default_logistics_option_id ? raw('checked') : ''}></td>
-            <td><input type="checkbox" name="del" value="${o.id}"></td></tr>`)}
-            <tr class="new"><td><input name="name_new" placeholder="New option"></td>
-              <td><select name="mode_new">${modeOpts.map(([k, m]) => html`<option value="${k}">${m.label}</option>`)}</select></td>
-              <td><input name="origin_new"></td><td><input name="dest_new"></td><td><input name="rate_new" type="number" step="0.01" min="0"></td>
-              <td><input name="min_new" type="number" step="0.01" min="0"></td><td><input name="fees_new" type="number" step="0.01" min="0"></td>
-              <td><input name="days_new" type="number" class="tiny"></td><td><input name="valid_new" type="date"></td><td></td><td></td><td></td></tr>
-          </tbody></table></div><div class="form-actions"><button class="btn">Save logistics options</button></div></form>
+      <section class="card lg-rates"><div class="lg-h"><h2>Freight options &amp; rates</h2></div>
+        <div class="notice info small">Rates loaded at setup are examples. Replace them with your forwarder's current quotes. Fees per shipment cover broker, drayage, port and terminal charges. US customs fees (MPF 0.3464% + HMF 0.125% for ocean) are added automatically.</div>
+        <form method="post" action="/admin/logistics" data-guard-form>
+          <div class="lo-list">${ctx.options.map((o) => { const isDef = o.id === ctx.settings.default_logistics_option_id; return html`<fieldset class="lo ${o.active === false ? 'off' : ''}">
+            <div class="lo-head"><label class="lo-name"><span class="lbl">Name</span><input name="name_${o.id}" value="${o.name}" required></label>
+              ${isDef ? html`<span class="pill s-selected">Default</span>` : ''}${o.active === false ? html`<span class="pill s-closed">Inactive</span>` : ''}</div>
+            <div class="lo-grid">
+              <label><span class="lbl">Mode</span><select name="mode_${o.id}">${modeOpts.map(([k, m]) => html`<option value="${k}" ${k === o.mode ? raw('selected') : ''}>${m.label}</option>`)}</select></label>
+              <label><span class="lbl">Origin</span><input name="origin_${o.id}" value="${o.origin || ''}"></label>
+              <label><span class="lbl">Destination</span><input name="dest_${o.id}" value="${o.destination || ''}"></label>
+              <label><span class="lbl">Rate ${MODES[o.mode]?.unit ? html`<em>${MODES[o.mode].unit}</em>` : ''}</span><span class="inp-unit"><input name="rate_${o.id}" type="number" step="0.01" min="0" value="${o.rate_usd}" required><i>USD</i></span></label>
+              <label><span class="lbl">Min charge</span><span class="inp-unit"><input name="min_${o.id}" type="number" step="0.01" min="0" value="${o.min_charge_usd}"><i>USD</i></span></label>
+              <label><span class="lbl">Fees / shipment</span><span class="inp-unit"><input name="fees_${o.id}" type="number" step="0.01" min="0" value="${o.fees_per_shipment_usd}"><i>USD</i></span></label>
+              <label><span class="lbl">Transit</span><span class="inp-unit"><input name="days_${o.id}" type="number" step="1" min="0" value="${o.transit_days ?? ''}"><i>days</i></span></label>
+              <label><span class="lbl">Valid until</span><input name="valid_${o.id}" type="date" value="${o.valid_until || ''}"></label>
+            </div>
+            <div class="lo-foot">
+              <label class="chk"><input type="checkbox" name="active" value="${o.id}" ${o.active !== false ? raw('checked') : ''}> Active</label>
+              <label class="chk"><input type="radio" name="default" value="${o.id}" ${isDef ? raw('checked') : ''}> Use as default</label>
+              ${Freight.MODE_INFO[o.mode] ? html`<button class="btn ghost small" type="submit" formaction="/admin/logistics/${o.id}/check-rate" formmethod="post" formnovalidate data-busy ${AI.enabled() ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>Check market rate</button>` : ''}
+              <label class="chk danger"><input type="checkbox" name="del" value="${o.id}"> Delete on save</label>
+            </div>
+            ${o.notes ? html`<p class="sub lo-notes">${o.notes}</p>` : ''}
+          </fieldset>`; })}</div>
+          <details class="lo-new card fold"><summary><h3 class="inline">Add a freight option</h3><span class="muted small">Leave empty to skip</span></summary>
+            <div class="lo-grid">
+              <label class="span2"><span class="lbl">Name</span><input name="name_new" placeholder="e.g. China → LA/LB · LCL"></label>
+              <label><span class="lbl">Mode</span><select name="mode_new">${modeOpts.map(([k, m]) => html`<option value="${k}">${m.label}</option>`)}</select></label>
+              <label><span class="lbl">Origin</span><input name="origin_new"></label>
+              <label><span class="lbl">Destination</span><input name="dest_new"></label>
+              <label><span class="lbl">Rate</span><span class="inp-unit"><input name="rate_new" type="number" step="0.01" min="0"><i>USD</i></span></label>
+              <label><span class="lbl">Min charge</span><span class="inp-unit"><input name="min_new" type="number" step="0.01" min="0"><i>USD</i></span></label>
+              <label><span class="lbl">Fees / shipment</span><span class="inp-unit"><input name="fees_new" type="number" step="0.01" min="0"><i>USD</i></span></label>
+              <label><span class="lbl">Transit</span><span class="inp-unit"><input name="days_new" type="number"><i>days</i></span></label>
+              <label><span class="lbl">Valid until</span><input name="valid_new" type="date"></label>
+            </div></details>
+          <div class="form-actions sticky-actions"><button class="btn">Save logistics options</button><span class="muted small">Changes apply to every product's landed cost.</span></div></form>
       </section>`,
     }));
   }));

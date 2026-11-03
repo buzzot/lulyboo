@@ -12,6 +12,9 @@ const { saveProductImages, deleteImages } = require('../images');
 const IR = require('../import-review');
 const { importResult } = IR;
 const { renderAnalysis } = require('../views/ai');
+const { renderWorkspace } = require('../views/product-workspace');
+const AI = require('../ai');
+const DOC_TYPES = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.zip': 'application/zip', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 const A = require('../auth');
 const { createInvite, INVITE_DAYS } = require('./supplier-auth');
 
@@ -166,10 +169,12 @@ function guard(config, fn) {
 }
 
 // ── Shared filter logic ───────────────────────────────────────
-function sendFile(res, buffer, name, type) {
+function sendFile(res, buffer, name, type, inline = false) {
   res.statusCode = 200;
   res.setHeader('Content-Type', type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (inline) res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
   res.setHeader('Content-Length', buffer.length);
   res.setHeader('Cache-Control', 'private, no-store');
   res.end(buffer);
@@ -620,136 +625,100 @@ module.exports = function adminRoutes(router, { db, config }) {
     const activeOpts = ctx.options.filter((o) => o.active !== false);
     const v = (x) => (x === null || x === undefined ? '' : x);
 
-    const stars = p.score ? '★'.repeat(p.score) + '☆'.repeat(5 - p.score) : '';
-    const fit40 = a.fits['40HQ'];
-    const money = (x) => (x === null || x === undefined ? '—' : fmt.money(x));
-    const isChina = !p.country_of_origin || /^(china|cn|prc|中国)$/i.test(String(p.country_of_origin).trim());
-    const row = (label, value, extra) => html`<div class="pr"><dt>${label}</dt><dd>${value}${extra ? html` <span class="sub">${extra}</span>` : ''}</dd></div>`;
+    const canDelete = ST.can(ST.current()?.role, 'delete');
+    const docs = await db.list('supplier_documents', { filters: { product_id: p.id }, order: 'created_at.desc' }).then((r) => ({ ok: true, r })).catch(() => ({ ok: false, r: [] }));
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
-      body: html`
-      <p class="crumb"><a href="/admin/products">← Products</a></p>
-      <header class="pp-head">
-        <div class="pp-title"><h1>${p.product_name}</h1>${statusPill(p.status)}${stars ? html`<span class="stars" title="Score ${p.score} of 5">${stars}</span>` : ''}${p.archived_at ? html`<span class="pill s-closed">Archived</span>` : ''}</div>
-        <div class="pp-actions">
-          <form method="post" action="/admin/products/bulk"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button class="btn ghost small" name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
-          <form method="post" action="/admin/products/${p.id}/ai-similar"><button class="btn ghost small" data-busy>Find similar (AI)</button></form>
-          <form method="post" action="/admin/products/${p.id}/ai-review"><button class="btn small" data-busy>AI review</button></form>
-        </div>
-        <ul class="pp-meta">
-          <li><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a></li>
-          ${p.supplier_sku ? html`<li><span>SKU</span> ${p.supplier_sku}</li>` : ''}
-          <li>${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''}</li>
-          <li><span>Submitted</span> ${fmt.date(p.created_at)}</li>
-          ${srcDoc ? html`<li><a href="/admin/documents/${srcDoc.id}" download title="Original quotation file: ${srcDoc.name}" class="src-chip">${icon('download', 13)}<span class="trunc">Source file: ${srcDoc.name}</span></a></li>` : ''}
-        </ul>
-      </header>
-
-      ${testDuty !== null ? html`<div class="flash warn test-banner"><strong>TEST MODE</strong> — costs below use a duty of <strong>${testDuty}%</strong>. Nothing is saved. Real landed cost: ${fmt.money(realA.landed_cost)} at ${realA.duty_pct}% (${realA.duty_source}).
-        <form method="post" action="/admin/products/${p.id}/duty/apply-override" class="inline"><input type="hidden" name="duty" value="${testDuty}"><button class="btn small">Apply ${testDuty}% as manual override</button></form>
-        <a class="btn ghost small" href="/admin/products/${p.id}">Exit test mode</a></div>` : ''}
-      ${p.archived_at ? html`<div class="flash info">This product is archived and hidden from the product lists and the supplier's portal. <a href="/admin/archive">Open the Archive</a></div>` : ''}
-      ${a.issues.length ? html`<details class="pp-checks" ${a.issues.length <= 3 ? raw('open') : ''}><summary><span class="ck-ic" aria-hidden="true">!</span><b>${a.issues.length} ${a.issues.length === 1 ? 'check' : 'checks'}</b><span class="ck-hint">Review before costing</span></summary>
-        <ul>${a.issues.map((i) => html`<li>${i}</li>`)}</ul></details>` : ''}
-
-      <div class="pp-kpis">
-        <div class="pk"><span>Factory price</span><b>${p.unit_price === null || p.unit_price === undefined ? '—' : fmt.money(p.unit_price, p.currency)}</b><small>${[p.incoterm, p.fob_port].filter(Boolean).join(' · ') || ' '}</small></div>
-        <div class="pk strong"><span>Landed cost</span><b>${money(a.landed_cost)}</b><small>${a.primary?.name || ' '}</small></div>
-        <div class="pk"><span>Suggested wholesale</span><b>${money(a.pricing.suggested_wholesale)}</b><small>@ ${a.pricing.target_margin_pct}% margin</small></div>
-        <div class="pk ${a.margin_pct !== null && a.margin_pct < a.pricing.target_margin_pct ? 'bad' : ''}"><span>Our margin</span><b>${a.margin_pct !== null ? fmt.pct(a.margin_pct) : '—'}</b><small>${p.our_wholesale_usd ? `at ${fmt.money(p.our_wholesale_usd)} wholesale` : 'set wholesale in Review'}</small></div>
-        <div class="pk"><span>MOQ</span><b>${p.moq !== null && p.moq !== undefined ? fmt.num(p.moq) : '—'}</b><small>${a.moq_cartons ? `${a.moq_cartons} cartons` : ' '}</small></div>
-        <div class="pk"><span>Per 40HQ</span><b>${fit40 ? fmt.num(fit40.units) : '—'}</b><small>${fit40 ? `${fit40.fillPct}% full` : 'needs carton size'}</small></div>
-      </div>
-
-      <div class="pp-layout">
-        <div class="pp-main">
-          ${productDetails({ p, imgs, urls })}
-          ${termsAndPacking({ p })}
-
-          <section class="card"><h2 class="sec">Landed cost breakdown</h2>
-            <dl class="pricing">
-              ${row('Factory price', `${fmt.money(p.unit_price, p.currency)} ${p.incoterm || ''} ${p.fob_port || ''}`.trim(), p.currency !== 'USD' ? `${fmt.money(a.unit_price_usd)} @ ${ctx.settings.fx_to_usd?.[p.currency] ?? '?'}` : '')}
-              ${row('Freight / unit', fmt.money(a.primary?.freight_per_unit), a.primary?.name || '')}
-              ${row('Duty', fmt.money(a.primary?.duty_per_unit), `${a.base_duty_pct}% (${a.duty_source})`)}
-              ${a.tariff_pct ? row('China tariff', fmt.money(a.primary?.tariff_per_unit), `${a.tariff_pct}%${a.blanket_tariff_pct ? ` (incl. ${a.blanket_tariff_pct}% blanket from Settings)` : ' (Section 301 / other)'}`)
-                : isChina ? row('China tariff', a.duty_source === 'manual' ? html`<span class="sub">included in the manual duty</span>` : p.duty_ai_checked_at ? '$0.00' : html`<a href="#duty" class="warn-text">Not researched: not in landed cost</a>`, p.duty_ai_checked_at && a.duty_source !== 'manual' ? 'none found' : '') : ''}
-              ${row('Customs fees + insurance', fmt.money((a.primary?.customs_fees_per_unit ?? 0) + (a.primary?.insurance_per_unit ?? 0)))}
-              <div class="pr total"><dt>Landed cost</dt><dd>${fmt.money(a.landed_cost)}</dd></div>
-              ${row('Target margin', `${a.pricing.target_margin_pct}%`)}
-              ${row('Suggested wholesale', fmt.money(a.pricing.suggested_wholesale))}
-              ${row('Our wholesale', fmt.money(p.our_wholesale_usd), a.margin_pct !== null ? html`<span class="${a.margin_pct < a.pricing.target_margin_pct ? 'neg' : 'pos'}">${fmt.pct(a.margin_pct)} margin</span>` : '')}
-              ${row('Retail', fmt.money(p.our_retail_usd ?? p.suggested_retail_usd), a.pricing.retailer_margin_pct !== undefined ? `retailer margin ${fmt.pct(a.pricing.retailer_margin_pct)}` : '')}
-            </dl></section>
-
-          <section class="card"><h2 class="sec">Logistics options</h2>
-            <div class="table-wrap"><table class="list compact">
-              <thead><tr><th>Option</th><th class="r">Shipment qty</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th class="r">Transit</th></tr></thead>
-              <tbody>${a.scenarios.map((s) => html`<tr class="${s.option_id === a.primary?.option_id ? 'hl' : ''}">
-                <td>${s.name}${s.option_id === a.primary?.option_id ? html` <span class="pill">costing</span>` : ''}${s.option_id === a.cheapest?.option_id ? html` <span class="pill s-selected">cheapest</span>` : ''}${s.notes.length ? html`<div class="sub">${s.notes.join(' · ')}</div>` : ''}</td>
-                <td class="r">${fmt.num(s.shipment_qty)}${s.containers ? html`<div class="sub">${s.containers} ctr</div>` : s.shipment_cbm ? html`<div class="sub">${s.shipment_cbm} CBM</div>` : ''}</td>
-                <td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td>
-                <td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="r">${s.transit_days ? `${s.transit_days} d` : '—'}</td></tr>`)}</tbody></table></div>
-            <h3 class="sec2">Container fit</h3>
-            <div class="fits">${['20GP', '40GP', '40HQ'].map((c) => { const f = a.fits[c]; return html`<div class="fit"><b>${c}</b>${f ? html`<span>${fmt.num(f.units)} units <small>· ${fmt.num(f.cartons)} cartons</small></span><small>${f.fillPct}% full · limited by ${f.limitedBy}</small>` : html`<span class="muted">needs carton size</span>`}</div>`; })}
-              <div class="fit"><b>Carton</b><span>${a.carton_cbm ?? '—'} CBM</span><small>${a.unit_cbm ?? '—'} CBM/unit · MOQ ${a.moq_cartons ?? '—'} cartons</small></div></div>
-          </section>
-
-          ${dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY })}
-
-          ${analyses.length ? html`<section class="card"><h2 class="sec">AI analyses</h2>
-            ${analyses.map((an) => html`<details ${an === analyses[0] ? raw('open') : ''}><summary>${an.title || an.kind} · ${fmt.date(an.created_at)}</summary>${renderAnalysis(an, {})}</details>`)}</section>` : ''}
-
-          <details class="card fold" id="edit"><summary><h2 class="inline">Supplier data (edit)</h2><span class="muted small">Change what the supplier submitted</span></summary>
-            <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form">
-              ${photoSection({ images: [], product: p, maxImages: 20 })}
-              ${productFields(p, { categories: ctx.categoryNames })}
-              <div class="form-actions"><button class="btn">Save product</button></div>
-            </form>
-            ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos?" class="danger-zone"><button class="link danger">Delete product</button></form>` : ''}
-          </details>
-        </div>
-
-        <aside class="pp-side">
-          <section class="card"><h2 class="sec">Review</h2>
-            <form method="post" action="/admin/products/${p.id}/review" class="rv-form">
-              <div class="row2">
-                <label><span class="lbl">Status</span><select name="status">${F.STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
-                <label><span class="lbl">Score</span><select name="score"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${p.score === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
-              </div>
-              <div class="row2">
-                <label><span class="lbl">Our wholesale</span><span class="inp-unit"><input name="our_wholesale_usd" type="number" step="0.01" min="0" value="${v(p.our_wholesale_usd)}" placeholder="${v(a.pricing.suggested_wholesale)}"><i>USD</i></span></label>
-                <label><span class="lbl">Our retail</span><span class="inp-unit"><input name="our_retail_usd" type="number" step="0.01" min="0" value="${v(p.our_retail_usd)}"><i>USD</i></span></label>
-              </div>
-              <div class="row2">
-                <label><span class="lbl">Planned order qty</span><span class="inp-unit"><input name="planned_qty" type="number" step="1" min="0" value="${v(p.planned_qty)}" placeholder="MOQ ${v(p.moq)}"><i>units</i></span></label>
-                <label><span class="lbl">Duty % override</span><span class="inp-unit"><input name="duty_rate_pct" type="number" step="0.01" min="0" value="${v(p.duty_rate_pct)}" placeholder="${a.duty_pct}"><i>%</i></span></label>
-              </div>
-              <label><span class="lbl">Costing logistics option</span><select name="logistics_option_id"><option value="">Default (${activeOpts.find((o) => o.id === ctx.settings.default_logistics_option_id)?.name || 'first available'})</option>
-                ${activeOpts.map((o) => html`<option value="${o.id}" ${o.id === p.logistics_option_id ? raw('selected') : ''}>${o.name}</option>`)}</select></label>
-              <fieldset class="stores"><span class="lbl">Target stores</span><div class="chips">${F.STORES.map((s) => html`<label class="chip"><input type="checkbox" name="target_stores" value="${s}" ${(p.target_stores || []).includes(s) ? raw('checked') : ''}><span>${s}</span></label>`)}</div></fieldset>
-              <label><span class="lbl">Notes</span><textarea name="review_notes" rows="3">${p.review_notes || ''}</textarea></label>
-              <button class="btn block">Save review</button>
-            </form></section>
-          <details class="card fold"><summary><h2 class="inline">Photos (${imgs.length})</h2></summary>
-            ${imgs.length ? html`<form method="post">${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}</form>` : html`<p class="muted">No photos yet.</p>`}
-            ${p.photo_link ? html`<p class="small">Supplier link: <a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">${p.photo_link}</a></p>` : ''}
-          </details>
-        </aside>
-      </div>`,
+      body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis,
+        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }) }),
     }));
+  }));
+
+  // Photos, descriptions and documents on the product workspace
+  const back = (res, id, tab) => res.redirect(`/admin/products/${id}#${tab}`);
+  router.post('/admin/products/:id/photos', G(async (req, res) => {
+    const p = await db.get('products', req.params.id);
+    if (!p) throw new HttpError(404, 'Product not found');
+    const { files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
+    const existing = (await S.imagesFor(db, [p.id]))[p.id] || [];
+    const r = await saveProductImages(db, { supplierId: p.supplier_id, productId: p.id, files: files.images, existingCount: existing.length, maxImages: 20 });
+    flash(res, r.errors.length ? 'warn' : 'ok', r.saved ? `${r.saved} photo(s) added${r.errors.length ? ' · ' + r.errors.join(' · ') : ''}` : (r.errors.join(' · ') || 'No photo selected'));
+    back(res, p.id, 'documents');
+  }));
+  router.post('/admin/products/:id/photos/:imageId/primary', G(async (req, res) => {
+    const imgs = (await S.imagesFor(db, [req.params.id]))[req.params.id] || [];
+    const pick = imgs.find((i) => i.id === req.params.imageId);
+    if (pick) {
+      const order = [pick, ...imgs.filter((i) => i.id !== pick.id)];
+      for (let i = 0; i < order.length; i++) if (order[i].sort !== i) await db.update('product_images', { id: order[i].id }, { sort: i });
+      flash(res, 'ok', 'Main photo updated');
+    }
+    back(res, req.params.id, 'documents');
+  }));
+  router.post('/admin/products/:id/ai-describe', G(async (req, res) => {
+    const p = await db.get('products', req.params.id);
+    if (!p) return res.json({ ok: false, error: 'Product not found' }, 404);
+    if (!AI.enabled()) return res.json({ ok: false, error: 'AI is not enabled (ANTHROPIC_API_KEY is not set).' }, 503);
+    if (!String(p.description || '').trim()) return res.json({ ok: false, error: 'There is no description to clean up.' }, 400);
+    let image = null;
+    try { const im = ((await S.imagesFor(db, [p.id]))[p.id] || [])[0]; if (im) image = await db.storage.download(im.path); } catch { /* optional */ }
+    try {
+      const out = await AI.cleanDescription({ text: p.description, fields: { name: p.product_name, materials: p.materials, size: p.product_size_cm }, image });
+      res.json({ ok: true, ...out });
+    } catch (e) {
+      res.json({ ok: false, error: /401|authentication/i.test(e.message) ? 'The AI key was rejected. Check ANTHROPIC_API_KEY in Railway.' : 'AI could not process this description right now.' }, 502);
+    }
+  }));
+  router.post('/admin/products/:id/description', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const text = String(fields.description || '').trim().slice(0, 6000);
+    if (!text) flash(res, 'error', 'Description cannot be empty');
+    else { await db.update('products', { id: req.params.id }, { description: text }); flash(res, 'ok', 'Description updated'); }
+    back(res, req.params.id, 'overview');
+  }));
+  router.post('/admin/products/:id/documents', G(async (req, res) => {
+    const p = await db.get('products', req.params.id);
+    if (!p) throw new HttpError(404, 'Product not found');
+    const { fields, files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
+    const f = files.file && (Array.isArray(files.file) ? files.file[0] : files.file);
+    const kind = ['certificate', 'test_report', 'specification', 'other'].includes(fields.kind) ? fields.kind : 'other';
+    if (!f || !f.buffer || !f.buffer.length) { flash(res, 'error', 'Choose a file to upload'); return back(res, p.id, 'documents'); }
+    const name = String(f.name || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150);
+    const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+    if (!/^\.(pdf|png|jpe?g|webp|docx?|xlsx?|csv|txt|zip)$/.test(ext)) { flash(res, 'error', 'This file type is not allowed'); return back(res, p.id, 'documents'); }
+    const id = crypto.randomUUID(); const path = `${p.supplier_id}/${id}${ext}`;
+    try {
+      await db.docs.upload(path, f.buffer, DOC_TYPES[ext] || 'application/octet-stream');
+      try { await db.insert('supplier_documents', { id, supplier_id: p.supplier_id, product_id: p.id, name, mime: DOC_TYPES[ext] || null, bytes: f.buffer.length, path, kind }); }
+      catch (e) { await db.docs.remove([path]).catch(() => {}); throw e; }
+      flash(res, 'ok', `${name} uploaded`);
+    } catch { flash(res, 'error', 'The file could not be saved. Run the latest supabase/schema.sql in Supabase and try again.'); }
+    back(res, p.id, 'documents');
+  }));
+  router.post('/admin/products/:id/documents/:docId/delete', G(async (req, res) => {
+    const d = await db.get('supplier_documents', req.params.docId);
+    if (d && d.product_id === req.params.id) {
+      await db.docs.remove([d.path]).catch(() => {});
+      await db.remove('supplier_documents', { id: d.id });
+      flash(res, 'ok', 'File deleted');
+    }
+    back(res, req.params.id, 'documents');
   }));
 
   router.post('/admin/products/:id/review', G(async (req, res) => {
     const { fields } = await parseForm(req);
-    if (!('target_stores' in fields)) fields.target_stores = [];
+    const section = fields.section || 'all';
+    if ((section === 'all' || fields.stores_present) && !('target_stores' in fields)) fields.target_stores = [];
     const { row, errors } = F.cleanReview(fields);
-    const n = F.parseNumber(fields.planned_qty);
-    row.planned_qty = Number.isNaN(n) || n === null ? null : Math.round(n);
-    row.logistics_option_id = fields.logistics_option_id || null;
-    if (errors.length) { flash(res, 'error', errors.join(' · ')); return res.redirect(`/admin/products/${req.params.id}`); }
+    if (section === 'all' || section === 'costing') {
+      const n = F.parseNumber(fields.planned_qty);
+      if ('planned_qty' in fields) row.planned_qty = Number.isNaN(n) || n === null ? null : Math.round(n);
+      if ('logistics_option_id' in fields) row.logistics_option_id = fields.logistics_option_id || null;
+    }
+    if (errors.length) { flash(res, 'error', errors.join(' · ')); return back(res, req.params.id, section === 'costing' ? 'costing' : 'review'); }
     await db.update('products', { id: req.params.id }, row);
-    flash(res, 'ok', 'Review saved');
-    res.redirect(`/admin/products/${req.params.id}`);
+    flash(res, 'ok', section === 'costing' ? 'Costing saved' : 'Review saved');
+    back(res, req.params.id, section === 'costing' ? 'costing' : 'review');
   }));
 
   router.post('/admin/products/:id/edit', G(async (req, res) => {
@@ -996,7 +965,8 @@ module.exports = function adminRoutes(router, { db, config }) {
     if (!d) throw new HttpError(404, 'File not found');
     const buf = await db.docs.download(d.path);
     if (!buf) throw new HttpError(404, 'The stored file is missing');
-    sendFile(res, buf, d.name, d.mime);
+    const okInline = req.query.inline === '1' && /\.(pdf|png|jpe?g|webp|gif|txt)$/i.test(d.name);
+    sendFile(res, buf, d.name, okInline ? (DOC_TYPES[(d.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase()] || d.mime) : d.mime, okInline);
   }));
   router.post('/admin/documents/:id/delete', G(async (req, res) => {
     const d = await db.get('supplier_documents', req.params.id);
