@@ -622,4 +622,12 @@
   // Selects that go somewhere / re-filter as soon as they change
   document.querySelectorAll('[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form && el.form.submit(); }); });
   document.querySelectorAll('[data-goto]').forEach(function (el) { el.addEventListener('change', function () { if (el.value) window.location.href = el.value; }); });
+
+  // Long descriptions: clamp with a toggle; links to #duty open the folded section
+  (function () {
+    var t = document.querySelector('[data-clamp-toggle]'), box = document.querySelector('[data-clamp]');
+    if (t && box) t.addEventListener('click', function () { var open = box.classList.toggle('clamp') === false; t.textContent = open ? 'Show less' : 'Show full description'; t.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+    var openHash = function () { var el = location.hash && document.querySelector(location.hash); if (el && el.tagName === 'DETAILS') el.open = true; };
+    window.addEventListener('hashchange', openHash); openHash();
+  })();
 })();

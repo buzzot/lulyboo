@@ -50,62 +50,69 @@ function dutyHelp() {
 /** Read-only summary of everything the supplier submitted, grouped as text blocks beside the photos. */
 function productDetails({ p, imgs, urls }) {
   const val = (x, suffix = '') => (x === null || x === undefined || String(x).trim() === '' ? html`<span class="none">—</span>` : html`${x}${suffix}`);
-  const row = (label, x, suffix) => html`<dt>${label}</dt><dd>${val(x, suffix)}</dd>`;
-  const dims = [p.carton_l_cm, p.carton_w_cm, p.carton_h_cm];
-  const carton = dims.every((d) => d !== null && d !== undefined) ? `${dims.join(' × ')} cm` : null;
+  const row = (label, x, suffix) => html`<div class="sp"><dt>${label}</dt><dd>${val(x, suffix)}</dd></div>`;
   const hero = imgs[0];
+  const desc = p.description ? String(p.description).replace(/\r/g, '').replace(/\n[ \t]*\n+/g, '\n').trim() : '';
+  const long = desc.split('\n').length > 5 || desc.length > 420;
   return html`<section class="card pd" id="details">
     <div class="pd-grid">
       <div class="pd-photos">
         ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" target="_blank" rel="noopener"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
-          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 9).map((im) => html`<a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 9 ? html`<span class="sub">+${imgs.length - 9} more below</span>` : ''}</div>` : ''}`
+          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 5).map((im) => html`<a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 5 ? html`<span class="pd-more">+${imgs.length - 5}</span>` : ''}</div>` : ''}`
           : html`<div class="pd-hero empty">No photo yet</div>`}
         ${p.photo_link ? html`<p class="sub"><a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">Supplier photo / catalog link ↗</a></p>` : ''}
       </div>
-      <div class="pd-blocks">
-        <div class="pd-block pd-wide"><h3>Product</h3>
-          <p class="pd-desc">${p.description ? p.description : html`<span class="none">No description given</span>`}</p>
-          <dl class="kv">
-            ${row('Materials', p.materials)}
-            ${row('Product size (L×W×H)', p.product_size_cm, ' cm')}
-            ${row('Unit net weight', p.unit_net_weight_kg, ' kg')}
-            ${row('Packaging', p.packaging_type)}
-            ${row('Certifications', p.certifications)}
-            ${row('Battery / magnet / liquid', p.dangerous_goods)}
-            ${row('HS code (supplier)', p.hs_code)}
-            ${row('Country of origin', p.country_of_origin)}
-            ${row('Brand', p.brand)}
-          </dl></div>
-        <div class="pd-block"><h3>Price &amp; terms</h3>
-          <dl class="kv">
-            ${row('Unit price', p.unit_price === null || p.unit_price === undefined ? null : fmt.money(p.unit_price, p.currency))}
-            ${row('Incoterm', [p.incoterm, p.fob_port].filter(Boolean).join(' · '))}
-            ${row('MOQ', p.moq === null || p.moq === undefined ? null : fmt.num(p.moq), ' units')}
-            ${row('Payment', p.payment_terms)}
-            ${row('Sample lead time', p.sample_lead_days, ' days')}
-            ${row('Production lead time', p.production_lead_days, ' days')}
-            ${row('Quote valid until', p.quote_valid_until ? fmt.date(p.quote_valid_until) : null)}
-          </dl></div>
-        <div class="pd-block"><h3>Packing</h3>
-          <dl class="kv">
-            ${row('Units per carton', p.units_per_carton)}
-            ${row('Units per inner pack', p.units_per_inner)}
-            ${row('Master carton size', carton)}
-            ${row('Carton weight (net / gross)', p.carton_nw_kg !== null && p.carton_nw_kg !== undefined || p.carton_gw_kg !== null && p.carton_gw_kg !== undefined ? `${p.carton_nw_kg ?? '—'} / ${p.carton_gw_kg ?? '—'} kg` : null)}
-            ${row('Supplier says per container', [p.supplier_qty_20gp && `20GP ${fmt.num(p.supplier_qty_20gp)}`, p.supplier_qty_40gp && `40GP ${fmt.num(p.supplier_qty_40gp)}`, p.supplier_qty_40hq && `40HQ ${fmt.num(p.supplier_qty_40hq)}`].filter(Boolean).join(' · '))}
-          </dl></div>
-        ${p.factory_notes ? html`<div class="pd-block pd-wide"><h3>Factory notes</h3><p class="pd-desc">${p.factory_notes}</p></div>` : ''}
+      <div class="pd-info">
+        <h2 class="sec">Product</h2>
+        ${desc ? html`<div class="pd-desc ${long ? 'clamp' : ''}" data-clamp>${desc}</div>${long ? html`<button type="button" class="link small" data-clamp-toggle aria-expanded="false">Show full description</button>` : ''}` : html`<p class="none">No description given</p>`}
+        <dl class="specs">
+          ${row('Materials', p.materials)}
+          ${row('Product size (L×W×H)', p.product_size_cm, ' cm')}
+          ${row('Unit net weight', p.unit_net_weight_kg, ' kg')}
+          ${row('Packaging', p.packaging_type)}
+          ${row('Certifications', p.certifications)}
+          ${row('Battery / magnet / liquid', p.dangerous_goods)}
+          ${row('HS code (supplier)', p.hs_code)}
+          ${row('Country of origin', p.country_of_origin)}
+          ${row('Brand', p.brand)}
+        </dl>
+        ${p.factory_notes ? html`<h3 class="sec2">Factory notes</h3><p class="pd-desc">${p.factory_notes}</p>` : ''}
       </div>
     </div>
   </section>`;
+}
+
+function termsAndPacking({ p }) {
+  const val = (x, suffix = '') => (x === null || x === undefined || String(x).trim() === '' ? html`<span class="none">—</span>` : html`${x}${suffix}`);
+  const row = (label, x, suffix) => html`<div class="sp"><dt>${label}</dt><dd>${val(x, suffix)}</dd></div>`;
+  const dims = [p.carton_l_cm, p.carton_w_cm, p.carton_h_cm];
+  const carton = dims.every((d) => d !== null && d !== undefined) ? `${dims.join(' × ')} cm` : null;
+  const has = (x) => x !== null && x !== undefined;
+  return html`<section class="card"><div class="two-col">
+    <div><h2 class="sec">Price &amp; terms</h2><dl class="specs one">
+      ${row('Unit price', has(p.unit_price) ? fmt.money(p.unit_price, p.currency) : null)}
+      ${row('Incoterm', [p.incoterm, p.fob_port].filter(Boolean).join(' · '))}
+      ${row('MOQ', has(p.moq) ? fmt.num(p.moq) : null, ' units')}
+      ${row('Payment', p.payment_terms)}
+      ${row('Sample lead time', p.sample_lead_days, ' days')}
+      ${row('Production lead time', p.production_lead_days, ' days')}
+      ${row('Quote valid until', p.quote_valid_until ? fmt.date(p.quote_valid_until) : null)}
+    </dl></div>
+    <div><h2 class="sec">Packing</h2><dl class="specs one">
+      ${row('Units per carton', p.units_per_carton)}
+      ${row('Units per inner pack', p.units_per_inner)}
+      ${row('Master carton size', carton)}
+      ${row('Carton weight (net / gross)', has(p.carton_nw_kg) || has(p.carton_gw_kg) ? `${p.carton_nw_kg ?? '—'} / ${p.carton_gw_kg ?? '—'} kg` : null)}
+      ${row('Supplier says per container', [p.supplier_qty_20gp && `20GP ${fmt.num(p.supplier_qty_20gp)}`, p.supplier_qty_40gp && `40GP ${fmt.num(p.supplier_qty_40gp)}`, p.supplier_qty_40hq && `40HQ ${fmt.num(p.supplier_qty_40hq)}`].filter(Boolean).join(' · '))}
+    </dl></div></div></section>`;
 }
 
 function dutyPanel({ p, a, testDuty, aiOn }) {
   const d = p.duty_ai_detail || null;
   const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
   const code = p.hts_verified_code || p.hs_code || '';
-  return html`<section class="card duty-card" id="duty">
-    <h2>Duty &amp; HTS <span class="pill ${a.duty_source === 'manual' ? 's-reviewing' : a.duty_source === 'AI / USITC' ? 's-selected' : ''}">using ${a.duty_pct}% · ${a.duty_source}</span></h2>
+  return html`<details class="card fold duty-card" id="duty" ${testDuty !== null || !d ? raw('open') : ''}>
+    <summary><h2 class="inline">Duty &amp; HTS</h2> <span class="pill ${a.duty_source === 'manual' ? 's-reviewing' : a.duty_source === 'AI / USITC' ? 's-selected' : ''}">using ${a.duty_pct}% · ${a.duty_source}</span></summary>
     <p class="muted">${dutyHelp()}</p>
     <p class="muted">Main source: US tariff schedule (USITC) read by AI. A manual override always wins. Supplier's HS code: <strong>${p.hs_code || '—'}</strong> · Origin: <strong>${p.country_of_origin || 'not given (China assumed)'}</strong></p>
     <form method="post" action="/admin/products/${p.id}/duty/research" class="inline-form">
@@ -132,7 +139,7 @@ function dutyPanel({ p, a, testDuty, aiOn }) {
       </form>
       ${manual ? html`<form method="post" action="/admin/products/${p.id}/duty/clear-override" class="inline-form"><span class="sub">Manual override ${p.duty_rate_pct}% is active.</span> <button class="btn ghost small">Clear override${p.duty_ai_pct !== null && p.duty_ai_pct !== undefined ? ` (back to AI ${p.duty_ai_pct}%)` : ''}</button></form>` : ''}
     </div>
-  </section>`;
+  </details>`;
 }
 
 // ── Auth ──────────────────────────────────────────────────────
@@ -609,95 +616,122 @@ module.exports = function adminRoutes(router, { db, config }) {
     const activeOpts = ctx.options.filter((o) => o.active !== false);
     const v = (x) => (x === null || x === undefined ? '' : x);
 
+    const stars = p.score ? '★'.repeat(p.score) + '☆'.repeat(5 - p.score) : '';
+    const fit40 = a.fits['40HQ'];
+    const money = (x) => (x === null || x === undefined ? '—' : fmt.money(x));
+    const isChina = !p.country_of_origin || /^(china|cn|prc|中国)$/i.test(String(p.country_of_origin).trim());
+    const row = (label, value, extra) => html`<div class="pr"><dt>${label}</dt><dd>${value}${extra ? html` <span class="sub">${extra}</span>` : ''}</dd></div>`;
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: html`
-      <div class="head-row"><div><h1>${p.product_name} ${statusPill(p.status)}</h1>
-        <p class="muted"><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a>${p.supplier_sku ? ` · SKU ${p.supplier_sku}` : ''} · ${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''} · submitted ${fmt.date(p.created_at)}${srcDoc ? html` · <a href="/admin/documents/${srcDoc.id}" download title="Original quotation file">Source file: ${srcDoc.name}</a>` : ''}</p></div>
-        <div class="actions">
-          <form method="post" action="/admin/products/bulk"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button class="btn ghost" name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
-          <form method="post" action="/admin/products/${p.id}/ai-review"><button class="btn" data-busy>AI review</button></form>
-          <form method="post" action="/admin/products/${p.id}/ai-similar"><button class="btn ghost" data-busy>Find similar (AI)</button></form>
-        </div></div>
+      <p class="crumb"><a href="/admin/products">← Products</a></p>
+      <header class="pp-head">
+        <div class="pp-title"><h1>${p.product_name}</h1>${statusPill(p.status)}${stars ? html`<span class="stars" title="Score ${p.score} of 5">${stars}</span>` : ''}${p.archived_at ? html`<span class="pill s-closed">Archived</span>` : ''}</div>
+        <div class="pp-actions">
+          <form method="post" action="/admin/products/bulk"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button class="btn ghost small" name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
+          <form method="post" action="/admin/products/${p.id}/ai-similar"><button class="btn ghost small" data-busy>Find similar (AI)</button></form>
+          <form method="post" action="/admin/products/${p.id}/ai-review"><button class="btn small" data-busy>AI review</button></form>
+        </div>
+        <ul class="pp-meta">
+          <li><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a></li>
+          ${p.supplier_sku ? html`<li><span>SKU</span> ${p.supplier_sku}</li>` : ''}
+          <li>${p.category || 'No category'}${p.subcategory ? ` / ${p.subcategory}` : ''}</li>
+          <li><span>Submitted</span> ${fmt.date(p.created_at)}</li>
+          ${srcDoc ? html`<li><a href="/admin/documents/${srcDoc.id}" download title="Original quotation file: ${srcDoc.name}" class="src-chip">${icon('download', 13)}<span class="trunc">Source file: ${srcDoc.name}</span></a></li>` : ''}
+        </ul>
+      </header>
 
       ${testDuty !== null ? html`<div class="flash warn test-banner"><strong>TEST MODE</strong> — costs below use a duty of <strong>${testDuty}%</strong>. Nothing is saved. Real landed cost: ${fmt.money(realA.landed_cost)} at ${realA.duty_pct}% (${realA.duty_source}).
         <form method="post" action="/admin/products/${p.id}/duty/apply-override" class="inline"><input type="hidden" name="duty" value="${testDuty}"><button class="btn small">Apply ${testDuty}% as manual override</button></form>
         <a class="btn ghost small" href="/admin/products/${p.id}">Exit test mode</a></div>` : ''}
       ${p.archived_at ? html`<div class="flash info">This product is archived and hidden from the product lists and the supplier's portal. <a href="/admin/archive">Open the Archive</a></div>` : ''}
-      ${a.issues.length ? html`<div class="flash warn"><strong>Check:</strong> ${a.issues.join(' · ')}</div>` : ''}
+      ${a.issues.length ? html`<details class="pp-checks" ${a.issues.length <= 3 ? raw('open') : ''}><summary><span class="ck-ic" aria-hidden="true">!</span><b>${a.issues.length} ${a.issues.length === 1 ? 'check' : 'checks'}</b><span class="ck-hint">Review before costing</span></summary>
+        <ul>${a.issues.map((i) => html`<li>${i}</li>`)}</ul></details>` : ''}
 
-      ${productDetails({ p, imgs, urls })}
-
-      <div class="cols">
-        <section class="card">
-          <h2>Pricing</h2>
-          <dl class="kv">
-            <dt>Factory price</dt><dd>${fmt.money(p.unit_price, p.currency)} ${p.incoterm || ''} ${p.fob_port || ''}</dd>
-            ${p.currency !== 'USD' ? html`<dt>In USD</dt><dd>${fmt.money(a.unit_price_usd)} <span class="sub">@ ${ctx.settings.fx_to_usd?.[p.currency] ?? '?'}</span></dd>` : ''}
-            <dt>Freight / unit</dt><dd>${fmt.money(a.primary?.freight_per_unit)} <span class="sub">${a.primary?.name || ''}</span></dd>
-            <dt>Duty</dt><dd>${fmt.money(a.primary?.duty_per_unit)} <span class="sub">${a.base_duty_pct}% (${a.duty_source})</span></dd>
-            ${a.tariff_pct ? html`<dt>China tariff</dt><dd>${fmt.money(a.primary?.tariff_per_unit)} <span class="sub">${a.tariff_pct}%${a.blanket_tariff_pct ? ` (incl. ${a.blanket_tariff_pct}% blanket from Settings)` : ' (Section 301 / other)'}</span></dd>`
-              : (!p.country_of_origin || /^(china|cn|prc|中国)$/i.test(String(p.country_of_origin).trim())) ? html`<dt>China tariff</dt><dd>${a.duty_source === 'manual' ? html`<span class="sub">included in the manual duty</span>` : p.duty_ai_checked_at ? html`$0.00 <span class="sub">none found</span>` : html`<a href="#duty" class="warn-text">Not researched yet: not in landed cost. Run “Check with USITC + AI” below.</a>`}</dd>` : ''}
-            <dt>Customs fees + insurance</dt><dd>${fmt.money((a.primary?.customs_fees_per_unit ?? 0) + (a.primary?.insurance_per_unit ?? 0))}</dd>
-            <dt class="strong">Landed cost</dt><dd class="strong">${fmt.money(a.landed_cost)}</dd>
-            <dt>Target margin</dt><dd>${a.pricing.target_margin_pct}%</dd>
-            <dt>Suggested wholesale</dt><dd>${fmt.money(a.pricing.suggested_wholesale)}</dd>
-            <dt>Our wholesale</dt><dd>${fmt.money(p.our_wholesale_usd)} ${a.margin_pct !== null ? html`<span class="${a.margin_pct < a.pricing.target_margin_pct ? 'neg' : 'pos'}">${fmt.pct(a.margin_pct)} margin</span>` : ''}</dd>
-            <dt>Retail</dt><dd>${fmt.money(p.our_retail_usd ?? p.suggested_retail_usd)} ${a.pricing.retailer_margin_pct !== undefined ? html`<span class="sub">retailer margin ${fmt.pct(a.pricing.retailer_margin_pct)}</span>` : ''}</dd>
-          </dl>
-        </section>
-        <section class="card">
-          <h2>Review</h2>
-          <form method="post" action="/admin/products/${p.id}/review" class="grid">
-            <label><span class="lbl">Status</span><select name="status">${F.STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
-            <label><span class="lbl">Score</span><select name="score"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${p.score === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
-            <label><span class="lbl">Our wholesale (USD)</span><input name="our_wholesale_usd" type="number" step="0.01" min="0" value="${v(p.our_wholesale_usd)}" placeholder="${v(a.pricing.suggested_wholesale)}"></label>
-            <label><span class="lbl">Our retail (USD)</span><input name="our_retail_usd" type="number" step="0.01" min="0" value="${v(p.our_retail_usd)}"></label>
-            <label><span class="lbl">Planned order qty</span><input name="planned_qty" type="number" step="1" min="0" value="${v(p.planned_qty)}" placeholder="MOQ ${v(p.moq)}"></label>
-            <label><span class="lbl">Duty % override</span><input name="duty_rate_pct" type="number" step="0.01" min="0" value="${v(p.duty_rate_pct)}" placeholder="${a.duty_pct}"></label>
-            <label class="span2"><span class="lbl">Costing logistics option</span><select name="logistics_option_id"><option value="">Default (${activeOpts.find((o) => o.id === ctx.settings.default_logistics_option_id)?.name || 'first available'})</option>
-              ${activeOpts.map((o) => html`<option value="${o.id}" ${o.id === p.logistics_option_id ? raw('selected') : ''}>${o.name}</option>`)}</select></label>
-            <fieldset class="span2 stores"><span class="lbl">Target stores</span>${F.STORES.map((s) => html`<label class="chk"><input type="checkbox" name="target_stores" value="${s}" ${(p.target_stores || []).includes(s) ? raw('checked') : ''}> ${s}</label>`)}</fieldset>
-            <label class="span2"><span class="lbl">Notes</span><textarea name="review_notes" rows="3">${p.review_notes || ''}</textarea></label>
-            <div class="span2"><button class="btn">Save review</button></div>
-          </form>
-        </section>
+      <div class="pp-kpis">
+        <div class="pk"><span>Factory price</span><b>${p.unit_price === null || p.unit_price === undefined ? '—' : fmt.money(p.unit_price, p.currency)}</b><small>${[p.incoterm, p.fob_port].filter(Boolean).join(' · ') || ' '}</small></div>
+        <div class="pk strong"><span>Landed cost</span><b>${money(a.landed_cost)}</b><small>${a.primary?.name || ' '}</small></div>
+        <div class="pk"><span>Suggested wholesale</span><b>${money(a.pricing.suggested_wholesale)}</b><small>@ ${a.pricing.target_margin_pct}% margin</small></div>
+        <div class="pk ${a.margin_pct !== null && a.margin_pct < a.pricing.target_margin_pct ? 'bad' : ''}"><span>Our margin</span><b>${a.margin_pct !== null ? fmt.pct(a.margin_pct) : '—'}</b><small>${p.our_wholesale_usd ? `at ${fmt.money(p.our_wholesale_usd)} wholesale` : 'set wholesale in Review'}</small></div>
+        <div class="pk"><span>MOQ</span><b>${p.moq !== null && p.moq !== undefined ? fmt.num(p.moq) : '—'}</b><small>${a.moq_cartons ? `${a.moq_cartons} cartons` : ' '}</small></div>
+        <div class="pk"><span>Per 40HQ</span><b>${fit40 ? fmt.num(fit40.units) : '—'}</b><small>${fit40 ? `${fit40.fillPct}% full` : 'needs carton size'}</small></div>
       </div>
 
+      <div class="pp-layout">
+        <div class="pp-main">
+          ${productDetails({ p, imgs, urls })}
+          ${termsAndPacking({ p })}
 
-      ${dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY })}
-      <section class="card">
-        <h2>Logistics options</h2>
-        <div class="table-wrap"><table class="list compact">
-          <thead><tr><th>Option</th><th class="r">Shipment qty</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th class="r">Transit</th><th>Notes</th></tr></thead>
-          <tbody>${a.scenarios.map((s) => html`<tr class="${s.option_id === a.primary?.option_id ? 'hl' : ''}">
-            <td>${s.name}${s.option_id === a.primary?.option_id ? html` <span class="pill">costing</span>` : ''}${s.option_id === a.cheapest?.option_id ? html` <span class="pill s-selected">cheapest</span>` : ''}</td>
-            <td class="r">${fmt.num(s.shipment_qty)}${s.containers ? html`<div class="sub">${s.containers} ctr</div>` : s.shipment_cbm ? html`<div class="sub">${s.shipment_cbm} CBM</div>` : ''}</td>
-            <td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td>
-            <td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="r">${s.transit_days ? `${s.transit_days} d` : '—'}</td>
-            <td class="sub">${s.notes.join(' · ')}</td></tr>`)}</tbody></table></div>
-        <h3>Container fit</h3>
-        <div class="fits">${['20GP', '40GP', '40HQ'].map((c) => { const f = a.fits[c]; return html`<div class="fit"><b>${c}</b>${f ? html`<span>${fmt.num(f.cartons)} cartons</span><span>${fmt.num(f.units)} units</span><small>limited by ${f.limitedBy} · ${f.fillPct}% full · carton ${f.orientation.join('×')}</small>` : html`<span class="muted">needs carton size</span>`}</div>`; })}
-          <div class="fit"><b>Carton</b><span>${a.carton_cbm ?? '—'} CBM</span><span>${a.unit_cbm ?? '—'} CBM/unit</span><small>MOQ = ${a.moq_cartons ?? '—'} cartons · ${a.moq_cbm ?? '—'} CBM</small></div></div>
-      </section>
+          <section class="card"><h2 class="sec">Landed cost breakdown</h2>
+            <dl class="pricing">
+              ${row('Factory price', `${fmt.money(p.unit_price, p.currency)} ${p.incoterm || ''} ${p.fob_port || ''}`.trim(), p.currency !== 'USD' ? `${fmt.money(a.unit_price_usd)} @ ${ctx.settings.fx_to_usd?.[p.currency] ?? '?'}` : '')}
+              ${row('Freight / unit', fmt.money(a.primary?.freight_per_unit), a.primary?.name || '')}
+              ${row('Duty', fmt.money(a.primary?.duty_per_unit), `${a.base_duty_pct}% (${a.duty_source})`)}
+              ${a.tariff_pct ? row('China tariff', fmt.money(a.primary?.tariff_per_unit), `${a.tariff_pct}%${a.blanket_tariff_pct ? ` (incl. ${a.blanket_tariff_pct}% blanket from Settings)` : ' (Section 301 / other)'}`)
+                : isChina ? row('China tariff', a.duty_source === 'manual' ? html`<span class="sub">included in the manual duty</span>` : p.duty_ai_checked_at ? '$0.00' : html`<a href="#duty" class="warn-text">Not researched: not in landed cost</a>`, p.duty_ai_checked_at && a.duty_source !== 'manual' ? 'none found' : '') : ''}
+              ${row('Customs fees + insurance', fmt.money((a.primary?.customs_fees_per_unit ?? 0) + (a.primary?.insurance_per_unit ?? 0)))}
+              <div class="pr total"><dt>Landed cost</dt><dd>${fmt.money(a.landed_cost)}</dd></div>
+              ${row('Target margin', `${a.pricing.target_margin_pct}%`)}
+              ${row('Suggested wholesale', fmt.money(a.pricing.suggested_wholesale))}
+              ${row('Our wholesale', fmt.money(p.our_wholesale_usd), a.margin_pct !== null ? html`<span class="${a.margin_pct < a.pricing.target_margin_pct ? 'neg' : 'pos'}">${fmt.pct(a.margin_pct)} margin</span>` : '')}
+              ${row('Retail', fmt.money(p.our_retail_usd ?? p.suggested_retail_usd), a.pricing.retailer_margin_pct !== undefined ? `retailer margin ${fmt.pct(a.pricing.retailer_margin_pct)}` : '')}
+            </dl></section>
 
-      <section class="card">
-        <h2>Manage photos</h2>
-        ${imgs.length ? html`<form method="post">${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}</form>` : html`<p class="muted">No photos yet.</p>`}
-        ${p.photo_link ? html`<p>Supplier link: <a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">${p.photo_link}</a></p>` : ''}
-      </section>
+          <section class="card"><h2 class="sec">Logistics options</h2>
+            <div class="table-wrap"><table class="list compact">
+              <thead><tr><th>Option</th><th class="r">Shipment qty</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th class="r">Transit</th></tr></thead>
+              <tbody>${a.scenarios.map((s) => html`<tr class="${s.option_id === a.primary?.option_id ? 'hl' : ''}">
+                <td>${s.name}${s.option_id === a.primary?.option_id ? html` <span class="pill">costing</span>` : ''}${s.option_id === a.cheapest?.option_id ? html` <span class="pill s-selected">cheapest</span>` : ''}${s.notes.length ? html`<div class="sub">${s.notes.join(' · ')}</div>` : ''}</td>
+                <td class="r">${fmt.num(s.shipment_qty)}${s.containers ? html`<div class="sub">${s.containers} ctr</div>` : s.shipment_cbm ? html`<div class="sub">${s.shipment_cbm} CBM</div>` : ''}</td>
+                <td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td>
+                <td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="r">${s.transit_days ? `${s.transit_days} d` : '—'}</td></tr>`)}</tbody></table></div>
+            <h3 class="sec2">Container fit</h3>
+            <div class="fits">${['20GP', '40GP', '40HQ'].map((c) => { const f = a.fits[c]; return html`<div class="fit"><b>${c}</b>${f ? html`<span>${fmt.num(f.units)} units <small>· ${fmt.num(f.cartons)} cartons</small></span><small>${f.fillPct}% full · limited by ${f.limitedBy}</small>` : html`<span class="muted">needs carton size</span>`}</div>`; })}
+              <div class="fit"><b>Carton</b><span>${a.carton_cbm ?? '—'} CBM</span><small>${a.unit_cbm ?? '—'} CBM/unit · MOQ ${a.moq_cartons ?? '—'} cartons</small></div></div>
+          </section>
 
-      ${analyses.length ? html`<section class="card"><h2>AI analyses</h2>
-        ${analyses.map((an) => html`<details ${an === analyses[0] ? raw('open') : ''}><summary>${an.title || an.kind} · ${fmt.date(an.created_at)}</summary>${renderAnalysis(an, {})}</details>`)}</section>` : ''}
+          ${dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY })}
 
-      <details class="card"><summary><h2 class="inline">Supplier data (edit)</h2></summary>
-        <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form">
-          ${photoSection({ images: [], product: p, maxImages: 20 })}
-          ${productFields(p, { categories: ctx.categoryNames })}
-          <div class="form-actions"><button class="btn">Save product</button></div>
-        </form>
-        ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos?" class="danger-zone"><button class="link danger">Delete product</button></form>` : ''}
-      </details>`,
+          ${analyses.length ? html`<section class="card"><h2 class="sec">AI analyses</h2>
+            ${analyses.map((an) => html`<details ${an === analyses[0] ? raw('open') : ''}><summary>${an.title || an.kind} · ${fmt.date(an.created_at)}</summary>${renderAnalysis(an, {})}</details>`)}</section>` : ''}
+
+          <details class="card fold" id="edit"><summary><h2 class="inline">Supplier data (edit)</h2><span class="muted small">Change what the supplier submitted</span></summary>
+            <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form">
+              ${photoSection({ images: [], product: p, maxImages: 20 })}
+              ${productFields(p, { categories: ctx.categoryNames })}
+              <div class="form-actions"><button class="btn">Save product</button></div>
+            </form>
+            ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos?" class="danger-zone"><button class="link danger">Delete product</button></form>` : ''}
+          </details>
+        </div>
+
+        <aside class="pp-side">
+          <section class="card"><h2 class="sec">Review</h2>
+            <form method="post" action="/admin/products/${p.id}/review" class="rv-form">
+              <div class="row2">
+                <label><span class="lbl">Status</span><select name="status">${F.STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
+                <label><span class="lbl">Score</span><select name="score"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${p.score === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
+              </div>
+              <div class="row2">
+                <label><span class="lbl">Our wholesale</span><span class="inp-unit"><input name="our_wholesale_usd" type="number" step="0.01" min="0" value="${v(p.our_wholesale_usd)}" placeholder="${v(a.pricing.suggested_wholesale)}"><i>USD</i></span></label>
+                <label><span class="lbl">Our retail</span><span class="inp-unit"><input name="our_retail_usd" type="number" step="0.01" min="0" value="${v(p.our_retail_usd)}"><i>USD</i></span></label>
+              </div>
+              <div class="row2">
+                <label><span class="lbl">Planned order qty</span><span class="inp-unit"><input name="planned_qty" type="number" step="1" min="0" value="${v(p.planned_qty)}" placeholder="MOQ ${v(p.moq)}"><i>units</i></span></label>
+                <label><span class="lbl">Duty % override</span><span class="inp-unit"><input name="duty_rate_pct" type="number" step="0.01" min="0" value="${v(p.duty_rate_pct)}" placeholder="${a.duty_pct}"><i>%</i></span></label>
+              </div>
+              <label><span class="lbl">Costing logistics option</span><select name="logistics_option_id"><option value="">Default (${activeOpts.find((o) => o.id === ctx.settings.default_logistics_option_id)?.name || 'first available'})</option>
+                ${activeOpts.map((o) => html`<option value="${o.id}" ${o.id === p.logistics_option_id ? raw('selected') : ''}>${o.name}</option>`)}</select></label>
+              <fieldset class="stores"><span class="lbl">Target stores</span><div class="chips">${F.STORES.map((s) => html`<label class="chip"><input type="checkbox" name="target_stores" value="${s}" ${(p.target_stores || []).includes(s) ? raw('checked') : ''}><span>${s}</span></label>`)}</div></fieldset>
+              <label><span class="lbl">Notes</span><textarea name="review_notes" rows="3">${p.review_notes || ''}</textarea></label>
+              <button class="btn block">Save review</button>
+            </form></section>
+          <details class="card fold"><summary><h2 class="inline">Photos (${imgs.length})</h2></summary>
+            ${imgs.length ? html`<form method="post">${imageGrid(imgs, urls, { deleteAction: (im) => `/admin/products/${p.id}/images/${im.id}/delete` })}</form>` : html`<p class="muted">No photos yet.</p>`}
+            ${p.photo_link ? html`<p class="small">Supplier link: <a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">${p.photo_link}</a></p>` : ''}
+          </details>
+        </aside>
+      </div>`,
     }));
   }));
 

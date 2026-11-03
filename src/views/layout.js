@@ -70,7 +70,7 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
   return html`<!doctype html>
 <html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>${head}</head><body>
 <header class="top"><div class="top-in ${wide ? 'wide' : ''}">
-  <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo <span>${nav?.label || t('Supplier Portal', '供应商平台')}</span></a>
+  <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo ${nav?.admin ? '' : html`<span>${nav?.label || t('Supplier Portal', '供应商平台')}</span>`}</a>
   ${nav?.groups ? adminMainNav(nav) : nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
   ${sw}
   ${isAdmin ? html`<div class="top-right">${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
