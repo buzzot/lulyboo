@@ -699,4 +699,5 @@
       var dis = root.querySelector('[data-ai-discard]'); if (dis) dis.addEventListener('click', function () { box.hidden = true; });
     }
   })();
+  document.querySelectorAll('[data-open-add]').forEach(function (a) { a.addEventListener('click', function () { var d = document.getElementById('add-supplier'); if (d) { d.open = true; } }); });
 })();

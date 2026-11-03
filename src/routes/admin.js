@@ -773,21 +773,27 @@ module.exports = function adminRoutes(router, { db, config }) {
     res.html(page({
       title: 'Suppliers', nav: adminNav('suppliers'), flash: takeFlash(req, res), wide: true,
       body: html`
-      <div class="head-row"><h1>Suppliers</h1></div>
-      <form class="filters" method="get"><input type="search" name="q" placeholder="Search name, contact, country" value="${req.query.q || ''}">
-        <select name="crm"><option value="">All statuses</option>${CRM_STATUSES.map((s) => html`<option ${req.query.crm === s ? raw('selected') : ''}>${s}</option>`)}</select>
-        <label class="chk"><input type="checkbox" name="followup" value="1" ${req.query.followup === '1' ? raw('checked') : ''}> Follow-up due</label>
-        <button class="btn small">Filter</button></form>
-      <div class="table-wrap"><table class="list">
-        <thead><tr><th>Supplier</th><th>Contact</th><th>Country</th><th>Status</th><th>Rating</th><th class="r">Products</th><th class="r">Shortlisted+</th><th>Last activity</th><th>Next follow-up</th><th>Portal</th></tr></thead>
-        <tbody>${list.map((s) => { const ps = products.filter((p) => p.supplier_id === s.id); return html`<tr>
-          <td><a href="/admin/suppliers/${s.id}">${s.name}</a>${s.needs_review ? html` <span class="pill s-new">Review</span>` : ''}<div class="sub">${s.categories_supplied || ''}</div></td>
-          <td>${s.contact_name || '—'}<div class="sub">${s.email || ''}</div></td><td>${s.country || '—'}</td>
-          <td>${s.crm_status}</td><td>${s.rating ? '★'.repeat(s.rating) : '—'}</td>
-          <td class="r">${ps.length}</td><td class="r">${ps.filter((p) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length}</td>
-          <td>${fmt.date(lastAct(s.id))}</td><td class="${due(s) ? 'neg' : ''}">${fmt.date(s.next_follow_up)}</td>
-          <td>${portal(s)}</td></tr>`; })}</tbody></table></div>
-      <details class="card" ${suppliers.length ? '' : raw('open')}><summary><h2 class="inline">+ Add supplier</h2></summary>
+      <div class="head-row"><div><h1>Suppliers</h1><p class="muted small sp-count">${suppliers.length} supplier${suppliers.length === 1 ? '' : 's'}${list.length !== suppliers.length ? ` · ${list.length} shown` : ''}</p></div><a class="btn" href="#add-supplier" data-open-add>+ Add supplier</a></div>
+      <nav class="seg" aria-label="Filter by status">
+        <a href="/admin/suppliers${req.query.q ? `?q=${encodeURIComponent(req.query.q)}` : ''}" class="${!req.query.crm && req.query.followup !== '1' ? 'on' : ''}">All <b>${suppliers.length}</b></a>
+        ${CRM_STATUSES.map((st) => { const n = suppliers.filter((x) => x.crm_status === st).length; return n || req.query.crm === st ? html`<a href="/admin/suppliers?crm=${encodeURIComponent(st)}${req.query.q ? `&q=${encodeURIComponent(req.query.q)}` : ''}" class="${req.query.crm === st ? 'on' : ''}">${st} <b>${n}</b></a>` : ''; })}
+        <a href="/admin/suppliers?followup=1" class="${req.query.followup === '1' ? 'on' : ''} fu">Follow-up due <b>${suppliers.filter(due).length}</b></a>
+      </nav>
+      <form class="filters sp-filters" method="get" role="search"><input type="search" name="q" placeholder="Search name, contact, country" value="${req.query.q || ''}" aria-label="Search suppliers">
+        ${req.query.crm ? html`<input type="hidden" name="crm" value="${req.query.crm}">` : ''}${req.query.followup === '1' ? html`<input type="hidden" name="followup" value="1">` : ''}
+        <button class="btn small">Search</button>${req.query.q ? html`<a class="btn ghost small" href="/admin/suppliers${req.query.crm ? `?crm=${encodeURIComponent(req.query.crm)}` : ''}">Clear</a>` : ''}</form>
+      ${list.length ? html`<div class="table-wrap"><table class="list sp-table">
+        <thead><tr><th>Supplier</th><th>Contact</th><th>Status</th><th>Rating</th><th class="r">Products</th><th>Last activity</th><th>Next follow-up</th><th>Portal</th></tr></thead>
+        <tbody>${list.map((s) => { const ps = products.filter((p) => p.supplier_id === s.id); const sl = ps.filter((p) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length; const ctry = /^(china|cn|prc|中国)$/i.test(String(s.country || '').trim()) ? 'China' : (s.country || ''); const pt = portal(s); return html`<tr>
+          <td class="sp-main"><a class="sp-name" href="/admin/suppliers/${s.id}">${s.name}</a>${s.needs_review ? html` <span class="pill s-new">Review</span>` : ''}<div class="sub">${[ctry, s.categories_supplied].filter(Boolean).join(' · ')}</div></td>
+          <td>${s.contact_name || s.email ? html`${s.contact_name || ''}<div class="sub">${s.email || ''}</div>` : html`<span class="none">—</span>`}</td>
+          <td><span class="pill crm-${String(s.crm_status || '').toLowerCase().replace(/\W+/g, '')}">${s.crm_status}</span></td>
+          <td>${s.rating ? html`<span class="stars" title="${s.rating} of 5">${'★'.repeat(s.rating)}</span>` : html`<span class="none">—</span>`}</td>
+          <td class="r">${ps.length ? html`<b>${ps.length}</b>${sl ? html`<div class="sub">${sl} shortlisted</div>` : ''}` : html`<span class="none">0</span>`}</td>
+          <td>${lastAct(s.id) ? fmt.date(lastAct(s.id)) : html`<span class="none">—</span>`}</td>
+          <td class="${due(s) ? 'neg' : ''}">${s.next_follow_up ? fmt.date(s.next_follow_up) : html`<span class="none">—</span>`}${due(s) && !s.next_follow_up ? html`<span class="neg">Due</span>` : ''}</td>
+          <td>${pt === '—' ? html`<span class="none">—</span>` : html`<span class="pill ${pt === 'Off' ? 's-closed' : pt === 'Invited' ? 's-new' : 's-selected'}">${pt}</span>`}</td></tr>`; })}</tbody></table></div>` : html`<div class="card empty-state"><p><b>No suppliers match.</b></p><p class="muted">Try another search or <a href="/admin/suppliers">clear the filters</a>.</p></div>`}
+      <details class="card" id="add-supplier" ${suppliers.length ? '' : raw('open')}><summary><h2 class="inline">Add supplier</h2></summary>
         <p class="muted">The supplier receives an invitation link. They verify this email with a 6-digit code, fill in their company details and create a password. This email becomes their login.</p>
         <form method="post" action="/admin/suppliers" class="grid">
           <label><span class="lbl">Contact email (login)<b class="req">*</b></span><input type="email" name="invite_email" required></label>
