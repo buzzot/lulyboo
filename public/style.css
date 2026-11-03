@@ -1014,16 +1014,3 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .sticky-actions{position:sticky;bottom:0;background:linear-gradient(to top,#fff 70%,rgba(255,255,255,0));padding:16px 0 4px;margin-top:12px}
 @media(max-width:1000px){.lo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lc-form{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:560px){.lo-grid{grid-template-columns:minmax(0,1fr)}.lo-grid .span2{grid-column:auto}.chk.danger{margin-left:0}}
-
-/* ── Suppliers list ───────────────────────────────────── */
-.head-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px}.head-row h1{margin:0}.sp-count{margin:2px 0 0}
-.seg{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.seg a{display:inline-flex;gap:6px;align-items:center;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);text-decoration:none;font-size:13.5px}
-.seg a b{font-weight:600;color:var(--muted);font-size:12px}.seg a:hover{border-color:var(--brand)}.seg a.on{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-text)}.seg a.on b{color:var(--brand-text)}.seg a.fu b{color:#b3261e}
-.sp-filters{display:flex;gap:8px;align-items:center;margin:0 0 12px}.sp-filters input[type=search]{flex:0 1 420px;height:38px;box-sizing:border-box}
-.sp-table td{vertical-align:middle;padding-top:12px;padding-bottom:12px}.sp-table .sp-main{min-width:260px}
-a.sp-name{font-weight:600;color:var(--ink);text-decoration:none}a.sp-name:hover{color:var(--brand-text);text-decoration:underline}
-.sp-table .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
-.pill.crm-prospect{background:#eef0f2;color:#555}.pill.crm-contacted{background:#e5eefb;color:#25508a}.pill.crm-quoting{background:#fff1d6;color:#8a5a00}.pill.crm-active{background:#e1f4e8;color:#1c6b3a}.pill.crm-onhold{background:#f1e9f9;color:#5d3b86}.pill.crm-blocked{background:#fde4e1;color:#b3261e}
-.empty-state{text-align:center;padding:32px 16px!important}
-@media(max-width:700px){.sp-filters input[type=search]{flex:1 1 auto}.sp-table .sp-main{min-width:200px}}
-.table-wrap+details.card{margin-top:16px}
