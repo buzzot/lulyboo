@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { html, raw, fmt } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash, sign, unsign } = require('../lib/http');
+const { icon } = require('../views/icons');
 const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, fileDrop } = require('../views/layout');
 const F = require('../fields');
 const { analyzeProduct } = require('../calc');
@@ -196,6 +197,9 @@ const dupPill = (info, id) => { const d = info.byId.get(id); return d ? html` <s
 const archiveButtons = (formaction = '') => html`<button class="btn small ghost" name="action" value="archive" ${formaction ? raw(`formaction="${formaction}"`) : ''} title="Hide from the lists. You can restore it from the Archive.">Archive</button>
   ${ST.can(ST.current()?.role, 'delete') ? html`<button class="btn small danger-btn" name="action" value="delete" ${formaction ? raw(`formaction="${formaction}"`) : ''} data-confirm="Delete {n} selected product(s) and their photos? This cannot be undone. (Archive keeps them.)">Delete</button>` : ''}`;
 
+// Issues that mean required data is absent (as opposed to warnings about the data that is there)
+const isMissingData = (msg) => /^(No unit price|No exchange rate|Missing )/.test(msg);
+
 function applyFilters(items, q, dup = null) {
   let out = items;
   if (q.dupes === '1' && dup) out = out.filter((i) => dup.byId.has(i.product.id));
@@ -203,7 +207,9 @@ function applyFilters(items, q, dup = null) {
   if (q.category) out = out.filter((i) => (i.product.category || '') === q.category);
   if (q.supplier) out = out.filter((i) => i.product.supplier_id === q.supplier);
   if (q.store) out = out.filter((i) => (i.product.target_stores || []).includes(q.store));
+  if (q.uncategorized === '1') out = out.filter((i) => !i.product.category);
   if (q.issues === '1') out = out.filter((i) => i.analysis.issues.length);
+  if (q.issues === 'missing') out = out.filter((i) => i.analysis.issues.some(isMissingData));
   if (q.q) {
     const t = q.q.toLowerCase();
     out = out.filter(({ product: p }) => [p.product_name, p.supplier_sku, p.subcategory, p.materials, p.supplier_name, p.description].some((v) => v && String(v).toLowerCase().includes(t)));
@@ -282,89 +288,153 @@ module.exports = function adminRoutes(router, { db, config }) {
   });
   router.get('/admin/logout', async (req, res) => { res.setCookie('lb_admin', '', { maxAge: 0 }); res.redirect('/admin/login'); });
 
-  // ── Dashboard
+  // ── Dashboard: what needs attention, pipeline, follow-ups, categories, latest submissions, sourcing activity
   router.get('/admin', G(async (req, res) => {
-    const [{ ctx, items, suppliers }, activities, usageRows, supFull, crmTasks] = await Promise.all([
+    const problems = [];
+    const safe = async (what, p, fallback) => { try { return await p; } catch (e) { console.error(`Dashboard ${what}:`, e.message); problems.push(what); return fallback; } };
+    const C = require('../crm');
+    const todayStr = C.localNow().date;
+    const [analysed, suppliers, followItems, reqRows, acts] = await Promise.all([
       S.loadAnalyzed(db),
-      db.list('supplier_activities', { filters: { done: false, follow_up_date: ['lte', today()] }, order: 'follow_up_date.asc' }),
-      db.list('storage_usage', { limit: 1 }),
-      db.list('suppliers', { order: 'name.asc' }),
-      db.list('crm_tasks', { filters: { done: false, due_date: ['lte', today()] }, order: 'due_date.asc' }),
+      safe('suppliers', db.list('suppliers', { order: 'name.asc' }), []),
+      safe('follow-ups', C.openItems(db), []),
+      safe('requests', db.list('info_requests', { order: 'created_at.desc' }), []),
+      safe('supplier activity', db.list('supplier_activities', { order: 'created_at.desc', limit: 6 }), []),
     ]);
-    const usage = usageRows[0] || { image_count: 0, total_bytes: 0 };
-    const supName = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
-    const count = (st) => items.filter((i) => i.product.status === st).length;
-    const pipeline = ['Shortlisted', 'Sample requested', 'Selected'].reduce((a, s) => a + count(s), 0);
-    const followUps = [
-      ...crmTasks.map((x) => ({ date: x.due_date, supplier_id: x.supplier_id, text: x.title })),
-      ...activities.map((a) => ({ date: a.follow_up_date, supplier_id: a.supplier_id, text: a.summary })),
-      ...supFull.filter((s) => s.next_follow_up && s.next_follow_up <= today()).map((s) => ({ date: s.next_follow_up, supplier_id: s.id, text: 'Follow up' })),
-    ].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const { ctx, items } = analysed;
+    const supName = Object.fromEntries(suppliers.map((x) => [x.id, x.name]));
+    const nStatus = (st) => items.filter((i) => i.product.status === st).length;
 
-    const cats = [...new Set([...ctx.categoryNames, ...items.map((i) => i.product.category || 'Uncategorized')])];
-    const catRows = cats.map((c) => {
-      const its = items.filter((i) => (i.product.category || 'Uncategorized') === c);
-      return {
-        c, n: its.length, sup: new Set(its.map((i) => i.product.supplier_id)).size,
-        landed: avg(its.map((i) => i.analysis.landed_cost)), margin: avg(its.map((i) => i.analysis.margin_pct)),
-        short: its.filter((i) => ['Shortlisted', 'Sample requested', 'Selected'].includes(i.product.status)).length,
-        fresh: its.filter((i) => i.product.status === 'New').length,
-      };
-    }).filter((r) => r.n || ctx.categoryNames.includes(r.c));
-    const maxN = Math.max(1, ...catRows.map((r) => r.n));
+    // Follow-ups, grouped Overdue / Today / Upcoming (next 7 days)
+    const weekEnd = C.addDays(todayStr, 7);
+    const overdue = followItems.filter((i) => i.due_date < todayStr);
+    const dueToday = followItems.filter((i) => i.due_date === todayStr);
+    const upcoming = followItems.filter((i) => i.due_date > todayStr && i.due_date <= weekEnd);
+    const followShown = [...overdue, ...dueToday, ...upcoming].slice(0, 6);
+    const reqRef = Object.fromEntries(reqRows.map((r) => [r.id, r.ref]));
 
-    const supRows = supFull.map((s) => {
-      const its = items.filter((i) => i.product.supplier_id === s.id);
-      return { s, n: its.length, margin: avg(its.map((i) => i.analysis.margin_pct)), short: its.filter((i) => ['Shortlisted', 'Sample requested', 'Selected'].includes(i.product.status)).length };
-    }).sort((a, b) => b.n - a.n).slice(0, 12);
-    const storagePlanGb = config.storagePlanGb;
-    const usedPct = Math.min(100, (usage.total_bytes / (storagePlanGb * 1024 ** 3)) * 100);
-    const recent = items.slice(0, 8);
+    // Counts for the attention list (each underlying issue is counted once)
+    const awaitingReview = nStatus('New');
+    const missingData = items.filter((i) => i.analysis.issues.some(isMissingData)).length;
     const withIssues = items.filter((i) => i.analysis.issues.length).length;
+    const uncategorized = items.filter((i) => !i.product.category).length;
+    const samples = nStatus('Sample requested');
+    const awaitingReply = reqRows.filter((r) => r.status === 'Sent').length;
+    const attention = [
+      { label: 'Products awaiting review', n: awaitingReview, href: '/admin/products?status=New', tone: 'info' },
+      { label: 'Overdue follow-ups', n: overdue.length, href: '/admin/crm', tone: 'danger' },
+      { label: 'Products missing required data', n: missingData, href: '/admin/products?issues=missing', tone: 'warn' },
+      { label: 'Uncategorized products', n: uncategorized, href: '/admin/products?uncategorized=1', tone: 'warn' },
+      { label: 'RFQs and requests awaiting a reply', n: awaitingReply, href: '/admin/requests?status=Sent', tone: 'info' },
+      { label: 'Sample requests outstanding', n: samples, href: '/admin/products?status=Sample%20requested', tone: 'info' },
+    ];
+    const attentionOpen = attention.filter((a) => a.n > 0).length;
+
+    // Pipeline
+    const stages = F.STATUSES.filter((x) => x !== 'Rejected');
+    const pipeTotal = stages.reduce((n, st) => n + nStatus(st), 0);
+    const rejected = nStatus('Rejected');
+
+    // Suppliers by status
+    const byStatus = {};
+    for (const x of suppliers) byStatus[x.crm_status || 'Other'] = (byStatus[x.crm_status || 'Other'] || 0) + 1;
+    const statusLine = Object.entries(byStatus).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(' · ');
+
+    // Categories
+    const catCount = {};
+    for (const i of items) { const c = i.product.category || ''; catCount[c] = (catCount[c] || 0) + 1; }
+    const catRows = Object.entries(catCount).filter(([c]) => c).sort((a, b) => b[1] - a[1]);
+    const catShown = catRows.slice(0, 6);
+    const catMax = Math.max(1, ...Object.values(catCount));
+
+    // Latest submissions (date range applies here only)
+    const range = ['7', '30', '90'].includes(req.query.range) ? Number(req.query.range) : 0;
+    const since = range ? new Date(Date.now() - range * 86400_000).toISOString() : '';
+    const recent = items.filter((i) => !since || String(i.product.created_at) >= since).slice(0, 6);
+    let thumbUrls = {}; let thumbOf = {};
+    if (recent.length) {
+      const imgs = await safe('photos', S.imagesFor(db, recent.map((i) => i.product.id)), {});
+      for (const i of recent) thumbOf[i.product.id] = imgs[i.product.id]?.[0]?.thumb_path || null;
+      thumbUrls = await safe('photos', db.storage.signedUrls(Object.values(thumbOf).filter(Boolean)), {});
+    }
+
+    // Sourcing activity
+    const supWithOpenReq = {};
+    for (const r of reqRows.filter((x) => x.status === 'Sent')) supWithOpenReq[r.supplier_id] = (supWithOpenReq[r.supplier_id] || 0) + 1;
+    const sampleBy = {};
+    for (const i of items.filter((x) => x.product.status === 'Sample requested')) sampleBy[i.product.supplier_id] = (sampleBy[i.product.supplier_id] || 0) + 1;
+    const followBy = {};
+    for (const f of [...overdue, ...dueToday]) if (f.supplier_id) followBy[f.supplier_id] = (followBy[f.supplier_id] || 0) + 1;
+    const sourcing = [
+      { label: 'Awaiting a reply', sub: 'RFQs and requests sent', map: supWithOpenReq, href: (id) => `/admin/requests?status=Sent` },
+      { label: 'Samples requested', sub: 'products', map: sampleBy, href: (id) => `/admin/products?supplier=${id}&status=Sample%20requested` },
+      { label: 'Follow-up needed', sub: 'due or overdue', map: followBy, href: (id) => `/admin/suppliers/${id}#next-actions` },
+    ].map((c) => ({ ...c, rows: Object.entries(c.map).sort((a, b) => b[1] - a[1]).slice(0, 4), total: Object.values(c.map).reduce((a, b) => a + b, 0) }));
+
+    const dueLabel = (d) => {
+      const days = Math.round((new Date(d + 'T00:00:00Z') - new Date(todayStr + 'T00:00:00Z')) / 86400_000);
+      if (days < 0) return { text: `${-days}d overdue`, cls: 'danger' };
+      if (days === 0) return { text: 'Today', cls: 'warn' };
+      return { text: days === 1 ? 'Tomorrow' : `in ${days}d`, cls: '' };
+    };
+    const staff = req.staff;
+    const rangeLabel = { 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days' }[range] || 'All time';
+    const empty = (msg) => html`<p class="d-empty">${msg}</p>`;
+    const followGroup = (label, list, cls) => list.length ? html`<li class="fu-group ${cls}">${label} <b>${list.length}</b></li>${list.filter((x) => followShown.includes(x)).map((f) => {
+      const due = dueLabel(f.due_date);
+      const doneUrl = f.kind === 'task' ? `/admin/crm/tasks/${f.id}/done` : `/admin/activities/${f.id}/done`;
+      return html`<li class="fu-row"><div class="fu-main"><span class="trunc" title="${f.title}">${f.title}</span>
+        <small class="trunc">${f.supplier_id ? html`<a href="/admin/suppliers/${f.supplier_id}" title="${supName[f.supplier_id] || ''}">${supName[f.supplier_id] || 'Supplier'}</a>` : 'General'}${f.request_id && reqRef[f.request_id] ? html` · <a href="/admin/requests/${f.request_id}">${reqRef[f.request_id]}</a>` : ''}</small></div>
+        <span class="fu-date">${fmt.date(f.due_date)}</span><span class="d-pill ${due.cls}">${due.text}</span>
+        <form method="post" action="${doneUrl}"><input type="hidden" name="back" value="/admin"><button class="d-btn" title="Mark as done" aria-label="Mark ${f.title} as done">✓ Done</button></form></li>`;
+    })}` : '';
 
     res.html(page({
       title: 'Dashboard', nav: adminNav('dashboard'), flash: takeFlash(req, res), wide: true,
       body: html`
-      <h1>Dashboard</h1>
-      <div class="kpis">
-        <a class="kpi" href="/admin/suppliers"><b>${fmt.num(suppliers.length)}</b><span>Suppliers</span><small>${supFull.filter((s) => s.crm_status === 'Active').length} active</small></a>
-        <a class="kpi" href="/admin/products"><b>${fmt.num(items.length)}</b><span>Products</span><small>${withIssues} with data issues</small></a>
-        <a class="kpi accent" href="/admin/products?status=New"><b>${fmt.num(count('New'))}</b><span>New to review</span></a>
-        <a class="kpi" href="/admin/products?status=Shortlisted"><b>${fmt.num(pipeline)}</b><span>Shortlisted → Selected</span><small>${count('Selected')} selected</small></a>
-        <a class="kpi ${followUps.length ? 'warn' : ''}" href="/admin/crm"><b>${followUps.length}</b><span>Follow-ups due</span></a>
-        <a class="kpi" href="/admin/settings#storage"><b>${fmt.bytes(usage.total_bytes)}</b><span>Image storage</span><small>${fmt.num(usage.image_count)} photos · ${usedPct.toFixed(1)}% of ${storagePlanGb} GB</small></a>
+      <div class="d-head"><div><h1>Dashboard</h1><p class="muted">Product development &amp; sourcing overview</p></div>
+        <div class="d-tools">
+          <form method="get" action="/admin" class="d-range"><label><span class="sr-only">Date range for latest submissions</span>
+            <select name="range" data-autosubmit aria-label="Date range for latest submissions">${[['', 'All time'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days']].map(([v, l]) => html`<option value="${v}" ${String(range || '') === v ? raw('selected') : ''}>${l}</option>`)}</select></label></form>
+          <label class="d-newrfq"><span class="sr-only">New RFQ: choose a supplier</span>
+            <select data-goto aria-label="New RFQ: choose a supplier"><option value="">＋ New RFQ…</option>${suppliers.filter((x) => x.active !== false).map((x) => html`<option value="/admin/suppliers/${x.id}/request">${x.name}</option>`)}</select></label>
+        </div></div>
+      ${problems.length ? html`<p class="d-warnbar" role="status">Some information could not be loaded (${[...new Set(problems)].join(', ')}). The rest of the dashboard is correct.</p>` : ''}
+
+      <div class="d-kpis">
+        <a class="d-kpi ${awaitingReview ? 'accent' : ''}" href="/admin/products?status=New"><span>Awaiting review</span><b>${fmt.num(awaitingReview)}</b><small>Products with status New</small></a>
+        <a class="d-kpi ${overdue.length ? 'danger' : dueToday.length ? 'warn' : ''}" href="/admin/crm"><span>Follow-ups due</span><b>${fmt.num(overdue.length + dueToday.length)}</b><small>${overdue.length ? html`<em class="t-danger">${overdue.length} overdue</em> · ` : ''}${dueToday.length} today</small></a>
+        <a class="d-kpi" href="/admin/products"><span>Total products</span><b>${fmt.num(items.length)}</b><small>${withIssues ? `${withIssues} with data issues` : 'No data issues'}</small></a>
+        <a class="d-kpi" href="/admin/suppliers"><span>Suppliers</span><b>${fmt.num(suppliers.length)}</b><small>${statusLine || 'None yet'}</small></a>
       </div>
 
-      <div class="cols">
-        <section class="card">
-          <h2>By category</h2>
-          <div class="table-wrap"><table class="list compact"><thead><tr><th>Category</th><th class="r">Products</th><th></th><th class="r">Suppliers</th><th class="r">New</th><th class="r">Shortlisted+</th><th class="r">Avg landed</th><th class="r">Avg margin</th></tr></thead>
-          <tbody>${catRows.map((r) => html`<tr>
-            <td><a href="/admin/products?category=${encodeURIComponent(r.c)}">${r.c}</a></td><td class="r">${r.n}</td>
-            <td class="bar-cell"><span class="bar" style="width:${Math.round((r.n / maxN) * 100)}%"></span></td>
-            <td class="r">${r.sup}</td><td class="r">${r.fresh}</td><td class="r">${r.short}</td>
-            <td class="r">${fmt.money(r.landed)}</td><td class="r">${fmt.pct(r.margin)}</td></tr>`)}</tbody></table></div>
-        </section>
-        <section class="card">
-          <h2>Follow-ups due</h2>
-          ${followUps.length ? html`<ul class="feed">${followUps.slice(0, 10).map((f) => html`<li><span class="date ${f.date < today() ? 'late' : ''}">${fmt.date(f.date)}</span> <a href="/admin/suppliers/${f.supplier_id}">${supName[f.supplier_id] || 'Supplier'}</a>: ${f.text}</li>`)}</ul>` : html`<p class="muted">Nothing due.</p>`}
-        </section>
-      </div>
+      <div class="d-grid">
+        <section class="d-card d-6"><div class="d-title"><h2>Needs attention</h2><span class="muted small">${attentionOpen ? `${attentionOpen} open` : 'All clear'}</span></div>
+          <ul class="d-attn">${attention.map((a) => html`<li><a href="${a.href}" class="${a.n ? a.tone : 'zero'}"><span class="a-dot" aria-hidden="true"></span><span class="a-label">${a.label}</span><b>${fmt.num(a.n)}</b><span class="a-go" aria-hidden="true">›</span></a></li>`)}</ul></section>
 
-      <div class="cols">
-        <section class="card">
-          <h2>Suppliers</h2>
-          <div class="table-wrap"><table class="list compact"><thead><tr><th>Supplier</th><th>Status</th><th class="r">Products</th><th class="r">Shortlisted+</th><th class="r">Avg margin</th><th>Rating</th></tr></thead>
-          <tbody>${supRows.map((r) => html`<tr><td><a href="/admin/suppliers/${r.s.id}">${r.s.name}</a></td><td>${r.s.crm_status}</td><td class="r">${r.n}</td><td class="r">${r.short}</td><td class="r">${fmt.pct(r.margin)}</td><td>${r.s.rating ? '★'.repeat(r.s.rating) : '—'}</td></tr>`)}</tbody></table></div>
-          <p><a href="/admin/suppliers">All suppliers →</a></p>
-        </section>
-        <section class="card">
-          <h2>Latest submissions</h2>
-          <table class="list compact"><tbody>${recent.map(({ product: p, analysis: a }) => html`<tr>
-            <td><a href="/admin/products/${p.id}">${p.product_name}</a><div class="sub">${p.supplier_name} · ${fmt.date(p.created_at)}</div></td>
-            <td class="r">${fmt.money(a.landed_cost)}<div class="sub">landed</div></td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table>
-          <p><a href="/admin/products">All products →</a></p>
-        </section>
+        <section class="d-card d-6"><div class="d-title"><h2>Product pipeline</h2><a class="d-link" href="/admin/products">All products</a></div>
+          ${pipeTotal ? html`<div class="d-pipebar" role="img" aria-label="Products by stage">${stages.map((st) => nStatus(st) ? html`<span class="seg st-${st.toLowerCase().replace(/\s+/g, '-')}" style="flex:${nStatus(st)}" title="${st}: ${nStatus(st)}"></span>` : '')}</div>` : ''}
+          <ol class="d-pipe">${stages.map((st) => html`<li><a href="/admin/products?status=${encodeURIComponent(st)}" class="${nStatus(st) ? '' : 'zero'}"><span class="dot st-${st.toLowerCase().replace(/\s+/g, '-')}" aria-hidden="true"></span><b>${nStatus(st)}</b><span>${st}</span></a></li>`)}</ol>
+          <p class="d-foot">${rejected ? html`<a href="/admin/products?status=Rejected">${rejected} rejected</a>` : 'No rejected products'} · ${pipeTotal} in the pipeline</p></section>
+
+        <section class="d-card d-12"><div class="d-title"><h2>Follow-ups</h2><a class="d-link" href="/admin/crm">View all${followItems.length ? ` (${followItems.length})` : ''}</a></div>
+          ${followShown.length ? html`<ul class="d-fu">${followGroup('Overdue', overdue, 'danger')}${followGroup('Today', dueToday, 'warn')}${followGroup('Upcoming · next 7 days', upcoming, '')}</ul>
+            ${followItems.length > followShown.length ? html`<p class="d-foot">Showing ${followShown.length} of ${followItems.length} open. <a href="/admin/crm">View all</a></p>` : ''}` : empty('Nothing due in the next 7 days.')}</section>
+
+        <section class="d-card d-6"><div class="d-title"><h2>Product categories</h2><a class="d-link" href="/admin/categories">View all categories</a></div>
+          ${catShown.length || uncategorized ? html`<ul class="d-cats">${catShown.map(([c, n]) => html`<li><a href="/admin/products?category=${encodeURIComponent(c)}"><span class="trunc" title="${c}">${c}</span><b>${n}</b><span class="d-meter"><i style="width:${Math.max(4, Math.round(n / catMax * 100))}%"></i></span></a></li>`)}
+            ${uncategorized ? html`<li class="uncat"><a href="/admin/products?uncategorized=1"><span class="trunc">Uncategorized</span><b>${uncategorized}</b><span class="d-meter"><i style="width:${Math.max(4, Math.round(uncategorized / catMax * 100))}%"></i></span></a></li>` : ''}</ul>
+            ${catRows.length > catShown.length ? html`<p class="d-foot">+${catRows.length - catShown.length} more categories</p>` : ''}` : empty('No products in a category yet.')}</section>
+
+        <section class="d-card d-6"><div class="d-title"><h2>Recent submissions</h2><a class="d-link" href="/admin/products">All products</a></div>
+          ${recent.length ? html`<ul class="d-recent">${recent.map(({ product: p, analysis: a }) => html`<li><a class="r-img" href="/admin/products/${p.id}" tabindex="-1" aria-hidden="true">${thumbUrls[thumbOf[p.id]] ? html`<img src="${thumbUrls[thumbOf[p.id]]}" alt="" loading="lazy">` : html`<span class="r-ph">${icon('package', 18)}</span>`}</a>
+            <div class="r-main"><a class="trunc" href="/admin/products/${p.id}" title="${p.product_name}">${p.product_name}</a><small class="trunc">${p.supplier_name} · ${fmt.date(p.created_at)}</small></div>
+            <span class="r-cost">${a.landed_cost !== null && a.landed_cost !== undefined ? fmt.money(a.landed_cost) : '—'}<small>landed</small></span>${statusPill(p.status)}</li>`)}</ul>` : empty(range ? `No submissions in the ${rangeLabel.toLowerCase()}.` : 'No products submitted yet.')}</section>
+
+        <section class="d-card d-12"><div class="d-title"><h2>Supplier activity</h2><a class="d-link" href="/admin/suppliers">View all suppliers</a></div>
+          <div class="d-src">${sourcing.map((c) => html`<div class="src-col"><h3>${c.label} <b>${c.total}</b></h3>
+            ${c.rows.length ? html`<ul>${c.rows.map(([id, n]) => html`<li><a class="trunc" href="${c.href(id)}" title="${supName[id] || ''}">${supName[id] || 'Supplier'}</a><span>${n}</span></li>`)}</ul>` : html`<p class="d-empty small">None</p>`}</div>`)}
+            <div class="src-col"><h3>Recent activity</h3>${acts.length ? html`<ul>${acts.slice(0, 4).map((a) => html`<li><a class="trunc" href="/admin/suppliers/${a.supplier_id}" title="${a.summary || ''}">${supName[a.supplier_id] || 'Supplier'} · ${a.summary || a.type}</a><span>${fmt.date(a.activity_date || a.created_at)}</span></li>`)}</ul>` : html`<p class="d-empty small">No activity logged yet</p>`}</div></div></section>
       </div>`,
     }));
   }));

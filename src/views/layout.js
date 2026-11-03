@@ -71,9 +71,9 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
 <html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>${head}</head><body>
 <header class="top"><div class="top-in ${wide ? 'wide' : ''}">
   <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo <span>${nav?.label || t('Supplier Portal', '供应商平台')}</span></a>
-  ${nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
+  ${nav?.groups ? adminMainNav(nav) : nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
   ${sw}
-  ${isAdmin ? userMenu() : ''}
+  ${isAdmin ? html`<div class="top-right">${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
 </div></header>
 <main class="${wide ? 'wide' : ''}">
 ${flashHtml}
@@ -95,20 +95,29 @@ function userMenu() {
       <a class="um-out" href="/admin/logout">Sign out</a></div></details>`;
 }
 
+/** Grouped, compact main navigation: dropdowns on desktop, one "Menu" button on small screens. */
+function adminMainNav(nav) {
+  return html`<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="mainnav">${icon('list', 16)}<span>Menu</span></button>
+  <nav class="mainnav" id="mainnav" aria-label="Main">${nav.groups.map((g) => g.href
+    ? html`<a class="nav-link ${g.active ? 'on' : ''}" href="${g.href}" ${g.active ? raw('aria-current="page"') : ''}>${g.label}</a>`
+    : html`<div class="nav-group ${g.active ? 'on' : ''}"><button type="button" class="nav-btn" aria-expanded="false" aria-haspopup="true">${g.label}<span class="um-caret" aria-hidden="true"></span></button>
+      <div class="nav-menu">${g.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}" ${i.active ? raw('aria-current="page"') : ''}>${i.label}</a>`)}</div></div>`)}</nav>`;
+}
+
+// Only destinations that exist. (Clients, Orders, Purchasing and Automations have no pages yet, so they are not listed.)
 function adminNav(active) {
-  const items = [
-    ['dashboard', '/admin', 'Dashboard'],
-    ['products', '/admin/products', 'Products'],
-    ['suppliers', '/admin/suppliers', 'Suppliers'],
-    ['requests', '/admin/requests', 'Requests'],
-    ['crm', '/admin/crm', 'CRM'],
-    ['categories', '/admin/categories', 'Categories'],
-    ['logistics', '/admin/logistics', 'Logistics'],
-    ['pricing', '/admin/pricing', 'Pricing'],
-    ['ai', '/admin/ai', 'AI'],
-    ['settings', '/admin/settings', 'Settings'],
-  ].filter(([k]) => k !== 'settings' || !STAFF.current() || STAFF.can(STAFF.current().role, 'settings')).map(([k, href, label]) => ({ href, label, active: k === active }));
-  return { home: '/admin', label: 'Admin', items, admin: true };
+  const staff = STAFF.current();
+  const on = (k) => k === active;
+  const group = (label, items) => ({ label, items: items.map(([k, href, l]) => ({ href, label: l, active: on(k) })), active: items.some(([k]) => on(k)) });
+  const groups = [
+    { label: 'Dashboard', href: '/admin', active: on('dashboard') },
+    group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers'], ['requests', '/admin/requests', 'RFQs & requests']]),
+    group('Catalog', [['products', '/admin/products', 'Products'], ['pricing', '/admin/pricing', 'Pricing'], ['categories', '/admin/categories', 'Categories'], ['archive', '/admin/archive', 'Archive']]),
+    group('Operations', [['logistics', '/admin/logistics', 'Logistics'], ['crm', '/admin/crm', 'Follow-ups'], ['calendar', '/admin/crm/calendar', 'Calendar']]),
+    group('AI Tools', [['ai', '/admin/ai', 'AI Assistant']]),
+  ];
+  const showSettings = !staff || STAFF.can(staff.role, 'settings');
+  return { home: '/admin', label: 'Admin', groups, settings: showSettings ? { href: '/admin/settings', active: on('settings') } : null, items: groups.flatMap((g) => g.items || [g]), admin: true };
 }
 
 const bi = (f) => t(f.en, f.cn);

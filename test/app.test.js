@@ -1316,3 +1316,41 @@ test('owner login keeps working when the staff tables do not exist yet', async (
   assert.match((await req(base, 'GET', '/admin/users', { cookie: owner })).text, /staff SQL|staff tables/i);
   assert.equal((await req(base, 'POST', '/admin/login', { form: { username: 'someone', password: 'x' } })).location, '/admin/login');
 });
+
+test('dashboard: grouped nav, KPIs, attention counts and filters match the data', async (t) => {
+  const db = seedDb();
+  const day = (d) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  db.tables.suppliers = [{ id: 's1', name: 'Acme Co', active: true, crm_status: 'Active' }];
+  const mk = (id, over) => ({ id, supplier_id: 's1', product_name: 'P' + id, status: 'New', currency: 'USD', unit_price: 1, is_draft: false, target_stores: [], source: 'form', created_at: new Date().toISOString(), ...over });
+  db.tables.products = [mk('a', { category: 'Kitchen' }), mk('b', { category: null }), mk('c', { category: 'Kitchen', status: 'Sample requested' }), mk('d', { category: 'Pet', status: 'Rejected' })];
+  db.tables.crm_tasks = [{ id: 't1', supplier_id: 's1', title: 'Late one', due_date: day(-2), done: false, type: 'Follow-up' }, { id: 't2', supplier_id: 's1', title: 'Soon one', due_date: day(2), done: false, type: 'Follow-up' }, { id: 't3', supplier_id: 's1', title: 'Far away', due_date: day(30), done: false, type: 'Follow-up' }];
+  db.tables.info_requests = [{ id: 'r1', ref: 'LB-1001', supplier_id: 's1', status: 'Sent', created_at: new Date().toISOString() }];
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const d = (await req(base, 'GET', '/admin', { cookie })).text;
+  for (const g of ['Sourcing', 'Catalog', 'Operations', 'AI Tools']) assert.match(d, new RegExp(`class="nav-btn"[^>]*>${g}`));
+  assert.match(d, /href="\/admin\/settings"/); assert.doesNotMatch(d, />Orders<|>Purchasing<|>Automations</);
+  assert.match(d, /Product development &amp; sourcing overview/);
+  assert.match(d, /<span>Awaiting review<\/span><b>2<\/b>/); // a and b are New
+  assert.match(d, /<span>Follow-ups due<\/span><b>1<\/b>/); // one overdue, none today
+  assert.match(d, /<span>Total products<\/span><b>4<\/b>/);
+  assert.match(d, /Late one/); assert.match(d, /Soon one/); assert.doesNotMatch(d, /Far away/); // 7-day window
+  assert.doesNotMatch(d, /Image storage/);
+  assert.match(d, /Uncategorized products<\/span><b>1<\/b>/);
+  assert.match(d, /Sample requests outstanding<\/span><b>1<\/b>/);
+  assert.match(d, /awaiting a reply<\/span><b>1<\/b>/);
+  // The links the dashboard offers show the same numbers
+  const rows = (html) => (html.match(/name="ids" value="/g) || []).length;
+  assert.equal(rows((await req(base, 'GET', '/admin/products?status=New', { cookie })).text), 2);
+  assert.equal(rows((await req(base, 'GET', '/admin/products?uncategorized=1', { cookie })).text), 1);
+  assert.equal(rows((await req(base, 'GET', '/admin/products?status=Sample%20requested', { cookie })).text), 1);
+  // Date range only narrows the latest submissions
+  db.tables.products[0].created_at = '2020-01-01T00:00:00.000Z';
+  const old = (await req(base, 'GET', '/admin?range=7', { cookie })).text;
+  assert.doesNotMatch(old, /href="\/admin\/products\/a"/); assert.match(old, /<span>Total products<\/span><b>4<\/b>/);
+  // Missing data does not break the page when an optional source fails
+  const real = db.list; db.list = async (tbl, ...a) => { if (tbl === 'info_requests') throw new Error('boom'); return real(tbl, ...a); };
+  const bad = await req(base, 'GET', '/admin', { cookie });
+  assert.equal(bad.status, 200); assert.match(bad.text, /could not be loaded/);
+});

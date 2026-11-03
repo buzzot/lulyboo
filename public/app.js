@@ -604,4 +604,22 @@
     document.addEventListener('click', function (e) { if (d.open && !d.contains(e.target)) d.open = false; });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') d.open = false; });
   })();
+
+  // Main navigation: click to open a group (hover also works on desktop), Escape / outside click closes, "Menu" toggles on small screens
+  (function () {
+    var nav = document.getElementById('mainnav'); if (!nav) return;
+    var toggle = document.querySelector('.nav-toggle');
+    var groups = nav.querySelectorAll('.nav-group');
+    var closeAll = function (except) { Array.prototype.forEach.call(groups, function (g) { if (g !== except) { g.classList.remove('open'); g.querySelector('.nav-btn').setAttribute('aria-expanded', 'false'); } }); };
+    Array.prototype.forEach.call(groups, function (g) {
+      var btn = g.querySelector('.nav-btn');
+      btn.addEventListener('click', function () { var open = !g.classList.contains('open'); closeAll(g); g.classList.toggle('open', open); btn.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+    });
+    document.addEventListener('click', function (e) { if (!nav.contains(e.target) && !(toggle && toggle.contains(e.target))) closeAll(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeAll(); if (toggle) { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); } } });
+    if (toggle) toggle.addEventListener('click', function () { var o = nav.classList.toggle('open'); toggle.setAttribute('aria-expanded', o ? 'true' : 'false'); });
+  })();
+  // Selects that go somewhere / re-filter as soon as they change
+  document.querySelectorAll('[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form && el.form.submit(); }); });
+  document.querySelectorAll('[data-goto]').forEach(function (el) { el.addEventListener('change', function () { if (el.value) window.location.href = el.value; }); });
 })();
