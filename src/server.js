@@ -33,6 +33,7 @@ function buildConfig(env = process.env) {
 }
 
 function createApp({ db, config }) {
+  config.db = db; // staff sessions look users up here
   const router = new Router();
   const publicDir = path.join(__dirname, '..', 'public');
 
@@ -53,6 +54,7 @@ function createApp({ db, config }) {
   require('./routes/requests')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/api')(router, { db, config });
+  require('./routes/staff')(router, { db, config });
 
   const imgOrigin = config.supabaseUrl ? new URL(config.supabaseUrl).origin : '';
 

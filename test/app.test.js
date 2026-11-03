@@ -1217,3 +1217,102 @@ test('favicon: linked in every page and served at /favicon.ico', async (t) => {
   const ico = await fetch(`${base}/favicon.ico`); assert.equal(ico.status, 200); assert.equal(ico.headers.get('content-type'), 'image/x-icon');
   assert.equal((await fetch(`${base}/static/favicon.svg`)).status, 200);
 });
+
+test('staff accounts: owner adds users, roles are enforced, invite flow, last-admin guard, audit', async (t) => {
+  const db = seedDb();
+  db.tables.suppliers = [{ id: 'sup1', name: 'Acme', active: true }];
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const ck = (r) => r.cookies.map((c) => c.split(';')[0]).join('; ');
+  const flashOf = (r) => { const c = r.cookies.find((x) => x.startsWith('lb_flash=')); return c ? decodeURIComponent(c.split(';')[0].slice(9)) : ''; };
+
+  const owner = ck(await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } }));
+  assert.match((await req(base, 'GET', '/admin/users', { cookie: owner })).text, /Users &amp; roles/);
+  assert.match((await req(base, 'GET', '/admin', { cookie: owner })).text, /user-menu/); // top-right menu
+
+  // Add an admin with a temporary password, a director by invite, a manager with a temporary password
+  const add = (form) => req(base, 'POST', '/admin/users', { cookie: owner, form });
+  assert.match(flashOf(await add({ name: 'Marsel', username: 'marsel', email: 'Marsel@Lulyboo.com', role: 'admin', password: 'temp-pass-1234' })), /temporary password/);
+  const inv = flashOf(await add({ name: 'Dana', username: 'dana', email: 'dana@lulyboo.com', role: 'director' }));
+  const token = inv.match(/\/admin\/invite\/([\w-]+)/)[1];
+  await add({ name: 'Max', username: 'max', email: 'max@lulyboo.com', role: 'manager', password: 'manager-pass-1' });
+  assert.match(flashOf(await add({ name: 'Dup', username: 'MARSEL', email: 'x@y.com', role: 'manager' })), /already used/);
+  assert.match(flashOf(await add({ name: 'Bad', username: 'bad user', email: 'x@y.com', role: 'manager' })), /Username/);
+  const u = (n) => db.tables.staff_users.find((x) => x.username === n);
+  assert.equal(u('marsel').email, 'marsel@lulyboo.com');
+  assert.ok(!JSON.stringify(db.tables.staff_users).includes(token), 'invite token stored only as a hash');
+  assert.ok(!JSON.stringify(db.tables.staff_users).includes('temp-pass-1234'), 'passwords are hashed');
+
+  // Login: wrong password / by email / must change temp password
+  assert.equal((await req(base, 'POST', '/admin/login', { form: { username: 'marsel', password: 'nope' } })).location, '/admin/login');
+  const lm = await req(base, 'POST', '/admin/login', { form: { username: 'marsel@lulyboo.com', password: 'temp-pass-1234' } });
+  assert.equal(lm.location, '/admin/profile?force=1');
+  const marsel = ck(lm);
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: marsel })).location, '/admin/profile?force=1'); // blocked until changed
+  const chg = await req(base, 'POST', '/admin/profile/password', { cookie: marsel, form: { password: 'brand-new-pass-1', confirm: 'brand-new-pass-1' } });
+  const marsel2 = ck(chg);
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: marsel2 })).status, 200);
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: marsel })).status, 303, 'old session ended after password change');
+
+  // Invite: set password, then signed in as Director
+  assert.match((await req(base, 'GET', `/admin/invite/${token}`)).text, /Welcome, Dana/);
+  assert.match(flashOf(await req(base, 'POST', `/admin/invite/${token}`, { form: { password: 'short', confirm: 'short' } })), /at least/);
+  const set = await req(base, 'POST', `/admin/invite/${token}`, { form: { password: 'dana-secret-123', confirm: 'dana-secret-123' } });
+  assert.equal(set.location, '/admin');
+  const dana = ck(set);
+  assert.equal((await req(base, 'GET', `/admin/invite/${token}`)).status, 410, 'invite link works once');
+
+  // Roles
+  const max = ck(await req(base, 'POST', '/admin/login', { form: { username: 'max', password: 'manager-pass-1' } }));
+  const maxMain = ck(await req(base, 'POST', '/admin/profile/password', { cookie: max, form: { password: 'manager-pass-2x', confirm: 'manager-pass-2x' } }));
+  for (const [c, name, want] of [[owner, 'owner', 200], [marsel2, 'admin', 200], [dana, 'director', 200], [maxMain, 'manager', 200]]) assert.equal((await req(base, 'GET', '/admin/products', { cookie: c })).status, want, name);
+  assert.equal((await req(base, 'GET', '/admin/users', { cookie: dana })).status, 403);
+  assert.equal((await req(base, 'GET', '/admin/settings', { cookie: dana })).status, 403);
+  assert.equal((await req(base, 'GET', '/admin/audit', { cookie: dana })).status, 200); // director may read it
+  assert.equal((await req(base, 'GET', '/admin/audit', { cookie: maxMain })).status, 403);
+  assert.equal((await req(base, 'POST', '/admin/suppliers/sup1/delete', { cookie: dana })).status, 403);
+  assert.equal((await req(base, 'POST', '/admin/suppliers/sup1/delete', { cookie: maxMain })).status, 403);
+  assert.equal(db.tables.suppliers.length, 1);
+  assert.equal((await req(base, 'GET', '/admin/pricing', { cookie: maxMain })).status, 200); // view-only
+  assert.equal((await req(base, 'POST', '/admin/pricing', { cookie: maxMain, form: {} })).status, 403);
+  const bulk = await req(base, 'POST', '/admin/products/bulk', { cookie: dana, form: { action: 'delete', ids: 'x' } });
+  assert.match(flashOf(bulk), /Only an Admin can delete/);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/suppliers/sup1', { cookie: maxMain })).text, /Delete supplier/);
+  assert.match((await req(base, 'GET', '/admin/suppliers/sup1', { cookie: marsel2 })).text, /Delete supplier/);
+  const menu = (await req(base, 'GET', '/admin', { cookie: maxMain })).text;
+  assert.match(menu, /Manager/); assert.doesNotMatch(menu, /Users &amp; roles/); assert.doesNotMatch(menu, /href="\/admin\/settings"/);
+
+  // Last active admin cannot be demoted or deactivated; deactivating signs the user out at once
+  const edit = (id, form) => req(base, 'POST', `/admin/users/${id}`, { cookie: marsel2, form });
+  assert.match(flashOf(await edit(u('marsel').id, { name: 'Marsel', username: 'marsel', email: 'marsel@lulyboo.com', role: 'manager' })), /last active Admin/);
+  assert.match(flashOf(await req(base, 'POST', `/admin/users/${u('marsel').id}/toggle`, { cookie: marsel2 })), /cannot deactivate yourself/);
+  await req(base, 'POST', `/admin/users/${u('max').id}/toggle`, { cookie: marsel2 });
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: maxMain })).status, 303);
+  assert.equal((await req(base, 'POST', '/admin/login', { form: { username: 'max', password: 'manager-pass-2x' } })).location, '/admin/login');
+  await edit(u('dana').id, { name: 'Dana', username: 'dana', email: 'dana@lulyboo.com', role: 'manager' });
+  assert.equal((await req(base, 'GET', '/admin/audit', { cookie: dana })).status, 303, 'role change ends the session');
+
+  // Forgot password gives the same answer for any email
+  const f1 = await req(base, 'POST', '/admin/forgot', { form: { email: 'dana@lulyboo.com' } });
+  const f2 = await req(base, 'POST', '/admin/forgot', { form: { email: 'nobody@x.com' } });
+  assert.equal(flashOf(f1), flashOf(f2));
+  assert.ok(u('dana').invite_hash, 'reset link created');
+
+  // Audit trail
+  const audit = (await req(base, 'GET', '/admin/audit', { cookie: marsel2 })).text;
+  for (const w of ['Added user', 'Signed in', 'Failed login', 'Deactivated user', 'Changed role', 'Changed password']) assert.match(audit, new RegExp(w), w);
+  assert.ok(db.tables.staff_audit.some((r) => r.action === 'Deleted supplier') === false);
+});
+
+test('owner login keeps working when the staff tables do not exist yet', async (t) => {
+  const db = seedDb();
+  const real = db.list; db.list = async (tbl, ...a) => { if (tbl.startsWith('staff_')) throw new Error('relation does not exist'); return real(tbl, ...a); };
+  const g = db.get; db.get = async (tbl, ...a) => { if (tbl.startsWith('staff_')) throw new Error('relation does not exist'); return g(tbl, ...a); };
+  const ins = db.insert; db.insert = async (tbl, ...a) => { if (tbl.startsWith('staff_')) throw new Error('relation does not exist'); return ins(tbl, ...a); };
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const owner = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: owner })).status, 200);
+  assert.match((await req(base, 'GET', '/admin/users', { cookie: owner })).text, /staff SQL|staff tables/i);
+  assert.equal((await req(base, 'POST', '/admin/login', { form: { username: 'someone', password: 'x' } })).location, '/admin/login');
+});

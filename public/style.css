@@ -717,3 +717,23 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .dz-list li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--brand-line,#e3c3bc);border-radius:8px;background:#fff;font-size:14px}
 .dz-list .dz-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dz-list .dz-remove{position:static;border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#8a6a64}
+
+/* Admin user menu (top right) */
+.top-in > nav{flex:1;min-width:0}
+.user-menu{position:relative;margin-left:auto}
+.user-menu summary{list-style:none;display:flex;align-items:center;gap:9px;cursor:pointer;padding:4px 8px 4px 4px;border:1px solid var(--line);border-radius:999px;background:#fff}
+.user-menu summary::-webkit-details-marker{display:none}
+.user-menu[open] summary,.user-menu summary:hover{border-color:var(--brand)}
+.um-av{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700}
+.um-who{display:flex;flex-direction:column;line-height:1.15;text-align:left}.um-who b{font-size:13px}.um-who small{font-size:11px;color:var(--muted)}
+.um-caret{width:0;height:0;border:4px solid transparent;border-top-color:var(--muted);margin:4px 2px 0}
+.um-pop{position:absolute;right:0;top:calc(100% + 8px);min-width:220px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:6px;z-index:20}
+.um-head{padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:4px;display:flex;flex-direction:column}.um-head small{color:var(--muted);font-size:12px}
+.um-pop a{display:block;padding:9px 12px;border-radius:8px;color:var(--ink);font-size:14px}.um-pop a:hover{background:var(--soft,#f6f5f2)}
+.um-pop a.um-out{border-top:1px solid var(--line);border-radius:0 0 8px 8px;margin-top:4px;color:#b3443a}
+.role-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#eee;color:#444;vertical-align:middle}
+.role-pill.r-admin{background:#fde6e2;color:#a8392d}.role-pill.r-director{background:#e5edf8;color:#27507f}.role-pill.r-manager{background:#e4f1e8;color:#2c6a42}
+.alert{background:#fff4e0;border:1px solid #f0d9a8;padding:10px 14px;border-radius:10px}
+@media(max-width:720px){.um-who{display:none}}
+.um-pop a{text-decoration:none}
+.nowrap{white-space:nowrap}

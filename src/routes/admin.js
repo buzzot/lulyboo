@@ -135,17 +135,21 @@ function dutyPanel({ p, a, testDuty, aiOn }) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────
-const loginAttempts = new Map();
-function isAdmin(req, config) {
-  const v = unsign(req.cookies.lb_admin, config.sessionSecret);
-  if (!v) return false;
-  const [who, exp] = v.split(':');
-  return who === 'admin' && Number(exp) > Date.now();
-}
+const ST = require('../staff');
 function guard(config, fn) {
   return async (req, res) => {
-    if (!isAdmin(req, config)) return res.redirect(`/admin/login?next=${encodeURIComponent(req.url)}`);
-    return fn(req, res);
+    const staff = await ST.currentStaff(config, req);
+    if (!staff) return res.redirect(`/admin/login?next=${encodeURIComponent(req.url)}`);
+    const path = String(req.url).split('?')[0];
+    if (staff.must_change && !/^\/admin\/(profile|logout)/.test(path)) return res.redirect('/admin/profile?force=1');
+    const why = ST.deny(staff.role, req.method, path);
+    if (why) throw new HttpError(403, why);
+    req.staff = staff;
+    return ST.runAs(staff, async () => {
+      const out = await fn(req, res);
+      if (req.method === 'POST' && res.statusCode < 400) { const label = ST.autoLabel(path); if (label) await ST.audit(config, label, path); }
+      return out;
+    });
   };
 }
 
@@ -190,7 +194,7 @@ function dupAlert(info, { link = '', withSupplier = false } = {}) {
 const dupPill = (info, id) => { const d = info.byId.get(id); return d ? html` <span class="pill s-dup" title="Same name as ${d.count - 1} other product(s) from this supplier">Duplicate ×${d.count}</span>` : ''; };
 // Archive / delete buttons for the bulk bars. `formaction` is needed where the surrounding form posts elsewhere.
 const archiveButtons = (formaction = '') => html`<button class="btn small ghost" name="action" value="archive" ${formaction ? raw(`formaction="${formaction}"`) : ''} title="Hide from the lists. You can restore it from the Archive.">Archive</button>
-  <button class="btn small danger-btn" name="action" value="delete" ${formaction ? raw(`formaction="${formaction}"`) : ''} data-confirm="Delete {n} selected product(s) and their photos? This cannot be undone. (Archive keeps them.)">Delete</button>`;
+  ${ST.can(ST.current()?.role, 'delete') ? html`<button class="btn small danger-btn" name="action" value="delete" ${formaction ? raw(`formaction="${formaction}"`) : ''} data-confirm="Delete {n} selected product(s) and their photos? This cannot be undone. (Archive keeps them.)">Delete</button>` : ''}`;
 
 function applyFilters(items, q, dup = null) {
   let out = items;
@@ -234,35 +238,47 @@ function filterBar(q, ctx, suppliers, action = '/admin/products') {
 module.exports = function adminRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
 
-  // ── Login
+  // ── Login (staff username/email + password; empty username = the owner password from ADMIN_PASSWORD)
   router.get('/admin/login', async (req, res) => {
-    if (!config.adminPassword) return res.html(page({ title: 'Admin', admin: true, body: html`<section class="card narrow"><h1>Admin not configured</h1><p>Set the <code>ADMIN_PASSWORD</code> environment variable and restart.</p></section>` }), 503);
     res.html(page({
       title: 'Admin login', admin: true, flash: takeFlash(req, res),
-      body: html`<section class="card narrow"><h1>Admin login</h1>
+      body: html`<section class="card narrow"><h1>Team login</h1>
       <form method="post" action="/admin/login"><input type="hidden" name="next" value="${req.query.next || '/admin'}">
-      <label><span class="lbl">Password</span><input type="password" name="password" autofocus required></label>
-      <div class="form-actions"><button class="btn">Log in</button></div></form></section>`,
+      <label><span class="lbl">Username or email</span><input type="text" name="username" autocomplete="username" autocapitalize="off" autofocus></label>
+      <label><span class="lbl">Password</span><input type="password" name="password" autocomplete="current-password" required></label>
+      <div class="form-actions"><button class="btn">Log in</button> <a class="muted small" href="/admin/forgot">Forgot password?</a></div>
+      <p class="muted small">Owner login: leave the username empty and use the owner password.</p></form></section>`,
     }));
   });
+  const loginAttempts = new Map();
   router.post('/admin/login', async (req, res) => {
     const ip = req.socket.remoteAddress || 'x';
     const rec = loginAttempts.get(ip) || { n: 0, t: Date.now() };
     if (Date.now() - rec.t > 15 * 60_000) { rec.n = 0; rec.t = Date.now(); }
     if (rec.n >= 10) throw new HttpError(429, 'Too many attempts. Try again in 15 minutes.');
     const { fields } = await parseForm(req);
-    const a = crypto.createHash('sha256').update(String(fields.password || '')).digest();
-    const b = crypto.createHash('sha256').update(String(config.adminPassword || '')).digest();
-    if (!config.adminPassword || !crypto.timingSafeEqual(a, b)) {
-      rec.n++; loginAttempts.set(ip, rec);
-      flash(res, 'error', 'Wrong password');
-      return res.redirect('/admin/login');
-    }
-    loginAttempts.delete(ip);
-    const days = 14;
-    res.setCookie('lb_admin', sign(`admin:${Date.now() + days * 86400_000}`, config.sessionSecret), { maxAge: days * 86400 });
+    const ident = String(fields.username || '').trim().toLowerCase();
     const next = String(fields.next || '/admin');
-    res.redirect(next.startsWith('/admin') ? next : '/admin');
+    const dest = next.startsWith('/admin') ? next : '/admin';
+    const fail = async (why) => { rec.n++; loginAttempts.set(ip, rec); await ST.audit(config, 'Failed login', `${ident || 'owner'} (${why})`, { name: ident || 'owner' }); flash(res, 'error', 'Wrong username or password'); return res.redirect('/admin/login'); };
+    if (!ident || ident === 'owner') {
+      const a = crypto.createHash('sha256').update(String(fields.password || '')).digest();
+      const b = crypto.createHash('sha256').update(String(config.adminPassword || '')).digest();
+      if (!config.adminPassword || !crypto.timingSafeEqual(a, b)) return fail('owner');
+      loginAttempts.delete(ip);
+      ST.startOwnerSession(res, config);
+      await ST.audit(config, 'Signed in', 'owner password', { owner: true });
+      return res.redirect(dest);
+    }
+    let user = null;
+    try { user = (await db.list('staff_users')).find((u) => u.username === ident || String(u.email).toLowerCase() === ident) || null; } catch { /* table not created yet */ }
+    const ok = user && user.status === 'active' ? await A.verifyPassword(fields.password, user.password_hash) : (await A.verifyPassword(fields.password, 'scrypt$16384$AAAAAAAAAAAAAAAAAAAAAA==$' + Buffer.alloc(64).toString('base64')), false);
+    if (!ok) return fail(user ? user.status : 'unknown');
+    loginAttempts.delete(ip);
+    await db.update('staff_users', { id: user.id }, { last_login: new Date().toISOString() });
+    ST.startSession(res, config, user);
+    await ST.audit(config, 'Signed in', '', user);
+    return res.redirect(user.must_change ? '/admin/profile?force=1' : dest);
   });
   router.get('/admin/logout', async (req, res) => { res.setCookie('lb_admin', '', { maxAge: 0 }); res.redirect('/admin/login'); });
 
@@ -414,6 +430,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       flash(res, 'ok', on ? `${ids.length} product(s) archived. They are hidden from the lists; find them under Archive.` : `${ids.length} product(s) restored.`);
       return res.redirect(back);
     }
+    if (fields.action === 'delete' && !ST.can(req.staff.role, 'delete')) { flash(res, 'error', 'Only an Admin can delete. Use Archive instead.'); return res.redirect(back); }
     if (fields.action === 'delete') {
       const imgs = Object.values(await S.imagesFor(db, ids)).flat();
       await deleteImages(db, imgs);
@@ -609,7 +626,7 @@ module.exports = function adminRoutes(router, { db, config }) {
           ${productFields(p, { categories: ctx.categoryNames })}
           <div class="form-actions"><button class="btn">Save product</button></div>
         </form>
-        <form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos?" class="danger-zone"><button class="link danger">Delete product</button></form>
+        ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos?" class="danger-zone"><button class="link danger">Delete product</button></form>` : ''}
       </details>`,
     }));
   }));
@@ -819,8 +836,8 @@ module.exports = function adminRoutes(router, { db, config }) {
       </section>
       ${docs.length ? html`<section class="card"><h2>Documents</h2>
         <ul class="doc-list">${docs.map((d) => html`<li><span class="doc-ic">▤</span><a href="/admin/documents/${d.id}" download>${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${fmtBytes(d.bytes)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
-          <form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form></li>`)}</ul></section>` : ''}
-      <form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>`,
+          ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form>` : ''}</li>`)}</ul></section>` : ''}
+      ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>` : ''}`,
     }));
   }));
 

@@ -131,4 +131,14 @@ ${note ? `<p style="margin:18px 0 0;font-size:15px;line-height:25px;"><strong>No
   };
 }
 
-module.exports = { sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+function staffInviteEmail({ link, name, reset }) {
+  const subject = reset ? 'Reset your Lulyboo admin password' : 'You have been added to the Lulyboo admin';
+  const lead = reset ? 'Use the link below to choose a new password.' : 'You now have an account on the Lulyboo admin. Use the link below to choose your password.';
+  return {
+    subject,
+    text: `Hello ${name || ''},\n\n${lead}\n${link}\n\nThe link works once and expires in 7 days. If you did not expect this email, ignore it.`,
+    html: `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:24px;color:#1d1f23;max-width:520px"><p>Hello ${esc(name || '')},</p><p>${lead}</p><p><a href="${esc(link)}" style="display:inline-block;background:#de7367;color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">${reset ? 'Choose a new password' : 'Set your password'}</a></p><p style="color:#73777d;font-size:13px">The link works once and expires in 7 days. If you did not expect this email, ignore it.</p></div>`,
+  };
+}
+
+module.exports = { staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

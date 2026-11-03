@@ -398,3 +398,39 @@ end $$;
 
 -- Original (verbatim) message text shown under "Show original message" in the Communication log
 alter table public.info_request_messages add column if not exists original text;
+
+
+-- ── Staff accounts and roles for the admin side ───────────────────────────
+create table if not exists public.staff_users (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null,
+  username        text not null,
+  email           text not null,
+  role            text not null check (role in ('admin','director','manager')),
+  password_hash   text,
+  status          text not null default 'invited' check (status in ('invited','active','disabled')),
+  must_change     boolean not null default false,
+  session_version integer not null default 1,
+  invite_hash     text,
+  invite_expires  timestamptz,
+  last_login      timestamptz,
+  created_by      text,
+  created_at      timestamptz not null default now()
+);
+create unique index if not exists staff_users_username_idx on public.staff_users (lower(username));
+create unique index if not exists staff_users_email_idx on public.staff_users (lower(email));
+alter table public.staff_users enable row level security;
+
+create table if not exists public.staff_audit (
+  id         uuid primary key default gen_random_uuid(),
+  staff_id   uuid,
+  staff_name text,
+  action     text not null,
+  detail     text,
+  created_at timestamptz not null default now()
+);
+create index if not exists staff_audit_created_idx on public.staff_audit (created_at desc);
+alter table public.staff_audit enable row level security;
+
+-- Who wrote a manual entry in a request's communication log
+alter table public.info_request_messages add column if not exists author text;

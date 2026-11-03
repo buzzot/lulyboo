@@ -597,4 +597,11 @@
       if (files && files.length) { e.preventDefault(); add(files); }
     });
   })();
+
+  // Close the account menu when clicking elsewhere or pressing Escape
+  (function () {
+    var d = document.querySelector('.user-menu'); if (!d) return;
+    document.addEventListener('click', function (e) { if (d.open && !d.contains(e.target)) d.open = false; });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') d.open = false; });
+  })();
 })();

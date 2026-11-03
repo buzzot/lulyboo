@@ -206,7 +206,7 @@ module.exports = function requestRoutes(router, { db, config }) {
             <div class="span2"><button class="btn small">Save to log</button></div></form></section>
       </div>
       <section class="card"><h2>Communication log</h2>
-        ${msgs.length ? html`<ul class="feed req-log">${msgs.map((m) => html`<li class="${m.direction}"><span class="date">${fmt.date(m.created_at)}</span> <b>${m.direction === 'out' ? 'Sent to supplier' : m.direction === 'in' ? `Reply${m.from_email ? ` from ${m.from_email}` : ''}` : 'Note'}</b>
+        ${msgs.length ? html`<ul class="feed req-log">${msgs.map((m) => html`<li class="${m.direction}"><span class="date">${fmt.date(m.created_at)}</span> <b>${m.direction === 'out' ? 'Sent to supplier' : m.direction === 'in' ? `Reply${m.from_email ? ` from ${m.from_email}` : ''}` : 'Note'}</b>${m.author ? html` <span class="sub">by ${m.author}</span>` : ''}
           ${m.subject ? html`<div class="sub">${m.subject}</div>` : ''}
           <div class="req-body">${m.body || ''}</div>
           ${m.original && m.original !== m.body ? html`<details class="orig"><summary>Show original message</summary><pre>${m.original}</pre></details>` : ''}
@@ -233,7 +233,9 @@ module.exports = function requestRoutes(router, { db, config }) {
     const direction = fields.direction === 'in' ? 'in' : 'note';
     const attachments = [];
     for (const f of uploads) attachments.push(await saveAttachment(r.ref, f));
-    await db.insert('info_request_messages', { request_id: r.id, direction, body: body || null, attachments });
+    const noteRow = { request_id: r.id, direction, body: body || null, attachments };
+    const who = req.staff && !req.staff.owner ? req.staff.name : req.staff ? 'Owner' : null;
+    try { await db.insert('info_request_messages', who ? { ...noteRow, author: who } : noteRow); } catch (e) { await db.insert('info_request_messages', noteRow); } // 'author' column may not exist yet
     const status = STATUSES.includes(fields.status) ? fields.status : direction === 'in' && r.status === 'Sent' ? 'Replied' : r.status;
     await db.update('info_requests', { id: r.id }, { status, updated_at: new Date().toISOString() });
     flash(res, 'ok', 'Saved to the log');

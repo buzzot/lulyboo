@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { icon } = require('./icons');
+const STAFF = require('../staff');
 
 // Version stamp for CSS/JS: changes whenever those files change, so browsers fetch the new version after a deploy.
 const ASSET_V = crypto.createHash('sha1')
@@ -72,12 +73,26 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
   <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo <span>${nav?.label || t('Supplier Portal', '供应商平台')}</span></a>
   ${nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
   ${sw}
+  ${isAdmin ? userMenu() : ''}
 </div></header>
 <main class="${wide ? 'wide' : ''}">
 ${flashHtml}
 ${body}
 </main>
 </body></html>`;
+}
+
+/** Top-right account menu on every admin page: who is signed in, profile, users, audit log, sign out. */
+function userMenu() {
+  const u = STAFF.current();
+  if (!u) return '';
+  const initials = String(u.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  return html`<details class="user-menu"><summary aria-label="Account menu"><span class="um-av">${initials}</span><span class="um-who"><b>${u.name}</b><small>${STAFF.ROLES[u.role]}</small></span><span class="um-caret" aria-hidden="true"></span></summary>
+    <div class="um-pop"><div class="um-head"><b>${u.name}</b><small>${u.email || 'Owner login'}</small></div>
+      <a href="/admin/profile">My profile</a>
+      ${STAFF.can(u.role, 'users') ? html`<a href="/admin/users">Users &amp; roles</a>` : ''}
+      ${STAFF.can(u.role, 'audit') ? html`<a href="/admin/audit">Audit log</a>` : ''}
+      <a class="um-out" href="/admin/logout">Sign out</a></div></details>`;
 }
 
 function adminNav(active) {
@@ -92,8 +107,7 @@ function adminNav(active) {
     ['pricing', '/admin/pricing', 'Pricing'],
     ['ai', '/admin/ai', 'AI'],
     ['settings', '/admin/settings', 'Settings'],
-  ].map(([k, href, label]) => ({ href, label, active: k === active }));
-  items.push({ href: '/admin/logout', label: 'Log out' });
+  ].filter(([k]) => k !== 'settings' || !STAFF.current() || STAFF.can(STAFF.current().role, 'settings')).map(([k, href, label]) => ({ href, label, active: k === active }));
   return { home: '/admin', label: 'Admin', items, admin: true };
 }
 
