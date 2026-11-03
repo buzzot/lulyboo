@@ -854,12 +854,60 @@ module.exports = function adminRoutes(router, { db, config }) {
       body: html`
       ${fl?.type === 'link' ? html`<div class="flash invite"><strong>${fl.msg.split('|||')[0]}</strong> The link is shown only once.<input class="copy" readonly value="${fl.msg.split('|||')[1] || ''}" data-copy><button class="btn small" type="button" data-copybtn>Copy</button></div>` : ''}
       ${s.needs_review ? html`<div class="flash warn"><b>Created automatically</b> from an RFQ logged by Hermes. Check the details, then <form method="post" action="/admin/suppliers/${s.id}/approve" class="inline"><button class="link">mark as reviewed</button></form>.</div>` : ''}
-      <div class="head-row"><div><h1>${s.name}</h1><p class="muted">${s.crm_status}${s.country ? ` · ${s.country}` : ''}${s.rating ? ` · ${'★'.repeat(s.rating)}` : ''}${s.registered_at ? ` · registered ${fmt.date(s.registered_at)}` : ' · not registered yet'}</p></div>
-        <div class="actions">
-          <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>
-        </div></div>
+      <div class="head-row sp-head"><div><h1>${s.name}</h1>
+        <ul class="pp-meta sp-meta"><li><span class="pill crm-${String(s.crm_status || '').toLowerCase().replace(/\W+/g, '')}">${s.crm_status}</span></li>${s.country ? html`<li>${s.country}</li>` : ''}${s.rating ? html`<li><span class="stars">${'★'.repeat(s.rating)}</span></li>` : ''}
+          ${s.contact_name ? html`<li>${s.contact_name}</li>` : ''}${s.email ? html`<li><a href="mailto:${s.email}">${s.email}</a></li>` : ''}${s.phone ? html`<li>${s.phone}</li>` : ''}${s.website ? html`<li><a href="${/^https?:\/\//i.test(s.website) ? s.website : '#'}" target="_blank" rel="noopener noreferrer">Website ↗</a></li>` : ''}
+          <li>${s.registered_at ? html`<span>Registered</span> ${fmt.date(s.registered_at)}` : 'Not registered yet'}</li></ul></div>
+        <div class="actions"><a class="btn small ghost" href="/admin/suppliers/${s.id}/request">Request information</a><a class="btn small ghost" href="#details" data-open-hash>Edit details</a>
+          <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form></div></div>
       ${s.active ? '' : html`<div class="flash warn">Portal access is blocked for this supplier.</div>`}
-      <section class="card"><h2>Portal users</h2>
+      <div class="pp-kpis sp-kpis">
+        <div class="pk"><span>Products</span><b>${items.length}</b><small>${items.filter(({ product: p }) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length} shortlisted+</small></div>
+        <div class="pk"><span>Requests</span><b>${reqs.length}</b><small>${reqs[0] ? `${reqs[0].ref} · ${reqs[0].status}` : 'none yet'}</small></div>
+        <div class="pk"><span>Last activity</span><b>${acts[0] ? fmt.date(acts[0].activity_date) : '—'}</b><small>${acts[0] ? acts[0].type : ' '}</small></div>
+        <div class="pk ${s.next_follow_up && s.next_follow_up <= today() ? 'bad' : ''}"><span>Next follow-up</span><b>${s.next_follow_up ? fmt.date(s.next_follow_up) : '—'}</b><small>${s.next_follow_up && s.next_follow_up <= today() ? 'overdue' : ' '}</small></div>
+        <div class="pk"><span>Portal</span><b>${users.filter((u) => u.status === 'active').length} active</b><small>${users.filter((u) => u.status === 'invited').length} invited</small></div>
+      </div>
+      <div class="sp-layout">
+        <div class="sp-main">
+      <section class="card sp-products"><div class="head-row"><h2 class="sec">Products (${items.length})</h2>
+        <div class="actions"><a class="btn small ghost" href="/admin/archive?supplier=${s.id}">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
+        ${dupAlert(dup)}
+        ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
+        <form method="post" action="/admin/suppliers/${s.id}/request">
+        <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
+        <div class="bulkbar"><span data-selcount>0 selected</span>
+          <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
+          <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
+          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
+          ${archiveButtons('/admin/products/bulk')}</div>
+        <div class="table-wrap"><table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
+        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></div></form>
+        <details class="imp fold"><summary><h3 class="inline">Import products from a spreadsheet</h3></summary>
+        <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
+          ${fileDrop({ main: raw('Drag &amp; drop an .xlsx or .csv here, or <u>choose a file</u>'), hint: 'Or paste (Ctrl/⌘+V) a copied file, or copied spreadsheet cells including the header row · max 20 MB' })}
+          <div class="import-actions"><button class="btn small">Import</button>
+            <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form></details>
+      </section>
+      ${docs.length ? html`<section class="card"><h2>Documents</h2>
+        <ul class="doc-list">${docs.map((d) => html`<li><span class="doc-ic">▤</span><a href="/admin/documents/${d.id}" download>${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${fmtBytes(d.bytes)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
+          ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form>` : ''}</li>`)}</ul></section>` : ''}
+        </div>
+        <aside class="sp-side">
+        ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
+        <section class="card"><h2 class="sec">Activity</h2><details class="log-new"><summary class="btn small ghost">+ Log activity</summary>
+          <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
+            <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
+            <label><span class="lbl">Type</span><select name="type">${ACTIVITY_TYPES.map((t) => html`<option>${t}</option>`)}</select></label>
+            <label class="span2"><span class="lbl">Summary</span><textarea name="summary" rows="2" required></textarea></label>
+            <label><span class="lbl">Follow up on</span><input type="date" name="follow_up_date"></label>
+            <div><button class="btn small">Log activity</button></div>
+          </form></details>
+          <ul class="feed">${acts.map((a) => html`<li class="${a.done ? 'done' : ''}"><span class="date">${fmt.date(a.activity_date)}</span> <b>${a.type}</b>: ${a.summary}
+            ${a.follow_up_date ? html`<span class="sub ${!a.done && a.follow_up_date <= today() ? 'neg' : ''}">follow up ${fmt.date(a.follow_up_date)}</span>` : ''}
+            ${a.follow_up_date && !a.done ? html`<form method="post" action="/admin/activities/${a.id}/done" class="inline"><button class="link">Mark done</button></form>` : ''}</li>`)}</ul>
+        </section>
+      <details class="card fold" id="portal"><summary><h2 class="inline">Portal users (${users.length})</h2><span class="muted small">Logins for this supplier</span></summary>
         <div class="table-wrap"><table class="list compact"><thead><tr><th>Email (login)</th><th>Name</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
         <tbody>${users.map((u) => html`<tr><td>${u.email}</td><td>${u.name || '—'}</td>
           <td>${u.status === 'invited' ? html`Invited <span class="sub">${u.invite_expires_at && new Date(u.invite_expires_at) < new Date() ? '(expired)' : `until ${fmt.date(u.invite_expires_at)}`}</span>` : u.status === 'active' ? 'Active' : html`<span class="neg">Disabled</span>`}</td>
@@ -872,9 +920,8 @@ module.exports = function adminRoutes(router, { db, config }) {
           <input type="email" name="invite_email" placeholder="colleague@factory.com" required style="max-width:280px">
           <label class="chk"><input type="checkbox" name="send_email" value="1" checked> Email it</label>
           <button class="btn small">Invite another user</button></form>
-      </section>
-      <div class="cols">
-        <section class="card"><h2>Details</h2>
+      </details>
+        <details class="card fold" id="details"><summary><h2 class="inline">Company details</h2><span class="muted small">Contact, address, CRM status, notes</span></summary>
           <form method="post" action="/admin/suppliers/${s.id}" class="grid">
             ${F.SUPPLIER_FIELDS.map((f) => html`<label class="${f.type === 'textarea' ? 'span2' : ''}"><span class="lbl">${f.en}</span>${f.type === 'textarea' ? html`<textarea name="${f.key}" rows="2">${s[f.key] || ''}</textarea>` : html`<input name="${f.key}" value="${s[f.key] || ''}" ${f.required ? 'required' : ''}>`}</label>`)}
             <label><span class="lbl">CRM status</span><select name="crm_status">${CRM_STATUSES.map((c) => html`<option ${c === s.crm_status ? raw('selected') : ''}>${c}</option>`)}</select></label>
@@ -883,43 +930,9 @@ module.exports = function adminRoutes(router, { db, config }) {
             <label><span class="lbl">Next follow-up</span><input type="date" name="next_follow_up" value="${s.next_follow_up || ''}"></label>
             <label class="span2"><span class="lbl">Notes</span><textarea name="notes" rows="3">${s.notes || ''}</textarea></label>
             <div class="span2"><button class="btn">Save</button></div>
-          </form></section>
-        ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
-        <section class="card"><h2>Activity</h2>
-          <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
-            <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
-            <label><span class="lbl">Type</span><select name="type">${ACTIVITY_TYPES.map((t) => html`<option>${t}</option>`)}</select></label>
-            <label class="span2"><span class="lbl">Summary</span><textarea name="summary" rows="2" required></textarea></label>
-            <label><span class="lbl">Follow up on</span><input type="date" name="follow_up_date"></label>
-            <div><button class="btn small">Log activity</button></div>
-          </form>
-          <ul class="feed">${acts.map((a) => html`<li class="${a.done ? 'done' : ''}"><span class="date">${fmt.date(a.activity_date)}</span> <b>${a.type}</b>: ${a.summary}
-            ${a.follow_up_date ? html`<span class="sub ${!a.done && a.follow_up_date <= today() ? 'neg' : ''}">follow up ${fmt.date(a.follow_up_date)}</span>` : ''}
-            ${a.follow_up_date && !a.done ? html`<form method="post" action="/admin/activities/${a.id}/done" class="inline"><button class="link">Mark done</button></form>` : ''}</li>`)}</ul>
-        </section>
+          </form></details>
+        </aside>
       </div>
-      <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
-        <div class="actions"><a class="btn small ghost" href="/admin/archive?supplier=${s.id}">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
-        ${dupAlert(dup)}
-        ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
-        <form method="post" action="/admin/suppliers/${s.id}/request">
-        <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
-        <div class="bulkbar"><span data-selcount>0 selected</span>
-          <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
-          <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
-          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
-          ${archiveButtons('/admin/products/bulk')}</div>
-        <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
-        <h3>Import products for this supplier</h3>
-        <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
-          ${fileDrop({ main: raw('Drag &amp; drop an .xlsx or .csv here, or <u>choose a file</u>'), hint: 'Or paste (Ctrl/⌘+V) a copied file, or copied spreadsheet cells including the header row · max 20 MB' })}
-          <div class="import-actions"><button class="btn small">Import</button>
-            <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form>
-      </section>
-      ${docs.length ? html`<section class="card"><h2>Documents</h2>
-        <ul class="doc-list">${docs.map((d) => html`<li><span class="doc-ic">▤</span><a href="/admin/documents/${d.id}" download>${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${fmtBytes(d.bytes)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
-          ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form>` : ''}</li>`)}</ul></section>` : ''}
       ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>` : ''}`,
     }));
   }));

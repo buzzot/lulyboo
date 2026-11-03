@@ -700,4 +700,5 @@
     }
   })();
   document.querySelectorAll('[data-open-add]').forEach(function (a) { a.addEventListener('click', function () { var d = document.getElementById('add-supplier'); if (d) { d.open = true; } }); });
+  document.querySelectorAll('[data-open-hash]').forEach(function (a) { a.addEventListener('click', function () { var d = document.querySelector(a.getAttribute('href')); if (d && d.tagName === 'DETAILS') d.open = true; }); });
 })();
