@@ -7,6 +7,27 @@ const tg = require('./telegram');
 const PROJECT_STATUSES = ['Draft', 'Sourcing', 'Sampling', 'Testing', 'Pilot', 'Completed', 'On hold', 'Cancelled'];
 const INV_STATUSES = ['Invited', 'Viewed', 'Questions', 'Quoted', 'Sample', 'Declined', 'Selected', 'Closed'];
 const FILE_KINDS = { drawing: 'Drawing / CAD', image: 'Image / reference', spec: 'Specification', certificate: 'Certificate / test report', other: 'Other' };
+const FILE_KINDS_ZH = { drawing: '图纸 / CAD', image: '图片 / 参考', spec: '规格说明', certificate: '证书 / 测试报告', other: '其他' };
+const FILE_GROUPS = { drawing: ['Drawings & CAD', '图纸与 CAD'], image: ['Images & references', '图片与参考'], spec: ['Specifications', '规格说明'], certificate: ['Certificates & test reports', '证书与测试报告'], other: ['Other files', '其他文件'] };
+const FILE_DEFAULT = { drawing: ['Drawing', '图纸'], image: ['Reference image', '参考图片'], spec: ['Specification', '规格说明'], certificate: ['Certificate', '证书'], other: ['File', '文件'] };
+const KIND_ORDER = ['drawing', 'image', 'spec', 'certificate', 'other'];
+const guessKind = (name) => { const e = extOf(name); const n = String(name).toLowerCase();
+  if (/^\.(step|stp|iges?|dxf|dwg|ai|stl)$/.test(e) || /draw|cad|blueprint/.test(n)) return 'drawing';
+  if (/^\.(png|jpe?g|webp|gif|psd)$/.test(e)) return 'image';
+  if (/cert|test.?report|fcc|ce[-_ ]|rohs|reach|astm|en71/.test(n)) return 'certificate';
+  if (/^\.(pdf|docx?|xlsx?|csv|txt|pptx?)$/.test(e)) return 'spec';
+  return 'other'; };
+// What a file is, in words: the description someone typed, else the type (numbered when there are several of the same type).
+function fileTitles(files, zh = false) {
+  const out = new Map(); const count = {}; const seen = {};
+  for (const f of files) if (!f.label) count[f.kind] = (count[f.kind] || 0) + 1;
+  for (const f of files) {
+    if (f.label) { out.set(f.id, f.label); continue; }
+    const base = (FILE_DEFAULT[f.kind] || FILE_DEFAULT.other)[zh ? 1 : 0]; seen[f.kind] = (seen[f.kind] || 0) + 1;
+    out.set(f.id, count[f.kind] > 1 ? `${base} ${seen[f.kind]}` : base);
+  }
+  return out;
+}
 const ALLOWED_EXT = /^\.(pdf|png|jpe?g|webp|gif|docx?|xlsx?|csv|txt|zip|step|stp|iges?|dxf|dwg|ai|stl|psd|pptx?)$/;
 const MIME = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8' };
 const INLINE_OK = /\.(pdf|png|jpe?g|webp|gif|txt)$/i;
@@ -30,13 +51,13 @@ async function nextRef(db) {
 /** Store uploaded files in the documents bucket. Returns { saved:[{name,path,size,mime}], errors:[] } */
 async function storeFiles(db, { projectId, files = [], maxBytes = 20 * 1024 * 1024 }) {
   const saved = []; const errors = [];
-  for (const f of files) {
+  for (const [i, f] of files.entries()) {
     const name = safeName(f.name); const ext = extOf(name);
     if (!f.buffer?.length) continue;
     if (!ALLOWED_EXT.test(ext)) { errors.push(`${name}: file type not allowed`); continue; }
     if (f.buffer.length > maxBytes) { errors.push(`${name}: larger than ${Math.round(maxBytes / 1048576)} MB`); continue; }
     const path = `dev/${projectId}/${crypto.randomUUID()}${ext}`;
-    try { await db.docs.upload(path, f.buffer, MIME[ext] || 'application/octet-stream'); saved.push({ name, path, size: f.buffer.length, mime: MIME[ext] || null }); } catch (e) { errors.push(`${name}: could not be stored`); }
+    try { await db.docs.upload(path, f.buffer, MIME[ext] || 'application/octet-stream'); saved.push({ i, name, path, size: f.buffer.length, mime: MIME[ext] || null }); } catch (e) { errors.push(`${name}: could not be stored`); }
   }
   return { saved, errors };
 }
@@ -80,4 +101,4 @@ async function runMilestoneReminders({ db, config, now = new Date() }) {
   return { sent: due.length };
 }
 
-module.exports = { PROJECT_STATUSES, INV_STATUSES, FILE_KINDS, ALLOWED_EXT, MIME, INLINE_OK, STD_MILESTONES, today, addDays, slug, extOf, safeName, nextRef, storeFiles, fileList, notifyOwner, notifySupplier, supplierRecipients, runMilestoneReminders, ownerEmails };
+module.exports = { PROJECT_STATUSES, INV_STATUSES, FILE_KINDS, FILE_KINDS_ZH, FILE_GROUPS, FILE_DEFAULT, KIND_ORDER, guessKind, fileTitles, ALLOWED_EXT, MIME, INLINE_OK, STD_MILESTONES, today, addDays, slug, extOf, safeName, nextRef, storeFiles, fileList, notifyOwner, notifySupplier, supplierRecipients, runMilestoneReminders, ownerEmails };

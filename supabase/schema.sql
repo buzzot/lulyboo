@@ -475,6 +475,7 @@ create table if not exists public.dev_files (
   project_id   uuid not null references public.dev_projects(id) on delete cascade,
   name         text not null,
   kind         text not null default 'other',            -- drawing, image, spec, certificate, other
+  label        text,                                     -- plain-language description shown instead of the file name
   mime         text,
   bytes        integer,
   path         text not null,
@@ -551,3 +552,7 @@ alter table public.dev_invitations enable row level security;
 alter table public.dev_messages enable row level security;
 alter table public.dev_quotes enable row level security;
 alter table public.dev_milestones enable row level security;
+
+-- Plain-language description for each project file (safe to run on an existing database)
+alter table public.dev_files add column if not exists label text;
+notify pgrst, 'reload schema';

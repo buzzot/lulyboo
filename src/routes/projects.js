@@ -28,13 +28,16 @@ const serve = (res, buf, name, type, inline) => {
 };
 const FILE_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.step,.stp,.igs,.iges,.dxf,.dwg,.ai,.stl,.pptx';
 // Multi-file upload box: drag & drop, click to choose, or paste (screenshots / copied files). Still a plain file input without JS.
-const multiFile = (name = 'files') => html`<div class="mdrop" data-filebox>
+const multiFile = (name = 'files', { describe = false } = {}) => html`<div class="mdrop" data-filebox${describe ? raw(' data-describe') : ''}>
   <div class="mdrop-box"><input type="file" name="${name}" multiple accept="${FILE_ACCEPT}" aria-label="Choose files">
     <span class="dz-icon" aria-hidden="true">⬆</span>
     <span class="dz-main" data-main>${t('Drag & drop files here, paste a screenshot, or choose files', '将文件拖到此处、粘贴截图，或点击选择文件')}</span>
     <span class="dz-hint">${t('PDF, STEP, DXF, images, Office files · up to 20 MB each', 'PDF、STEP、DXF、图片、Office 文件 · 每个最大 20 MB')}</span>
   </div>
+  ${describe ? html`<input type="hidden" name="meta" value="[]" data-meta>` : ''}
   <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`;
+const THUMB_OK = /\.(png|jpe?g|webp|gif)$/i;
+const kindIcon = (k) => ({ drawing: '📐', image: '🖼️', spec: '📄', certificate: '✅', other: '📎' }[k] || '📎');
 const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att">${list.map((a, i) => html`<li><a href="${hrefOf(i)}">${a.name}</a> <span class="sub">${bytes(a.size)}</span>${P.INLINE_OK.test(a.name) ? html` · <a href="${hrefOf(i)}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}</li>`)}</ul>` : '');
 
 function quoteCards(q, project, { admin = false } = {}) {
@@ -151,14 +154,24 @@ module.exports = function projectRoutes(router, { db, config }) {
             <label class="chk"><input type="checkbox" name="notify" value="1" checked> Email suppliers</label><button class="btn small">Publish v${p.current_version + 1}</button></form>
           <ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></section>`;
     } else if (tab === 'files') {
-      body = html`<section class="card"><h2 class="sec">Files (${files.length})</h2>
-        ${files.length ? html`<div class="table-wrap"><table class="list compact docs"><thead><tr><th>File</th><th>Type</th><th>Added in</th><th class="r">Size</th><th>Visible</th><th></th></tr></thead><tbody>
-          ${files.map((f) => html`<tr><td><span class="trunc" title="${f.name}">${f.name}</span>${f.controlling ? html` <span class="pill s-selected">Controlling</span>` : ''}</td><td>${P.FILE_KINDS[f.kind] || f.kind}</td><td>v${f.version}</td><td class="r">${bytes(f.bytes)}</td><td>${f.internal ? 'Internal only' : 'Suppliers'}</td>
-            <td class="r nowrap">${P.INLINE_OK.test(f.name) ? html`<a href="/admin/dev-files/${f.id}?inline=1" target="_blank" rel="noopener">Preview</a> · ` : ''}<a href="/admin/dev-files/${f.id}">Download</a> · <form class="inline" method="post" action="/admin/projects/${p.id}/files/${f.id}/delete" data-confirm="Remove this file?"><button class="link danger">Remove</button></form></td></tr>`)}</tbody></table></div>` : html`<p class="d-empty">No files yet. Add drawings (PDF, STEP, DXF…), reference images and specs.</p>`}
-        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/files" class="doc-upload"><label class="frow"><span>Type</span><select name="kind">${Object.entries(P.FILE_KINDS).map(([k, l]) => html`<option value="${k}">${l}</option>`)}</select></label>
-          <label class="frow"><span>Files</span>${multiFile('files')}</label>
-          <label class="chk"><input type="checkbox" name="controlling" value="1"> Mark as the controlling drawing</label><label class="chk"><input type="checkbox" name="internal" value="1"> Internal only (hide from suppliers)</label>
-          <div class="form-actions"><button class="btn small">Upload</button><span class="muted small">PDF, images, Office, ZIP, STEP/STP, IGES, DXF, DWG, AI, STL · 20 MB each. Added in spec v${p.current_version}.</span></div></form></section>`;
+      const titles = P.fileTitles(files);
+      const groups = P.KIND_ORDER.map((k) => [k, files.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
+      const row = (f) => html`<li class="fl-row">
+          <div class="fl-thumb">${THUMB_OK.test(f.name) ? html`<img src="/admin/dev-files/${f.id}?inline=1" alt="" loading="lazy">` : html`<span aria-hidden="true">${kindIcon(f.kind)}</span>`}</div>
+          <div class="fl-main"><div class="fl-title" title="${f.name}">${titles.get(f.id)}${f.controlling ? html` <span class="pill s-selected">Controlling</span>` : ''}${f.internal ? html` <span class="pill s-closed">Internal only</span>` : ''}</div>
+            <div class="fl-meta">${P.extOf(f.name).slice(1).toUpperCase()} · ${bytes(f.bytes)} · added in v${f.version}${f.internal ? '' : ' · visible to suppliers'}</div></div>
+          <div class="fl-act">${P.INLINE_OK.test(f.name) ? html`<a href="/admin/dev-files/${f.id}?inline=1" target="_blank" rel="noopener">Preview</a>` : ''}<a href="/admin/dev-files/${f.id}">Download</a><button type="button" class="link" data-fl-toggle>Edit</button>
+            <form class="inline" method="post" action="/admin/projects/${p.id}/files/${f.id}/delete" data-confirm="Remove this file?"><button class="link danger">Remove</button></form></div>
+          <form class="fl-edit" method="post" action="/admin/projects/${p.id}/files/${f.id}/update" hidden>
+            <label class="frow"><span>Description</span><input name="label" maxlength="120" value="${f.label || ''}" placeholder="What is this file? e.g. Housing – 2D drawing rev B"></label>
+            <label class="frow"><span>Type</span><select name="kind">${Object.entries(P.FILE_KINDS).map(([k, l]) => html`<option value="${k}" ${k === f.kind ? raw('selected') : ''}>${l}</option>`)}</select></label>
+            <div class="fl-checks"><label class="chk"><input type="checkbox" name="controlling" value="1" ${f.controlling ? raw('checked') : ''}> Controlling drawing</label><label class="chk"><input type="checkbox" name="internal" value="1" ${f.internal ? raw('checked') : ''}> Internal only (hide from suppliers)</label></div>
+            <div class="form-actions"><button class="btn small">Save</button><button type="button" class="link" data-fl-toggle>Cancel</button></div></form></li>`;
+      body = html`<section class="card"><div class="fl-head"><h2 class="sec">Files <span class="count">${files.length}</span></h2><span class="muted small">Added in spec v${p.current_version}. Suppliers see the description, not the file name.</span></div>
+        ${files.length ? groups.map(([k, list]) => html`<div class="fl-group"><h3>${P.FILE_GROUPS[k][0]} <span class="count">${list.length}</span></h3><ul class="fl">${list.map(row)}</ul></div>`) : html`<p class="d-empty">No files yet. Add drawings (PDF, STEP, DXF…), reference images and specs, and say what each one is.</p>`}</section>
+        <section class="card"><h2 class="sec">Add files</h2>
+        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/files" class="doc-upload" data-upload>${multiFile('files', { describe: true })}
+          <div class="form-actions"><button class="btn" data-upload-btn disabled>Upload</button><span class="muted small">Describe each file so suppliers know what it is. PDF, images, Office, ZIP, STEP/STP, IGES, DXF, DWG, AI, STL · 20 MB each.</span></div></form></section>`;
     } else if (tab === 'suppliers') {
       const invited = new Set(invs.map((i) => i.supplier_id));
       body = html`<section class="card"><h2 class="sec">Invited suppliers</h2>
@@ -238,13 +251,28 @@ module.exports = function projectRoutes(router, { db, config }) {
     flash(res, 'ok', 'Project deleted'); res.redirect('/admin/projects');
   }));
 
+  // `label` (the plain-language description) needs the dev_files.label column; until the SQL is run, files still save without it.
+  const saveFile = async (row) => { try { return await db.insert('dev_files', row); } catch (e) { if (/label/i.test(String(e.message)) && 'label' in row) { const { label, ...rest } = row; return db.insert('dev_files', rest); } throw e; } };
   router.post('/admin/projects/:id/files', G(async (req, res) => {
     const p = await loadProject(req.params.id); const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 5 });
     const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
-    const kind = P.FILE_KINDS[f.kind] ? f.kind : 'other';
-    for (const a of r.saved) await db.insert('dev_files', { project_id: p.id, name: a.name, kind, mime: a.mime, bytes: a.size, path: a.path, version: p.current_version, controlling: f.controlling === '1' && kind === 'drawing', internal: f.internal === '1', created_at: now() });
+    let meta = []; try { meta = JSON.parse(f.meta || '[]'); if (!Array.isArray(meta)) meta = []; } catch { meta = []; }
+    for (const a of r.saved) {
+      const m = meta[a.i] || { kind: f.kind, controlling: f.controlling === '1', internal: f.internal === '1' }; const kind = P.FILE_KINDS[m.kind] ? m.kind : P.guessKind(a.name);
+      await saveFile({ project_id: p.id, name: a.name, kind, label: str(m.label, 120) || null, mime: a.mime, bytes: a.size, path: a.path, version: p.current_version, controlling: !!m.controlling && kind === 'drawing', internal: !!m.internal, created_at: now() });
+    }
     flash(res, r.errors.length ? 'warn' : 'ok', r.saved.length ? `${r.saved.length} file(s) added${r.errors.length ? ' · ' + r.errors.join(' · ') : ''}` : (r.errors.join(' · ') || 'Choose at least one file'));
     res.redirect(`/admin/projects/${p.id}?tab=files`);
+  }));
+  router.post('/admin/projects/:id/files/:fid/update', G(async (req, res) => {
+    const f = await db.get('dev_files', req.params.fid); const { fields: b } = await parseForm(req);
+    if (f && f.project_id === req.params.id) {
+      const kind = P.FILE_KINDS[b.kind] ? b.kind : f.kind;
+      const patch = { kind, label: str(b.label, 120) || null, controlling: b.controlling === '1' && kind === 'drawing', internal: b.internal === '1' };
+      try { await db.update('dev_files', { id: f.id }, patch); } catch (e) { if (!/label/i.test(String(e.message))) throw e; const { label, ...rest } = patch; await db.update('dev_files', { id: f.id }, rest); }
+      flash(res, 'ok', 'File updated');
+    }
+    res.redirect(`/admin/projects/${req.params.id}?tab=files`);
   }));
   router.post('/admin/projects/:id/files/:fid/delete', G(async (req, res) => {
     const f = await db.get('dev_files', req.params.fid);
@@ -363,7 +391,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     }
     if (!inv.viewed_at) await db.update('dev_invitations', { id: inv.id }, { viewed_at: now(), status: inv.status === 'Invited' ? 'Viewed' : inv.status });
     const [files, versions, msgs, quotes] = await Promise.all([db.list('dev_files', { filters: { project_id: p.id }, order: 'created_at.asc' }), db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc' }), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), db.list('dev_quotes', { filters: { invitation_id: inv.id }, order: 'revision.desc' })]);
-    const vis = files.filter((x) => !x.internal); const q = quotes[0]; const locked = ['Declined', 'Selected', 'Closed'].includes(inv.status);
+    const vis = files.filter((x) => !x.internal); const supTitles = P.fileTitles(vis, true); const q = quotes[0]; const locked = ['Declined', 'Selected', 'Closed'].includes(inv.status);
     const needAck = inv.ack_version < p.current_version;
     const val = (k) => (q ? q[k] ?? '' : '');
     res.html(page({ title: p.name, nav: nav(), flash: takeFlash(req, res), req, wide: true,
@@ -378,7 +406,7 @@ module.exports = function projectRoutes(router, { db, config }) {
             ${p.requirements ? html`<h3 class="sec2">${t('Requirements', '要求')}</h3><p class="pd-desc pre">${p.requirements}</p>` : ''}
             ${p.certifications ? html`<h3 class="sec2">${t('Certifications / standards', '认证 / 标准')}</h3><p class="pd-desc pre">${p.certifications}</p>` : ''}
             ${versions.length > 1 ? html`<details class="fold mt"><summary><b>${t('Change history', '变更记录')}</b></summary><ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></details>` : ''}</section>
-          <section class="card"><h2 class="sec">${t('Files', '文件')} (${vis.length})</h2>${vis.length ? html`<div class="table-wrap"><table class="list compact docs"><tbody>${vis.map((f) => html`<tr><td><span class="trunc" title="${f.name}">${f.name}</span>${f.controlling ? html` <span class="pill s-selected">${t('Controlling drawing', '主图纸')}</span>` : ''}<div class="sub">${P.FILE_KINDS[f.kind] || f.kind} · v${f.version} · ${bytes(f.bytes)}</div></td><td class="r nowrap">${P.INLINE_OK.test(f.name) ? html`<a href="/portal/projects/${inv.id}/files/${f.id}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a> · ` : ''}<a href="/portal/projects/${inv.id}/files/${f.id}">${t('Download', '下载')}</a></td></tr>`)}</tbody></table></div>` : html`<p class="d-empty">${t('No files yet.', '暂无文件。')}</p>`}</section>
+          <section class="card"><h2 class="sec">${t('Files', '文件')} <span class="count">${vis.length}</span></h2>${vis.length ? html`<ul class="fl">${vis.map((f) => html`<li class="fl-row"><div class="fl-thumb">${THUMB_OK.test(f.name) ? html`<img src="/portal/projects/${inv.id}/files/${f.id}?inline=1" alt="" loading="lazy">` : html`<span aria-hidden="true">${kindIcon(f.kind)}</span>`}</div><div class="fl-main"><div class="fl-title">${supTitles.get(f.id)}${f.controlling ? html` <span class="pill s-selected">${t('Controlling drawing', '主图纸')}</span>` : ''}</div><div class="fl-meta">${t(P.FILE_KINDS[f.kind] || f.kind, P.FILE_KINDS_ZH[f.kind] || f.kind)} · ${P.extOf(f.name).slice(1).toUpperCase()} · ${bytes(f.bytes)} · v${f.version}</div></div><div class="fl-act">${P.INLINE_OK.test(f.name) ? html`<a href="/portal/projects/${inv.id}/files/${f.id}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}<a href="/portal/projects/${inv.id}/files/${f.id}">${t('Download', '下载')}</a></div></li>`)}</ul>` : html`<p class="d-empty">${t('No files yet.', '暂无文件。')}</p>`}</section>
           <section class="card"><h2 class="sec">${t('Questions & answers', '问答')}</h2>
             <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? t('You', '您') : 'Lulyboo'}</b><span class="sub">${fmt.date(x.created_at)}</span></header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
             ${locked ? '' : html`<form method="post" enctype="multipart/form-data" action="/portal/projects/${inv.id}/message" class="fields mt"><label class="frow top"><span>${t('Message', '留言')}</span><textarea name="body" rows="3" required></textarea></label><label class="frow"><span>${t('Attach', '附件')}</span>${multiFile('files')}</label><div class="form-actions"><button class="btn">${t('Send', '发送')}</button></div></form>`}</section>

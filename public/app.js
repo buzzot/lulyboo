@@ -245,20 +245,49 @@
       var input = zone.querySelector('input[type=file]'), list = zone.querySelector('[data-list]'), note = zone.querySelector('[data-note]'), main = zone.querySelector('[data-main]');
       var box = zone.querySelector('.mdrop-box'), idle = main.innerHTML, dt = new DataTransfer();
       var allowed = (input.getAttribute('accept') || '').split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+      var describe = zone.hasAttribute('data-describe'), metaEl = zone.querySelector('[data-meta]');
+      var KINDS = [['drawing', 'Drawing / CAD', 'e.g. Housing – 2D drawing rev B'], ['image', 'Image / reference', 'e.g. Reference photo – colour and finish'], ['spec', 'Specification', 'e.g. Material and performance requirements'], ['certificate', 'Certificate / test report', 'e.g. Required test report (FCC / CE)'], ['other', 'Other', 'e.g. What is this file?']];
+      var guess = function (n) { var e = (n.match(/\.[^.]+$/) || [''])[0].toLowerCase(), l = n.toLowerCase();
+        if (/^\.(step|stp|iges?|dxf|dwg|ai|stl)$/.test(e) || /draw|cad/.test(l)) return 'drawing';
+        if (/^\.(png|jpe?g|webp|gif)$/.test(e)) return 'image';
+        if (/cert|test.?report|fcc|rohs|reach|astm|en71/.test(l)) return 'certificate';
+        if (/^\.(pdf|docx?|xlsx?|csv|txt|pptx?)$/.test(e)) return 'spec';
+        return 'other'; };
+      var meta = {}; // per file: kind, label, internal, controlling
+      var syncMeta = function () {
+        if (!metaEl) return;
+        metaEl.value = JSON.stringify(Array.prototype.map.call(dt.files, function (f) { var m = meta[key(f)] || {}; return { kind: m.kind || guess(f.name), label: m.label || '', internal: !!m.internal, controlling: !!m.controlling && (m.kind || guess(f.name)) === 'drawing' }; }));
+        var btn = zone.closest('form') && zone.closest('form').querySelector('[data-upload-btn]');
+        if (btn) { btn.disabled = !dt.files.length; btn.textContent = dt.files.length ? 'Upload ' + dt.files.length + ' file' + (dt.files.length > 1 ? 's' : '') : 'Upload'; }
+      };
       var render = function () {
         list.innerHTML = '';
         Array.prototype.forEach.call(dt.files, function (f, i) {
           var li = document.createElement('li');
-          li.innerHTML = '<span class="dz-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span><small>' + size(f.size) + '</small>';
+          var m = meta[key(f)] = meta[key(f)] || { kind: guess(f.name), label: '', internal: false, controlling: false };
+          if (describe) {
+            li.className = 'dz-item';
+            var opts = KINDS.map(function (k) { return '<option value="' + k[0] + '"' + (k[0] === m.kind ? ' selected' : '') + '>' + k[1] + '</option>'; }).join('');
+            li.innerHTML = '<div class="dz-top"><span class="dz-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span><small>' + size(f.size) + '</small></div>' +
+              '<div class="dz-fields"><label><span>Type</span><select data-k="kind">' + opts + '</select></label>' +
+              '<label class="grow"><span>What is this file?</span><input data-k="label" maxlength="120" value="' + esc(m.label) + '" placeholder="' + esc((KINDS.filter(function (k) { return k[0] === m.kind; })[0] || KINDS[4])[2]) + '"></label></div>' +
+              '<div class="dz-checks"><label class="chk"><input type="checkbox" data-k="internal"' + (m.internal ? ' checked' : '') + '> Internal only</label>' +
+              '<label class="chk"' + (m.kind === 'drawing' ? '' : ' hidden') + '><input type="checkbox" data-k="controlling"' + (m.controlling ? ' checked' : '') + '> Controlling drawing</label></div>';
+            li.addEventListener('input', function (e) { var k = e.target.getAttribute('data-k'); if (!k) return; m[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; syncMeta(); });
+            li.addEventListener('change', function (e) { if (e.target.getAttribute('data-k') === 'kind') { m.kind = e.target.value; if (m.kind !== 'drawing') m.controlling = false; render(); } });
+          } else {
+            li.innerHTML = '<span class="dz-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span><small>' + size(f.size) + '</small>';
+          }
           var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'dz-remove'; rm.setAttribute('aria-label', 'Remove'); rm.textContent = '×';
           rm.addEventListener('click', function (e) {
             e.preventDefault(); e.stopPropagation();
             var next = new DataTransfer(); Array.prototype.forEach.call(dt.files, function (g, j) { if (j !== i) next.items.add(g); });
             dt = next; input.files = dt.files; note.innerHTML = ''; render();
           });
-          li.appendChild(rm); list.appendChild(li);
+          if (describe) li.querySelector('.dz-top').appendChild(rm); else li.appendChild(rm); list.appendChild(li);
         });
         box.classList.toggle('has-files', dt.files.length > 0);
+        syncMeta();
         var n = dt.files.length;
         main.innerHTML = n ? L(n + ' file' + (n > 1 ? 's' : '') + ' ready. <u>Add more</u>', '已选择 ' + n + ' 个文件。<u>继续添加</u>') : idle;
       };
@@ -285,8 +314,10 @@
       zone.addEventListener('mouseenter', function () { last = zone; }); zone.addEventListener('focusin', function () { last = zone; });
       zone._add = add;
       // After a failed/validated submit the form is rebuilt by the server, so nothing to restore here.
+      var form = zone.closest('form'); if (form) form.addEventListener('submit', syncMeta);
       render();
     });
+    document.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-fl-toggle]'); if (!b) return; var row = b.closest('.fl-row'), f = row && row.querySelector('.fl-edit'); if (f) { f.hidden = !f.hidden; if (!f.hidden) { var i = f.querySelector('input[name=label]'); if (i) i.focus(); } } });
     // A near-miss drop must not make the browser open the file in this tab
     window.addEventListener('dragover', function (e) { if (hasFiles(e)) e.preventDefault(); });
     window.addEventListener('drop', function (e) { if (hasFiles(e) && !e.target.closest('[data-filebox]')) e.preventDefault(); });

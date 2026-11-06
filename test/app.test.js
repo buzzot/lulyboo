@@ -1433,6 +1433,15 @@ test('development projects: private threads, NDA, versions, quotes, milestones a
   const fd2 = new FormData(); fd2.append('kind', 'spec'); fd2.append('internal', '1'); fd2.append('files', new Blob(['internal']), 'cost-sheet.pdf');
   await fetch(`${base}/admin/projects/${proj.id}/files`, { method: 'POST', headers: { cookie: admin }, body: fd2, redirect: 'manual' });
   assert.equal(db.tables.dev_files.length, 2); assert.ok(db.tables.dev_files[0].controlling);
+  // described upload (per-file meta) and later edit: pages show the description, never the file name
+  const fd3 = new FormData(); fd3.append('meta', JSON.stringify([{ kind: 'image', label: 'Colour reference photo', internal: false }])); fd3.append('files', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'IMG_4471.png');
+  await fetch(`${base}/admin/projects/${proj.id}/files`, { method: 'POST', headers: { cookie: admin }, body: fd3, redirect: 'manual' });
+  const img = db.tables.dev_files.find((x) => x.name === 'IMG_4471.png'); assert.equal(img.kind, 'image'); assert.equal(img.label, 'Colour reference photo');
+  await req(base, 'POST', `/admin/projects/${proj.id}/files/${db.tables.dev_files[0].id}/update`, { cookie: admin, form: { label: 'Housing 2D drawing rev B', kind: 'drawing', controlling: '1' } });
+  assert.equal(db.tables.dev_files[0].label, 'Housing 2D drawing rev B');
+  const filesTab = await req(base, 'GET', `/admin/projects/${proj.id}?tab=files`, { cookie: admin });
+  assert.match(filesTab.text, /Housing 2D drawing rev B/); assert.match(filesTab.text, /Colour reference photo/); assert.doesNotMatch(filesTab.text, />\s*drawing-A\.pdf\s*</); assert.doesNotMatch(filesTab.text, />\s*IMG_4471\.png\s*</);
+  db.tables.dev_files.splice(db.tables.dev_files.indexOf(img), 1);
 
   // invite both suppliers
   await req(base, 'POST', `/admin/projects/${proj.id}/invite`, { cookie: admin, body: new URLSearchParams([['supplier_ids', A.s.id], ['supplier_ids', B.s.id], ['message', 'Please quote']]).toString().length ? undefined : undefined, form: { supplier_ids: A.s.id, message: 'Please quote' } });
@@ -1446,7 +1455,7 @@ test('development projects: private threads, NDA, versions, quotes, milestones a
   assert.equal((await req(base, 'GET', `/portal/projects/${invA.id}/files/${db.tables.dev_files[0].id}`, { cookie: A.c })).status, 403);
   await req(base, 'POST', `/portal/projects/${invA.id}/nda`, { cookie: A.c, form: { agree: '1' } });
   const view = await req(base, 'GET', `/portal/projects/${invA.id}`, { cookie: A.c });
-  assert.match(view.text, /BPA-free PP/); assert.match(view.text, /drawing-A\.pdf/); assert.match(view.text, /Motor warranty/);
+  assert.match(view.text, /BPA-free PP/); assert.match(view.text, /Housing 2D drawing rev B/); assert.doesNotMatch(view.text, />\s*drawing-A\.pdf\s*</); assert.match(view.text, /Motor warranty/);
   assert.doesNotMatch(view.text, /SECRET-NOTE|cost-sheet|4\.5|Factory B/);
   assert.equal(db.tables.dev_invitations.find((i) => i.id === invA.id).status, 'Viewed');
   assert.equal((await req(base, 'GET', `/portal/projects/${invA.id}/files/${db.tables.dev_files[1].id}`, { cookie: A.c })).status, 404, 'internal file hidden');
