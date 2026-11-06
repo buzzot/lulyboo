@@ -36,6 +36,9 @@ const multiFile = (name = 'files', { describe = false } = {}) => html`<div class
   </div>
   ${describe ? html`<input type="hidden" name="meta" value="[]" data-meta>` : ''}
   <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`;
+const COUNTRY = { cn: 'China', chn: 'China', china: 'China', prc: 'China', us: 'USA', usa: 'USA', vn: 'Vietnam', vietnam: 'Vietnam', in: 'India', india: 'India', tw: 'Taiwan', taiwan: 'Taiwan', hk: 'Hong Kong', 'hong kong': 'Hong Kong', th: 'Thailand', thailand: 'Thailand', kr: 'South Korea', mx: 'Mexico', tr: 'Turkey' };
+const countryName = (c) => (c ? COUNTRY[String(c).trim().toLowerCase()] || String(c).trim() : '');
+const initials = (n) => String(n || '?').replace(/\(.*?\)/g, '').split(/[\s,.-]+/).filter((w) => /^[a-z0-9]/i.test(w) && !/^(co|ltd|inc|llc|the)$/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 const THUMB_OK = /\.(png|jpe?g|webp|gif)$/i;
 const kindIcon = (k) => ({ drawing: '📐', image: '🖼️', spec: '📄', certificate: '✅', other: '📎' }[k] || '📎');
 const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att">${list.map((a, i) => html`<li><a href="${hrefOf(i)}">${a.name}</a> <span class="sub">${bytes(a.size)}</span>${P.INLINE_OK.test(a.name) ? html` · <a href="${hrefOf(i)}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}</li>`)}</ul>` : '');
@@ -115,7 +118,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const [invs, files, versions, miles, suppliers, allQuotes, msgs] = await Promise.all([
       db.list('dev_invitations', { filters: { project_id: p.id }, order: 'created_at.asc' }), db.list('dev_files', { filters: { project_id: p.id }, order: 'created_at.asc' }),
       db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc' }), db.list('dev_milestones', { filters: { project_id: p.id }, order: 'sort.asc,due_date.asc' }),
-      db.list('suppliers', { select: 'id,name,country,email', order: 'name.asc' }), db.list('dev_quotes', { order: 'revision.desc' }), db.list('dev_messages', { order: 'created_at.desc' }),
+      db.list('suppliers', { select: 'id,name,country,email,active', order: 'name.asc' }), db.list('dev_quotes', { order: 'revision.desc' }), db.list('dev_messages', { order: 'created_at.desc' }),
     ]);
     const sname = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     const invIds = new Set(invs.map((i) => i.id));
@@ -174,6 +177,7 @@ module.exports = function projectRoutes(router, { db, config }) {
           <div class="form-actions"><button class="btn" data-upload-btn disabled>Upload</button><span class="muted small">Describe each file so suppliers know what it is. PDF, images, Office, ZIP, STEP/STP, IGES, DXF, DWG, AI, STL · 20 MB each.</span></div></form></section>`;
     } else if (tab === 'suppliers') {
       const invited = new Set(invs.map((i) => i.supplier_id));
+      const pickList = suppliers.filter((x) => x.active !== false || invited.has(x.id));
       body = html`<section class="card"><h2 class="sec">Invited suppliers</h2>
         ${invs.length ? html`<div class="table-wrap"><table class="list"><thead><tr><th>Supplier</th><th>Status</th><th>Spec</th><th>Quote</th><th>Last message</th><th></th></tr></thead><tbody>
           ${invs.map((i) => { const q = quotesBy[i.id]; const lm = lastMsg[i.id]; return html`<tr><td><a class="sp-name" href="/admin/projects/${p.id}/suppliers/${i.id}">${sname[i.supplier_id] || 'Supplier'}</a>${p.nda_required ? html`<div class="sub">${i.nda_accepted_at ? `NDA accepted ${fmt.date(i.nda_accepted_at)}` : html`<span class="neg">NDA not accepted</span>`}</div>` : ''}</td>
@@ -181,10 +185,23 @@ module.exports = function projectRoutes(router, { db, config }) {
             <td>${q ? html`${fmt.money(q.tiers?.[0]?.price, q.currency)}<div class="sub">rev ${q.revision}${q.spec_version < p.current_version ? ` · on v${q.spec_version}` : ''}</div>` : html`<span class="none">—</span>`}</td>
             <td>${lm ? html`<span class="sub">${lm.direction === 'supplier' ? 'Supplier' : 'You'} · ${fmt.date(lm.created_at)}</span>` : html`<span class="none">—</span>`}</td><td class="r"><a class="btn ghost small" href="/admin/projects/${p.id}/suppliers/${i.id}">Open thread</a></td></tr>`; })}</tbody></table></div>` : html`<p class="d-empty">No suppliers invited yet.</p>`}</section>
         <section class="card"><h2 class="sec">Invite suppliers</h2>
-          <form method="post" action="/admin/projects/${p.id}/invite" class="fields"><div class="frow top"><span>Suppliers</span><div class="sup-pick">${suppliers.filter((s) => !invited.has(s.id)).map((s) => html`<label class="chk"><input type="checkbox" name="supplier_ids" value="${s.id}"> ${s.name}${s.country ? html` <span class="sub">${s.country}</span>` : ''}</label>`)}${suppliers.every((s) => invited.has(s.id)) ? html`<span class="sub">All suppliers are already invited.</span>` : ''}</div></div>
+          <form method="post" action="/admin/projects/${p.id}/invite" class="fields inv-form" data-invite>
+            <div class="frow top"><span>Suppliers</span><div class="pick-sel">
+              <div class="pick-chips" data-picked></div>
+              <p class="sub" data-pick-none>No suppliers selected yet.</p>
+              <button type="button" class="btn ghost small" data-pick-open>+ Choose suppliers</button></div></div>
+            <dialog class="pick-dlg" data-pick-dlg aria-label="Choose suppliers">
+              <div class="pick-head"><div class="pick-title"><h3>Choose suppliers</h3><button type="button" class="pick-x" data-pick-done aria-label="Close">×</button></div>
+                <input type="search" class="pick-q" placeholder="Search by name, country or email" autocomplete="off" data-pick-q>
+                <div class="pick-bar"><label class="chk"><input type="checkbox" data-pick-all> Select all shown</label><span class="sub" data-pick-count></span></div></div>
+              <ul class="pick-list">${pickList.map((s) => html`<li${invited.has(s.id) ? raw(' class="is-invited"') : ''}><label><input type="checkbox" ${invited.has(s.id) ? raw('disabled') : raw('name="supplier_ids"')} value="${s.id}" data-name="${s.name}" data-q="${[s.name, s.country, countryName(s.country), s.email].filter(Boolean).join(' ').toLowerCase()}">
+                <span class="pk-av" aria-hidden="true">${initials(s.name)}</span><span class="pk-main"><b>${s.name}</b><span class="sub">${[countryName(s.country), s.email].filter(Boolean).join(' · ')}</span></span>${invited.has(s.id) ? html`<span class="pill">Invited</span>` : ''}</label></li>`)}</ul>
+              <p class="pick-empty" data-pick-empty hidden>No suppliers match your search.</p>
+              <div class="pick-foot"><button type="button" class="link" data-pick-clear>Clear selection</button><button type="button" class="btn" data-pick-done>Done</button></div>
+            </dialog>
             <label class="frow top"><span>Message</span><textarea name="message" rows="3" placeholder="Short note to the supplier (optional)"></textarea></label>
             <label class="chk"><input type="checkbox" name="send_email" value="1" checked> Email the invitation now</label>
-            <div class="form-actions"><button class="btn">Invite selected</button><span class="muted small">Each supplier gets its own private thread. They cannot see each other.${p.status === 'Draft' ? ' The project moves to Sourcing.' : ''}</span></div></form></section>`;
+            <div class="form-actions"><button class="btn" data-invite-btn>Invite selected</button><span class="muted small">Each supplier gets its own private thread. They cannot see each other.${p.status === 'Draft' ? ' The project moves to Sourcing.' : ''}</span></div></form></section>`;
     } else if (tab === 'quotes') {
       const rows = invs.map((i) => ({ i, q: quotesBy[i.id] })).filter((x) => x.q);
       const labels = [...new Set(rows.flatMap((x) => (x.q.custom || []).map((c) => c.label)))];

@@ -330,6 +330,42 @@
     });
   })();
 
+  // Supplier picker (development project invites): popup with search, select all shown, chips for the selection.
+  (function () {
+    var form = document.querySelector('[data-invite]'); if (!form) return;
+    var dlg = form.querySelector('[data-pick-dlg]'), q = form.querySelector('[data-pick-q]'), all = form.querySelector('[data-pick-all]');
+    var boxes = Array.prototype.slice.call(dlg.querySelectorAll('input[name=supplier_ids]'));
+    var chips = form.querySelector('[data-picked]'), none = form.querySelector('[data-pick-none]'), count = form.querySelector('[data-pick-count]');
+    var empty = form.querySelector('[data-pick-empty]'), btn = form.querySelector('[data-invite-btn]'), open = form.querySelector('[data-pick-open]');
+    var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var shown = function () { return boxes.filter(function (b) { return !b.closest('li').hidden; }); };
+    var sync = function () {
+      var sel = boxes.filter(function (b) { return b.checked; });
+      chips.innerHTML = sel.map(function (b) { return '<span class="pick-chip">' + esc(b.getAttribute('data-name')) + '<button type="button" data-unpick="' + esc(b.value) + '" aria-label="Remove">×</button></span>'; }).join('');
+      none.hidden = sel.length > 0;
+      count.textContent = sel.length + ' selected';
+      open.textContent = sel.length ? 'Change selection' : '+ Choose suppliers';
+      btn.disabled = !sel.length; btn.textContent = sel.length ? 'Invite ' + sel.length + ' supplier' + (sel.length > 1 ? 's' : '') : 'Invite selected';
+      var vis = shown(); all.checked = vis.length > 0 && vis.every(function (b) { return b.checked; }); all.indeterminate = !all.checked && vis.some(function (b) { return b.checked; });
+    };
+    var filter = function () {
+      var words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean), n = 0;
+      dlg.querySelectorAll('.pick-list li').forEach(function (li) { var h = li.querySelector('input').getAttribute('data-q'); var ok = words.every(function (w) { return h.indexOf(w) >= 0; }); li.hidden = !ok; if (ok) n++; });
+      empty.hidden = n > 0; sync();
+    };
+    open.addEventListener('click', function () { if (dlg.showModal) dlg.showModal(); q.focus(); q.select(); });
+    dlg.querySelectorAll('[data-pick-done]').forEach(function (b) { b.addEventListener('click', function () { dlg.close(); }); });
+    dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+    form.querySelector('[data-pick-clear]').addEventListener('click', function () { boxes.forEach(function (b) { b.checked = false; }); sync(); });
+    q.addEventListener('input', filter);
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var v = shown(); if (v.length === 1) { v[0].checked = !v[0].checked; sync(); } } });
+    all.addEventListener('change', function () { shown().forEach(function (b) { b.checked = all.checked; }); sync(); });
+    boxes.forEach(function (b) { b.addEventListener('change', sync); });
+    chips.addEventListener('click', function (e) { var id = e.target.getAttribute && e.target.getAttribute('data-unpick'); if (!id) return; boxes.forEach(function (b) { if (b.value === id) b.checked = false; }); sync(); });
+    form.addEventListener('submit', function (e) { if (!boxes.some(function (b) { return b.checked; })) { e.preventDefault(); open.click(); } });
+    sync();
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

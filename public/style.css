@@ -1071,3 +1071,28 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .dz-checks{display:flex;gap:16px;margin-top:8px;flex-wrap:wrap;font-size:13px}.dz-checks [hidden]{display:none}
 .doc-upload .form-actions{margin-top:12px}
 .doc-upload{max-width:none;width:100%}.doc-upload .mdrop{max-width:820px}
+
+/* Supplier picker popup */
+.pick-sel{display:grid;gap:8px;justify-items:start;min-width:0}.pick-sel .sub{margin:0}
+.pick-chips{display:flex;flex-wrap:wrap;gap:6px}.pick-chips:empty{display:none}
+.pick-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-radius:999px;background:var(--brand-soft,#fdf1ee);border:1px solid var(--brand-line,#e3c3bc);font-size:13.5px;font-weight:550}
+.pick-chip button{border:0;background:#fff;width:20px;height:20px;border-radius:50%;cursor:pointer;color:var(--brand);line-height:1;font-size:15px}
+.pick-dlg{width:min(640px,calc(100vw - 24px));max-height:min(720px,calc(100vh - 40px));padding:0;border:0;border-radius:16px;box-shadow:0 24px 60px rgba(40,20,15,.25);overflow:hidden}
+.pick-dlg[open]{display:flex;flex-direction:column}
+.pick-dlg::backdrop{background:rgba(30,20,18,.45)}
+.pick-head{padding:18px 20px 10px;border-bottom:1px solid var(--line,#eadfdc);display:grid;gap:10px}
+.pick-title{display:flex;align-items:center;justify-content:space-between}.pick-title h3{margin:0;font-size:18px}
+.pick-x{border:0;background:#f4ecea;width:32px;height:32px;border-radius:50%;font-size:20px;line-height:1;cursor:pointer;color:var(--muted)}
+.pick-q{width:100%;box-sizing:border-box;font-size:15px;padding:10px 12px}
+.pick-bar{display:flex;justify-content:space-between;align-items:center;font-size:13.5px}
+.pick-list{list-style:none;margin:0;padding:6px 8px;overflow:auto;flex:1;min-height:120px}
+.pick-list li[hidden]{display:none}
+.pick-list label{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;cursor:pointer}
+.pick-list label:hover{background:#faf4f2}
+.pick-list input{flex:none;width:17px;height:17px;accent-color:var(--brand)}
+.pick-list li:has(input:checked) label{background:var(--brand-soft,#fdf1ee)}
+.pick-list .is-invited label{cursor:default;opacity:.55}
+.pk-av{flex:none;width:34px;height:34px;border-radius:9px;background:#f1e6e3;color:var(--brand);display:grid;place-items:center;font-size:12.5px;font-weight:700}
+.pk-main{display:grid;min-width:0;flex:1}.pk-main b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pk-main .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick-empty{text-align:center;color:var(--muted);padding:24px}
+.pick-foot{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid var(--line,#eadfdc);background:#fcf9f8}
