@@ -231,6 +231,74 @@
   }
   })();
 
+  // Multi-file drop box (development projects): drag & drop, choose, or paste screenshots / copied files.
+  (function () {
+    var zones = Array.prototype.slice.call(document.querySelectorAll('[data-filebox]'));
+    if (!zones.length || !window.DataTransfer) return;
+    var MAXB = 20 * 1024 * 1024, MAXN = 20, last = null;
+    var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var size = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; };
+    var key = function (f) { return f.name + '|' + f.size + '|' + f.lastModified; };
+    var stamp = function () { var d = new Date(), p = function (n) { return ('0' + n).slice(-2); }; return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()); };
+    var hasFiles = function (e) { var t = e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0; };
+    zones.forEach(function (zone) {
+      var input = zone.querySelector('input[type=file]'), list = zone.querySelector('[data-list]'), note = zone.querySelector('[data-note]'), main = zone.querySelector('[data-main]');
+      var box = zone.querySelector('.mdrop-box'), idle = main.innerHTML, dt = new DataTransfer();
+      var allowed = (input.getAttribute('accept') || '').split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+      var render = function () {
+        list.innerHTML = '';
+        Array.prototype.forEach.call(dt.files, function (f, i) {
+          var li = document.createElement('li');
+          li.innerHTML = '<span class="dz-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span><small>' + size(f.size) + '</small>';
+          var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'dz-remove'; rm.setAttribute('aria-label', 'Remove'); rm.textContent = '×';
+          rm.addEventListener('click', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            var next = new DataTransfer(); Array.prototype.forEach.call(dt.files, function (g, j) { if (j !== i) next.items.add(g); });
+            dt = next; input.files = dt.files; note.innerHTML = ''; render();
+          });
+          li.appendChild(rm); list.appendChild(li);
+        });
+        box.classList.toggle('has-files', dt.files.length > 0);
+        var n = dt.files.length;
+        main.innerHTML = n ? L(n + ' file' + (n > 1 ? 's' : '') + ' ready. <u>Add more</u>', '已选择 ' + n + ' 个文件。<u>继续添加</u>') : idle;
+      };
+      var add = function (files) {
+        var skipped = [], have = {};
+        Array.prototype.forEach.call(dt.files, function (f) { have[key(f)] = 1; });
+        Array.prototype.forEach.call(files, function (f) {
+          if (/^image\/(png|jpeg)$/.test(f.type) && /^image\.(png|jpe?g)$/i.test(f.name)) f = new File([f], 'pasted-image-' + stamp() + (f.type === 'image/png' ? '.png' : '.jpg'), { type: f.type, lastModified: Date.now() });
+          var ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+          if (allowed.length && allowed.indexOf(ext) < 0) { skipped.push(f.name + ' (type not allowed)'); return; }
+          if (f.size > MAXB) { skipped.push(f.name + ' (over 20 MB)'); return; }
+          if (have[key(f)]) return;
+          if (dt.files.length >= MAXN) { skipped.push(f.name + ' (limit ' + MAXN + ' files)'); return; }
+          dt.items.add(f); have[key(f)] = 1;
+        });
+        input.files = dt.files;
+        note.innerHTML = skipped.length ? L('Skipped: ' + esc(skipped.join(', ')), '已跳过：' + esc(skipped.join('，'))) : '';
+        render();
+      };
+      input.addEventListener('change', function () { var picked = Array.prototype.slice.call(input.files); input.files = dt.files; add(picked); });
+      ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function (e) { if (!hasFiles(e)) return; e.preventDefault(); box.classList.add('over'); }); });
+      ['dragleave', 'dragend'].forEach(function (ev) { zone.addEventListener(ev, function () { box.classList.remove('over'); }); });
+      zone.addEventListener('drop', function (e) { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); box.classList.remove('over'); last = zone; add(e.dataTransfer.files); });
+      zone.addEventListener('mouseenter', function () { last = zone; }); zone.addEventListener('focusin', function () { last = zone; });
+      zone._add = add;
+      // After a failed/validated submit the form is rebuilt by the server, so nothing to restore here.
+      render();
+    });
+    // A near-miss drop must not make the browser open the file in this tab
+    window.addEventListener('dragover', function (e) { if (hasFiles(e)) e.preventDefault(); });
+    window.addEventListener('drop', function (e) { if (hasFiles(e) && !e.target.closest('[data-filebox]')) e.preventDefault(); });
+    document.addEventListener('paste', function (e) {
+      var cd = e.clipboardData; if (!cd || !cd.files || !cd.files.length) return; // plain text pastes are left alone
+      var form = e.target && e.target.closest && e.target.closest('form');
+      var zone = (form && form.querySelector('[data-filebox]')) || last || (zones.length === 1 ? zones[0] : null);
+      if (!zone) return;
+      e.preventDefault(); zone._add(cd.files);
+    });
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

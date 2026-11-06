@@ -26,7 +26,15 @@ const serve = (res, buf, name, type, inline) => {
   res.setHeader('Content-Disposition', `${inline && P.INLINE_OK.test(name) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
   res.end(buf);
 };
-const multiFile = (name = 'files') => html`<input type="file" name="${name}" multiple class="multi-file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.step,.stp,.igs,.iges,.dxf,.dwg,.ai,.stl,.pptx">`;
+const FILE_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.step,.stp,.igs,.iges,.dxf,.dwg,.ai,.stl,.pptx';
+// Multi-file upload box: drag & drop, click to choose, or paste (screenshots / copied files). Still a plain file input without JS.
+const multiFile = (name = 'files') => html`<div class="mdrop" data-filebox>
+  <div class="mdrop-box"><input type="file" name="${name}" multiple accept="${FILE_ACCEPT}" aria-label="Choose files">
+    <span class="dz-icon" aria-hidden="true">⬆</span>
+    <span class="dz-main" data-main>${t('Drag & drop files here, paste a screenshot, or choose files', '将文件拖到此处、粘贴截图，或点击选择文件')}</span>
+    <span class="dz-hint">${t('PDF, STEP, DXF, images, Office files · up to 20 MB each', 'PDF、STEP、DXF、图片、Office 文件 · 每个最大 20 MB')}</span>
+  </div>
+  <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`;
 const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att">${list.map((a, i) => html`<li><a href="${hrefOf(i)}">${a.name}</a> <span class="sub">${bytes(a.size)}</span>${P.INLINE_OK.test(a.name) ? html` · <a href="${hrefOf(i)}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}</li>`)}</ul>` : '');
 
 function quoteCards(q, project, { admin = false } = {}) {
