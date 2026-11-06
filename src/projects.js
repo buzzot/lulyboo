@@ -1,7 +1,7 @@
 'use strict';
 // Product development projects: shared helpers (files, refs, notifications, milestone reminders).
 const crypto = require('node:crypto');
-const { sendEmail } = require('./email');
+const { sendEmail, projectEmail } = require('./email');
 const tg = require('./telegram');
 
 const PROJECT_STATUSES = ['Draft', 'Sourcing', 'Sampling', 'Testing', 'Pilot', 'Completed', 'On hold', 'Cancelled'];
@@ -72,9 +72,10 @@ async function supplierRecipients(db, supplier) {
   const users = await db.list('supplier_users', { filters: { supplier_id: supplier.id } });
   return [...new Set([supplier.email, ...users.filter((u) => u.status !== 'disabled').map((u) => u.email)].filter(Boolean).map((e) => e.toLowerCase()))];
 }
-async function notifySupplier(config, db, supplier, { subject, en, zh, link }) {
+async function notifySupplier(config, db, supplier, { subject, en, zh, link, email }) {
   try {
     const to = await supplierRecipients(db, supplier); if (!to.length) return false;
+    if (email) { const e = projectEmail({ ...email, companyName: supplier.name, link }); await sendEmail(config, { to, subject, text: e.text, html: e.html, cc: ownerEmails() }); return true; }
     const text = `${en}\n\nOpen in the supplier portal: ${link}\n\n${zh}\n\n在供应商平台中查看：${link}`;
     await sendEmail(config, { to, subject, text, cc: ownerEmails() });
     return true;

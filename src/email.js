@@ -35,6 +35,7 @@ async function sendEmail(config, { to, subject, text, html, cc, replyTo }) {
   return { dev: false, id: sent.id || null };
 }
 
+const siteUrl = () => (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'https://lulyboo.space')).replace(/\/$/, '');
 const FONT = "Arial,'Microsoft YaHei','PingFang SC',sans-serif";
 
 /** Shared layout: brand header, body rows, footer. `preheader` is the hidden inbox preview text. */
@@ -44,8 +45,10 @@ const layout = ({ preheader, body }) => `<!doctype html>
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(preheader)}</div>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#ffffff;"><tr><td align="center" style="padding:40px 20px;">
 <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:560px;">
-<tr><td style="padding:0 0 25px;border-bottom:1px solid #e8e9eb;"><span style="color:#de7367;font-size:30px;line-height:36px;font-weight:700;">Lulyboo</span>
-<div style="margin-top:6px;font-size:12px;line-height:18px;color:#73777d;">SUPPLIER PORTAL · 供应商平台</div></td></tr>
+<tr><td style="padding:0 0 22px;border-bottom:1px solid #e8e9eb;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>
+<td style="padding:0 12px 0 0;vertical-align:middle;"><img src="${siteUrl()}/static/email-logo.png" width="48" height="46" alt="" style="display:block;border:0;width:48px;height:46px;"></td>
+<td style="vertical-align:middle;"><span style="color:#de7367;font-size:28px;line-height:32px;font-weight:700;">Lulyboo</span>
+<div style="margin-top:3px;font-size:12px;line-height:16px;color:#73777d;">SUPPLIER PORTAL · 供应商平台</div></td></tr></table></td></tr>
 ${body}
 <tr><td style="border-top:1px solid #e8e9eb;padding:22px 0 0;">
 <p style="margin:0;font-size:11px;line-height:19px;color:#858990;">If you weren't expecting this email, you can ignore it.</p>
@@ -141,4 +144,34 @@ function staffInviteEmail({ link, name, reset }) {
   };
 }
 
-module.exports = { staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+/**
+ * Development project notices to a supplier (invitation, spec update, new message), in the same layout as the other emails.
+ * title/lead/button are [en, zh]; `note` is free text from Lulyboo shown in a highlighted box; `points` is a list of [en, zh].
+ */
+function projectEmail({ ref, project, companyName, title, lead, noteLabel, note, points = [], button, link }) {
+  const p = (x, zh) => `<p style="margin:${zh ? '6px' : '0'} 0 0;font-size:15px;line-height:${zh ? 26 : 25}px;${zh ? 'color:#62676e;' : ''}"${zh ? ' lang="zh-CN"' : ''}>${x}</p>`;
+  const paras = (t) => esc(t).split(/\n{2,}/).map((x) => x.replace(/\n/g, '<br>')).join('<br><br>');
+  const text = `${companyName ? `Hello ${companyName},\n\n` : ''}${lead[0]} "${project}" (${ref})${note ? `\n\n${noteLabel ? noteLabel[0] + ':\n' : ''}${note}` : ''}${points.length ? `\n\n${points.map((x) => `- ${x[0]}`).join('\n')}` : ''}\n\n${button[0]}: ${link}\n\n${companyName ? '您好，\n\n' : ''}${lead[1]}“${project}”（${ref}）${points.length ? `\n\n${points.map((x) => `- ${x[1]}`).join('\n')}` : ''}\n\n${button[1]}：${link}`;
+  return {
+    text,
+    html: layout({
+      preheader: `${title[0]}: ${project} · ${title[1]}`,
+      body: `<tr><td style="padding:32px 0 0;"><h1 style="margin:0;font-size:27px;line-height:36px;font-weight:600;">${esc(title[0])}</h1>
+<p style="margin:8px 0 0;font-size:18px;line-height:28px;color:#73777d;" lang="zh-CN">${esc(title[1])}</p>
+<p style="margin:10px 0 0;font-size:12px;line-height:18px;color:#73777d;">Project ${esc(ref)} · 项目编号 ${esc(ref)}</p></td></tr>
+<tr><td style="padding:25px 0 0;">${companyName ? `<p style="margin:0 0 12px;font-size:15px;line-height:25px;">Hello ${esc(companyName)}, <span style="color:#62676e;" lang="zh-CN">您好，</span></p>` : ''}
+${p(esc(lead[0]))}${p(esc(lead[1]), true)}
+<div style="margin:16px 0 0;padding:14px 18px;background:#faf6f5;border:1px solid #f0dcd9;border-radius:6px;font-size:17px;line-height:24px;font-weight:600;">${esc(project)}</div></td></tr>
+${note ? `<tr><td style="padding:20px 0 0;"><div style="padding:16px 18px;background:#fdf3f1;border-left:3px solid #de7367;border-radius:4px;">
+${noteLabel ? `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#73777d;text-transform:uppercase;letter-spacing:.04em;">${esc(noteLabel[0])} · ${esc(noteLabel[1])}</p>` : ''}
+<p style="margin:0;font-size:15px;line-height:24px;">${paras(note)}</p></div></td></tr>` : ''}
+${points.length ? `<tr><td style="padding:20px 0 0;"><ul style="margin:0;padding-left:20px;font-size:15px;line-height:24px;">${points.map((x) => `<li style="margin:0 0 8px;">${esc(x[0])}<br><span style="color:#62676e;" lang="zh-CN">${esc(x[1])}</span></li>`).join('')}</ul></td></tr>` : ''}
+<tr><td style="padding:26px 0 0;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
+<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:15px 25px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(button[0])} · ${esc(button[1])}</a></td></tr></table></td></tr>
+<tr><td style="padding:24px 0 30px;"><p style="margin:0;font-size:12px;line-height:21px;color:#73777d;">If the button doesn't work, <a href="${esc(link)}" style="color:#62676e;text-decoration:underline;">open the project in the supplier portal</a>.</p>
+<p style="margin:3px 0 0;font-size:12px;line-height:21px;color:#73777d;" lang="zh-CN">如果按钮无法打开，请<a href="${esc(link)}" style="color:#62676e;text-decoration:underline;">点击此处在供应商平台中查看</a>。</p></td></tr>`,
+    }),
+  };
+}
+
+module.exports = { projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
