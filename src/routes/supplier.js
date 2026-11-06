@@ -23,6 +23,7 @@ function nav(active) {
       { href: b, icon: 'package', label: t('My products', '我的产品'), active: active === 'home' },
       { href: `${b}/products/new`, icon: 'plus', label: t('Add product', '新增产品'), active: active === 'new' },
       { href: `${b}/import`, icon: 'upload', label: t('Bulk upload', '批量上传'), active: active === 'import' },
+      { href: `${b}/projects`, icon: 'clipboard', label: t('Development projects', '开发项目'), active: active === 'projects' },
       { href: `${b}/profile`, icon: 'building', label: t('Company', '公司信息'), active: active === 'profile' },
       { href: `${b}/account`, icon: 'user', label: t('Account', '账号'), active: active === 'account' },
       { href: '/logout', out: true, label: t('Sign out', '退出') },
@@ -34,7 +35,9 @@ const draftMsg = (r) => m(`Draft saved${photosMsg(r.saved)}. Finish and submit i
 const submittedMsg = (r) => m(`Submitted for review${photosMsg(r.saved)}. Thank you!`, `已提交审核${r.saved ? `（${r.saved} 张图片）` : ''}，谢谢！`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 const savedMsg = (r, plus) => m(`Saved${photosMsg(r.saved, plus)}`, `已保存${r.saved ? `（${plus ? '新增' : ''}${r.saved} 张图片）` : ''}`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 
-module.exports = function supplierRoutes(router, { db, config }) {
+module.exports = supplierRoutes;
+module.exports.nav = nav;
+function supplierRoutes(router, { db, config }) {
   // Each handler is wrapped: no valid session → redirect to sign-in.
   const A = (fn) => async (req, res) => {
     const cur = await currentSupplierUser(db, config, req);

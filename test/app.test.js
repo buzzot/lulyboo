@@ -1406,3 +1406,97 @@ test('product workspace: five tabs, split saves, product documents and inline pr
   assert.equal(db.tables.product_images.find((i) => i.id === 'i2').sort, 0);
   assert.equal(db.tables.product_images.find((i) => i.id === 'i1').sort, 1);
 });
+
+test('development projects: private threads, NDA, versions, quotes, milestones and reminders', async (t) => {
+  const { hashPassword } = require('../src/auth');
+  const P = require('../src/projects');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const mk = async (name, email) => {
+    const s = await db.insert('suppliers', { name, email, active: true });
+    await db.insert('supplier_users', { supplier_id: s.id, email, name, status: 'active', password_hash: await hashPassword('correct horse battery') });
+    const c = (await req(base, 'POST', '/login', { form: { email, password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
+    return { s, c };
+  };
+  const A = await mk('Factory A', 'a@a.com'); const B = await mk('Factory B', 'b@b.com');
+
+  // create project + spec + file
+  const created = await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'Cat fountain', category: 'Pet', summary: 'Quiet pump fountain' } });
+  const proj = db.tables.dev_projects[0]; assert.match(created.location, /^\/admin\/projects\//); assert.equal(proj.ref, 'DP-1001');
+  await req(base, 'POST', `/admin/projects/${proj.id}`, { cookie: admin, form: { name: 'Cat fountain', requirements: 'BPA-free PP, 2L', certifications: 'ASTM F963', extra_fields: 'Motor warranty\nRecycled %', target_price_usd: '4.5', internal_notes: 'SECRET-NOTE', nda_required: '1', status: 'Draft' } });
+  assert.equal(db.tables.dev_projects[0].extra_fields.length, 2);
+  const fd = new FormData(); fd.append('kind', 'drawing'); fd.append('controlling', '1'); fd.append('files', new Blob(['%PDF-1.4 d']), 'drawing-A.pdf');
+  fd.append('files', new Blob(['x']), 'bad.exe');
+  assert.equal((await fetch(`${base}/admin/projects/${proj.id}/files`, { method: 'POST', headers: { cookie: admin }, body: fd, redirect: 'manual' })).status, 303);
+  const fd2 = new FormData(); fd2.append('kind', 'spec'); fd2.append('internal', '1'); fd2.append('files', new Blob(['internal']), 'cost-sheet.pdf');
+  await fetch(`${base}/admin/projects/${proj.id}/files`, { method: 'POST', headers: { cookie: admin }, body: fd2, redirect: 'manual' });
+  assert.equal(db.tables.dev_files.length, 2); assert.ok(db.tables.dev_files[0].controlling);
+
+  // invite both suppliers
+  await req(base, 'POST', `/admin/projects/${proj.id}/invite`, { cookie: admin, body: new URLSearchParams([['supplier_ids', A.s.id], ['supplier_ids', B.s.id], ['message', 'Please quote']]).toString().length ? undefined : undefined, form: { supplier_ids: A.s.id, message: 'Please quote' } });
+  await req(base, 'POST', `/admin/projects/${proj.id}/invite`, { cookie: admin, form: { supplier_ids: B.s.id } });
+  assert.equal(db.tables.dev_invitations.length, 2); assert.equal(db.tables.dev_projects[0].status, 'Sourcing');
+  const invA = db.tables.dev_invitations.find((i) => i.supplier_id === A.s.id); const invB = db.tables.dev_invitations.find((i) => i.supplier_id === B.s.id);
+
+  // supplier A must accept the NDA first and sees only its own stuff
+  const gate = await req(base, 'GET', `/portal/projects/${invA.id}`, { cookie: A.c });
+  assert.match(gate.text, /Accept and continue/); assert.doesNotMatch(gate.text, /BPA-free/);
+  assert.equal((await req(base, 'GET', `/portal/projects/${invA.id}/files/${db.tables.dev_files[0].id}`, { cookie: A.c })).status, 403);
+  await req(base, 'POST', `/portal/projects/${invA.id}/nda`, { cookie: A.c, form: { agree: '1' } });
+  const view = await req(base, 'GET', `/portal/projects/${invA.id}`, { cookie: A.c });
+  assert.match(view.text, /BPA-free PP/); assert.match(view.text, /drawing-A\.pdf/); assert.match(view.text, /Motor warranty/);
+  assert.doesNotMatch(view.text, /SECRET-NOTE|cost-sheet|4\.5|Factory B/);
+  assert.equal(db.tables.dev_invitations.find((i) => i.id === invA.id).status, 'Viewed');
+  assert.equal((await req(base, 'GET', `/portal/projects/${invA.id}/files/${db.tables.dev_files[1].id}`, { cookie: A.c })).status, 404, 'internal file hidden');
+  assert.equal((await req(base, 'GET', `/portal/projects/${invB.id}`, { cookie: A.c })).status, 404, 'cannot open another supplier thread');
+  assert.equal((await req(base, 'GET', `/portal/projects/${invA.id}/files/${db.tables.dev_files[0].id}`, { cookie: A.c })).status, 200);
+
+  // question and answer
+  await req(base, 'POST', `/portal/projects/${invA.id}/message`, { cookie: A.c, form: { body: 'Is wall thickness 2mm ok?' } });
+  assert.equal(db.tables.dev_invitations.find((i) => i.id === invA.id).status, 'Questions');
+  await req(base, 'POST', `/admin/projects/${proj.id}/suppliers/${invA.id}/message`, { cookie: admin, form: { body: 'Yes, 2mm is fine' } });
+  assert.match((await req(base, 'GET', `/portal/projects/${invA.id}`, { cookie: A.c })).text, /Yes, 2mm is fine/);
+  assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${proj.id}/suppliers/${invB.id}`, { cookie: admin })).text, /wall thickness/, 'thread of B has no A messages');
+
+  // quote with extra field, then revised quote
+  const q1 = await req(base, 'POST', `/portal/projects/${invA.id}/quote`, { cookie: A.c, form: { currency: 'USD', incoterm: 'FOB', qty0: '1000', price0: '4.2', qty1: '3000', price1: '3.9', tooling_cost: '2500', moq: '1000', production_lead_days: '35', sample_lead_days: '10', validity_date: '2026-12-31', x_motor_warranty: '12 months' } });
+  assert.equal(q1.status, 303);
+  assert.equal(db.tables.dev_quotes.length, 1); assert.equal(db.tables.dev_quotes[0].custom[0].value, '12 months'); assert.equal(db.tables.dev_quotes[0].tiers.length, 2);
+  assert.equal(db.tables.dev_invitations.find((i) => i.id === invA.id).status, 'Quoted');
+  await req(base, 'POST', `/portal/projects/${invA.id}/quote`, { cookie: A.c, form: { currency: 'USD', qty0: '1000', price0: '4.0', x_motor_warranty: '18 months' } });
+  assert.equal(db.tables.dev_quotes.at(-1).revision, 2);
+  const noPrice = await req(base, 'POST', `/portal/projects/${invA.id}/quote`, { cookie: A.c, form: { qty0: '1000' } }); assert.equal(db.tables.dev_quotes.length, 2);
+  // B declines, then the admin comparison shows only quoted suppliers
+  await req(base, 'POST', `/portal/projects/${invB.id}/nda`, { cookie: B.c, form: { agree: '1' } });
+  await req(base, 'POST', `/portal/projects/${invB.id}/decline`, { cookie: B.c, form: {} });
+  assert.equal(db.tables.dev_invitations.find((i) => i.id === invB.id).status, 'Declined');
+  const cmp = (await req(base, 'GET', `/admin/projects/${proj.id}?tab=quotes`, { cookie: admin })).text;
+  assert.match(cmp, /Factory A/); assert.match(cmp, /Motor warranty/); assert.doesNotMatch(cmp, /Factory B/);
+
+  // new spec version needs confirmation
+  await req(base, 'POST', `/admin/projects/${proj.id}/publish`, { cookie: admin, form: { change_note: 'Wall 2.0mm', notify: '1' } });
+  assert.equal(db.tables.dev_projects[0].current_version, 2);
+  assert.match((await req(base, 'GET', `/portal/projects/${invA.id}`, { cookie: A.c })).text, /updated to v2/);
+  await req(base, 'POST', `/portal/projects/${invA.id}/ack`, { cookie: A.c, form: {} });
+  assert.equal(db.tables.dev_invitations.find((i) => i.id === invA.id).ack_version, 2);
+
+  // milestones + reminders
+  await req(base, 'POST', `/admin/projects/${proj.id}/milestones`, { cookie: admin, form: { title: 'Samples', due_date: P.addDays(P.today(), 1), remind_days: '2' } });
+  await req(base, 'POST', `/admin/projects/${proj.id}/milestones`, { cookie: admin, form: { title: 'Far away', due_date: P.addDays(P.today(), 30), remind_days: '2' } });
+  await req(base, 'POST', `/admin/projects/${proj.id}/milestones`, { cookie: admin, form: { title: 'Late', due_date: P.addDays(P.today(), -3) } });
+  await req(base, 'POST', `/admin/projects/${proj.id}/milestones/standard`, { cookie: admin, form: {} });
+  assert.equal(db.tables.dev_milestones.length, 3 + P.STD_MILESTONES.length);
+  const config = { publicUrl: 'http://test' };
+  const r1 = await P.runMilestoneReminders({ db, config }); assert.ok(r1.sent >= 2);
+  const r2 = await P.runMilestoneReminders({ db, config }); assert.equal(r2.sent, 0, 'no duplicate notices the same day');
+  const later = new Date(Date.now() + 86400_000 * 1); const r3 = await P.runMilestoneReminders({ db, config, now: later }); assert.ok(r3.sent >= 1, 'overdue repeats the next day');
+  const late = db.tables.dev_milestones.find((x) => x.title === 'Late');
+  await req(base, 'POST', `/admin/projects/${proj.id}/milestones/${late.id}/toggle`, { cookie: admin, form: {} });
+  assert.ok(db.tables.dev_milestones.find((x) => x.id === late.id).done_at);
+  for (const tab of ['spec', 'files', 'suppliers', 'quotes', 'milestones']) assert.equal((await req(base, 'GET', `/admin/projects/${proj.id}?tab=${tab}`, { cookie: admin })).status, 200, tab);
+  assert.equal((await req(base, 'GET', '/admin/projects', { cookie: admin })).status, 200);
+  assert.equal((await req(base, 'GET', '/portal/projects', { cookie: A.c })).status, 200);
+  assert.doesNotMatch((await req(base, 'GET', '/portal/projects', { cookie: B.c })).text, /Factory A/);
+});

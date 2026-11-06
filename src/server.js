@@ -52,6 +52,7 @@ function createApp({ db, config }) {
   require('./routes/admin')(router, { db, config });
   require('./routes/admin-tools')(router, { db, config });
   require('./routes/requests')(router, { db, config });
+  require('./routes/projects')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/api')(router, { db, config });
   require('./routes/staff')(router, { db, config });
@@ -109,6 +110,7 @@ if (require.main === module) {
     const tick = () => runReminders({ db, config }).catch((e) => console.error('Reminder run failed:', e.message));
     setTimeout(tick, 15_000); setInterval(tick, 60_000);
   } else console.warn('TELEGRAM_BOT_TOKEN is not set: CRM reminders on Telegram are off.');
+  { const { runMilestoneReminders } = require('./projects'); const run = () => runMilestoneReminders({ db, config }).catch((e) => console.error('Milestone reminders failed:', e.message)); setTimeout(run, 30_000); setInterval(run, 60 * 60_000); }
   server.listen(config.port, () => console.log(`Lulyboo portal on :${config.port} (${config.publicUrl})`));
 }
 

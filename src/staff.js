@@ -28,7 +28,7 @@ function deny(role, method, path) {
   const get = method === 'GET' || method === 'HEAD';
   if (/^\/admin\/(users|settings|api-log)(\/|$)/.test(path) || /^\/admin\/crm\/telegram\//.test(path)) return 'Only an Admin can open this page.';
   if (/^\/admin\/audit(\/|$)/.test(path)) return can(role, 'audit') ? null : 'Only an Admin or Director can view the audit log.';
-  if (/^\/admin\/(suppliers|products|requests|documents)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
+  if (/^\/admin\/(suppliers|products|requests|documents|projects)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
   if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
   return null;
 }

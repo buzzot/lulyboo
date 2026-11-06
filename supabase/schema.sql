@@ -438,3 +438,116 @@ alter table public.staff_audit enable row level security;
 
 -- Who wrote a manual entry in a request's communication log
 alter table public.info_request_messages add column if not exists author text;
+
+-- ───────────────────────── Product development projects ─────────────────────────
+-- One development project (spec + files) can be sent to several suppliers. Each supplier has a PRIVATE invitation
+-- (thread, quote, status). Suppliers never see each other or the internal target price.
+create table if not exists public.dev_projects (
+  id               uuid primary key default gen_random_uuid(),
+  ref              text not null unique,                 -- DP-1001
+  name             text not null,
+  category         text,
+  status           text not null default 'Draft' check (status in ('Draft','Sourcing','Sampling','Testing','Pilot','Completed','On hold','Cancelled')),
+  summary          text,                                 -- what the product is (shown to suppliers)
+  requirements     text,                                 -- requirements, materials, dimensions, tolerances, packaging (shown)
+  certifications   text,                                 -- standards the product must meet (shown)
+  target_price_usd numeric(12,4),                        -- INTERNAL, never shown to suppliers
+  target_moq       integer,                              -- INTERNAL
+  internal_notes   text,                                 -- INTERNAL
+  nda_required     boolean not null default false,
+  nda_text         text,
+  extra_fields     jsonb not null default '[]',          -- extra quote questions: [{key,label}]
+  current_version  integer not null default 1,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create table if not exists public.dev_spec_versions (
+  id           uuid primary key default gen_random_uuid(),
+  project_id   uuid not null references public.dev_projects(id) on delete cascade,
+  version      integer not null,
+  change_note  text,
+  snapshot     jsonb not null default '{}',              -- summary/requirements/certifications at that version
+  created_at   timestamptz not null default now(),
+  unique (project_id, version)
+);
+create table if not exists public.dev_files (
+  id           uuid primary key default gen_random_uuid(),
+  project_id   uuid not null references public.dev_projects(id) on delete cascade,
+  name         text not null,
+  kind         text not null default 'other',            -- drawing, image, spec, certificate, other
+  mime         text,
+  bytes        integer,
+  path         text not null,
+  version      integer not null default 1,               -- spec version it was added in
+  controlling  boolean not null default false,           -- the controlling drawing
+  internal     boolean not null default false,           -- hidden from suppliers
+  created_at   timestamptz not null default now()
+);
+create table if not exists public.dev_invitations (
+  id             uuid primary key default gen_random_uuid(),
+  project_id     uuid not null references public.dev_projects(id) on delete cascade,
+  supplier_id    uuid not null references public.suppliers(id) on delete cascade,
+  status         text not null default 'Invited' check (status in ('Invited','Viewed','Questions','Quoted','Sample','Declined','Selected','Closed')),
+  message        text,
+  nda_accepted_at timestamptz,
+  nda_accepted_by text,
+  viewed_at      timestamptz,
+  ack_version    integer not null default 0,             -- last spec version the supplier confirmed
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique (project_id, supplier_id)
+);
+create table if not exists public.dev_messages (
+  id             uuid primary key default gen_random_uuid(),
+  invitation_id  uuid not null references public.dev_invitations(id) on delete cascade,
+  direction      text not null check (direction in ('admin','supplier')),
+  author         text,
+  body           text,
+  attachments    jsonb not null default '[]',            -- [{name,path,size,mime}]
+  created_at     timestamptz not null default now()
+);
+create table if not exists public.dev_quotes (
+  id             uuid primary key default gen_random_uuid(),
+  invitation_id  uuid not null references public.dev_invitations(id) on delete cascade,
+  revision       integer not null default 1,
+  spec_version   integer not null default 1,
+  currency       text not null default 'USD',
+  incoterm       text,
+  tiers          jsonb not null default '[]',            -- [{qty,price}]
+  tooling_cost   numeric(12,2),
+  tooling_lead_days integer,
+  moq            integer,
+  sample_cost    numeric(12,2),
+  sample_lead_days integer,
+  production_lead_days integer,
+  validity_date  date,
+  payment_terms  text,
+  material_notes text,
+  custom         jsonb not null default '[]',            -- [{label,value}] answers to the project's extra fields
+  notes          text,
+  attachments    jsonb not null default '[]',
+  created_at     timestamptz not null default now()
+);
+create table if not exists public.dev_milestones (
+  id             uuid primary key default gen_random_uuid(),
+  project_id     uuid not null references public.dev_projects(id) on delete cascade,
+  invitation_id  uuid references public.dev_invitations(id) on delete cascade,  -- null = the whole project
+  title          text not null,
+  due_date       date,
+  remind_days    integer not null default 2,             -- remind this many days before the due date
+  done_at        timestamptz,
+  reminded_at    timestamptz,
+  overdue_notice_on date,
+  sort           integer not null default 0,
+  created_at     timestamptz not null default now()
+);
+create index if not exists dev_invitations_supplier_idx on public.dev_invitations (supplier_id);
+create index if not exists dev_messages_inv_idx on public.dev_messages (invitation_id, created_at);
+create index if not exists dev_milestones_due_idx on public.dev_milestones (due_date) where done_at is null;
+alter table public.dev_projects enable row level security;
+alter table public.dev_spec_versions enable row level security;
+alter table public.dev_files enable row level security;
+alter table public.dev_invitations enable row level security;
+alter table public.dev_messages enable row level security;
+alter table public.dev_quotes enable row level security;
+alter table public.dev_milestones enable row level security;
