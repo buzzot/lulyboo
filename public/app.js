@@ -366,6 +366,37 @@
     sync();
   })();
 
+  // Message times in the viewer's own time zone; attachment previews in a popup.
+  (function () {
+    var lang = document.documentElement.lang === 'zh-CN' ? 'zh-CN' : 'en-US';
+    document.querySelectorAll('time[data-local]').forEach(function (el) {
+      var d = new Date(el.getAttribute('datetime')); if (isNaN(d)) return;
+      var opts = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' };
+      if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+      try { el.textContent = d.toLocaleString(lang, opts); el.title = d.toLocaleString(lang, { dateStyle: 'full', timeStyle: 'short' }); } catch (e) {}
+    });
+    var dlg = null;
+    var build = function () {
+      dlg = document.createElement('dialog'); dlg.className = 'lightbox';
+      dlg.innerHTML = '<div class="lb-bar"><a class="lb-dl" download>' + L('Download', '下载') + '</a><a class="lb-open" target="_blank" rel="noopener">' + L('Open in new tab', '新标签页打开') + '</a><button type="button" class="lb-x" aria-label="Close">×</button></div><div class="lb-body"></div>';
+      document.body.appendChild(dlg);
+      dlg.querySelector('.lb-x').addEventListener('click', function () { dlg.close(); });
+      dlg.addEventListener('click', function (e) { if (e.target === dlg || e.target.classList.contains('lb-body')) dlg.close(); });
+      dlg.addEventListener('close', function () { dlg.querySelector('.lb-body').innerHTML = ''; });
+    };
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-preview]'); if (!b) return;
+      e.preventDefault(); if (!dlg) build();
+      var url = b.getAttribute('data-preview'), body = dlg.querySelector('.lb-body');
+      body.innerHTML = '';
+      if (b.getAttribute('data-type') === 'image') { var im = document.createElement('img'); im.src = url; im.alt = ''; body.appendChild(im); dlg.classList.remove('doc'); }
+      else { var fr = document.createElement('iframe'); fr.src = url; fr.title = 'Preview'; body.appendChild(fr); dlg.classList.add('doc'); }
+      dlg.querySelector('.lb-dl').href = b.getAttribute('data-dl') || url;
+      dlg.querySelector('.lb-open').href = url;
+      if (dlg.showModal) dlg.showModal(); else window.open(url, '_blank');
+    });
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

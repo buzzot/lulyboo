@@ -5,6 +5,7 @@
 // Suppliers never see other suppliers, the internal target price/MOQ, internal notes or internal files.
 
 const { html, raw, fmt, t, m, biText, confirmAttr } = require('../lib/html');
+const { icon } = require('../views/icons');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
 const { page, adminNav } = require('../views/layout');
 const { guard } = require('./admin');
@@ -22,7 +23,11 @@ const serve = (res, buf, name, type, inline) => {
   res.statusCode = 200;
   res.setHeader('Content-Type', inline && P.INLINE_OK.test(name) ? (P.MIME[P.extOf(name)] || type || 'application/octet-stream') : (type || 'application/octet-stream'));
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (inline && P.INLINE_OK.test(name)) res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
+  if (inline && P.INLINE_OK.test(name)) {
+    // Previews open inside the portal's popup, so same-origin framing is allowed. PDFs need the browser's viewer (no sandbox); other types stay sandboxed.
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', /\.pdf$/i.test(name) ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'");
+  }
   res.setHeader('Content-Disposition', `${inline && P.INLINE_OK.test(name) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
   res.end(buf);
 };
@@ -39,9 +44,17 @@ const multiFile = (name = 'files', { describe = false } = {}) => html`<div class
 const COUNTRY = { cn: 'China', chn: 'China', china: 'China', prc: 'China', us: 'USA', usa: 'USA', vn: 'Vietnam', vietnam: 'Vietnam', in: 'India', india: 'India', tw: 'Taiwan', taiwan: 'Taiwan', hk: 'Hong Kong', 'hong kong': 'Hong Kong', th: 'Thailand', thailand: 'Thailand', kr: 'South Korea', mx: 'Mexico', tr: 'Turkey' };
 const countryName = (c) => (c ? COUNTRY[String(c).trim().toLowerCase()] || String(c).trim() : '');
 const initials = (n) => String(n || '?').replace(/\(.*?\)/g, '').split(/[\s,.-]+/).filter((w) => /^[a-z0-9]/i.test(w) && !/^(co|ltd|inc|llc|the)$/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+// Message time: rendered in California time on the server, then switched to the viewer's own time zone by public/app.js.
+const when = (iso) => { if (!iso) return ''; let txt = iso; try { txt = new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: process.env.BUSINESS_TZ || 'America/Los_Angeles' }); } catch {} return html`<time class="sub" datetime="${iso}" data-local>${txt}</time>`; };
 const THUMB_OK = /\.(png|jpe?g|webp|gif)$/i;
 const kindIcon = (k) => ({ drawing: '📐', image: '🖼️', spec: '📄', certificate: '✅', other: '📎' }[k] || '📎');
-const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att">${list.map((a, i) => html`<li><a href="${hrefOf(i)}">${a.name}</a> <span class="sub">${bytes(a.size)}</span>${P.INLINE_OK.test(a.name) ? html` · <a href="${hrefOf(i)}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}</li>`)}</ul>` : '');
+// Attachments as tiles: a thumbnail (images) or file-type icon, size, and a download button. No file names.
+// Click a previewable tile to open it in a popup (public/app.js [data-preview]); others download.
+const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att-tiles">${list.map((a, i) => {
+  const href = hrefOf(i); const ext = P.extOf(a.name).slice(1).toUpperCase() || 'FILE'; const img = THUMB_OK.test(a.name); const prev = P.INLINE_OK.test(a.name);
+  const face = img ? html`<img src="${href}?inline=1" alt="" loading="lazy">` : html`<span class="att-ic">${kindIcon(P.guessKind(a.name))}</span><span class="att-ext">${ext}</span>`;
+  return html`<li class="att-tile">${prev ? html`<button type="button" class="att-face" data-preview="${href}?inline=1" data-type="${img ? 'image' : 'doc'}" data-dl="${href}" aria-label="${ext} attachment">${face}<span class="att-zoom" aria-hidden="true">${icon('search', 14)}</span></button>` : html`<a class="att-face" href="${href}" aria-label="Download ${ext} attachment">${face}</a>`}
+    <div class="att-meta"><span>${ext} · ${bytes(a.size)}</span><a class="att-dl" href="${href}" title="Download · 下载" aria-label="Download">${icon('download', 15)}</a></div></li>`; })}</ul>` : '');
 
 function quoteCards(q, project, { admin = false } = {}) {
   if (!q) return html`<p class="d-empty">${admin ? 'No quote yet.' : t('You have not submitted a quote yet.', '您尚未提交报价。')}</p>`;
@@ -333,7 +346,7 @@ module.exports = function projectRoutes(router, { db, config }) {
       <div class="head-row"><div><h1>${s?.name}</h1><ul class="pp-meta"><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li><li>${p.ref}</li><li>Confirmed spec v${inv.ack_version} of v${p.current_version}</li>${p.nda_required ? html`<li>${inv.nda_accepted_at ? `NDA accepted ${fmt.date(inv.nda_accepted_at)} by ${inv.nda_accepted_by || ''}` : 'NDA not accepted'}</li>` : ''}<li><a href="/admin/suppliers/${s?.id}">Supplier profile</a></li></ul></div>
         <form method="post" action="/admin/projects/${p.id}/suppliers/${inv.id}/status" class="inline-form"><select name="status" aria-label="Status">${P.INV_STATUSES.map((x) => html`<option ${x === inv.status ? raw('selected') : ''}>${x}</option>`)}</select><button class="btn small ghost">Set status</button></form></div>
       <div class="dp-thread"><section class="card"><h2 class="sec">Conversation</h2>
-        <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (x.author || s?.name) : (x.author || 'Lulyboo')}</b><span class="sub">${fmt.date(x.created_at)}</span></header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/admin/dev-files/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">No messages yet.</p>`}</div>
+        <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (x.author || s?.name) : (x.author || 'Lulyboo')}</b>${when(x.created_at)}</header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/admin/dev-files/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">No messages yet.</p>`}</div>
         <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt"><label class="frow top"><span>Reply</span><textarea name="body" rows="4" required placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
           <label class="frow"><span>Attach</span>${multiFile('files')}</label><label class="chk"><input type="checkbox" name="notify" value="1" checked> Email the supplier</label><div class="form-actions"><button class="btn">Send</button></div></form></section>
         <aside class="dp-side"><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
@@ -427,7 +440,7 @@ module.exports = function projectRoutes(router, { db, config }) {
             ${versions.length > 1 ? html`<details class="fold mt"><summary><b>${t('Change history', '变更记录')}</b></summary><ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></details>` : ''}</section>
           <section class="card"><h2 class="sec">${t('Files', '文件')} <span class="count">${vis.length}</span></h2>${vis.length ? html`<ul class="fl">${vis.map((f) => html`<li class="fl-row"><div class="fl-thumb">${THUMB_OK.test(f.name) ? html`<img src="/portal/projects/${inv.id}/files/${f.id}?inline=1" alt="" loading="lazy">` : html`<span aria-hidden="true">${kindIcon(f.kind)}</span>`}</div><div class="fl-main"><div class="fl-title">${supTitles.get(f.id)}${f.controlling ? html` <span class="pill s-selected">${t('Controlling drawing', '主图纸')}</span>` : ''}</div><div class="fl-meta">${t(P.FILE_KINDS[f.kind] || f.kind, P.FILE_KINDS_ZH[f.kind] || f.kind)} · ${P.extOf(f.name).slice(1).toUpperCase()} · ${bytes(f.bytes)} · v${f.version}</div></div><div class="fl-act">${P.INLINE_OK.test(f.name) ? html`<a href="/portal/projects/${inv.id}/files/${f.id}?inline=1" target="_blank" rel="noopener">${t('Preview', '预览')}</a>` : ''}<a href="/portal/projects/${inv.id}/files/${f.id}">${t('Download', '下载')}</a></div></li>`)}</ul>` : html`<p class="d-empty">${t('No files yet.', '暂无文件。')}</p>`}</section>
           <section class="card"><h2 class="sec">${t('Questions & answers', '问答')}</h2>
-            <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? t('You', '您') : 'Lulyboo'}</b><span class="sub">${fmt.date(x.created_at)}</span></header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
+            <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? t('You', '您') : 'Lulyboo'}</b>${when(x.created_at)}</header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
             ${locked ? '' : html`<form method="post" enctype="multipart/form-data" action="/portal/projects/${inv.id}/message" class="fields mt"><label class="frow top"><span>${t('Message', '留言')}</span><textarea name="body" rows="3" required></textarea></label><label class="frow"><span>${t('Attach', '附件')}</span>${multiFile('files')}</label><div class="form-actions"><button class="btn">${t('Send', '发送')}</button></div></form>`}</section>
         </div>
         <aside class="dp-side"><section class="card" id="quote"><h2 class="sec">${t('Your quote', '您的报价')}${q ? html` <span class="sub">rev ${q.revision} · ${fmt.date(q.created_at)}</span>` : ''}</h2>
