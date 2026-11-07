@@ -82,6 +82,11 @@ async function notifySupplier(config, db, supplier, { subject, en, zh, link, ema
   } catch (e) { console.error('Supplier notice failed:', e.message); return false; }
 }
 
+// Projects the supplier has been invited to but not opened yet (red badge in the portal menu).
+async function newProjectCount(db, supplierId) {
+  try { return (await db.list('dev_invitations', { filters: { supplier_id: supplierId } })).filter((i) => !i.viewed_at && !['Closed', 'Declined'].includes(i.status)).length; } catch { return 0; }
+}
+
 /**
  * Milestone reminders: one notice when (due - remind_days) arrives, then one per day while overdue.
  * Goes to the owner by email and, when configured, Telegram. Safe to call often.
@@ -102,4 +107,4 @@ async function runMilestoneReminders({ db, config, now = new Date() }) {
   return { sent: due.length };
 }
 
-module.exports = { PROJECT_STATUSES, INV_STATUSES, FILE_KINDS, FILE_KINDS_ZH, FILE_GROUPS, FILE_DEFAULT, KIND_ORDER, guessKind, fileTitles, ALLOWED_EXT, MIME, INLINE_OK, STD_MILESTONES, today, addDays, slug, extOf, safeName, nextRef, storeFiles, fileList, notifyOwner, notifySupplier, supplierRecipients, runMilestoneReminders, ownerEmails };
+module.exports = { newProjectCount, PROJECT_STATUSES, INV_STATUSES, FILE_KINDS, FILE_KINDS_ZH, FILE_GROUPS, FILE_DEFAULT, KIND_ORDER, guessKind, fileTitles, ALLOWED_EXT, MIME, INLINE_OK, STD_MILESTONES, today, addDays, slug, extOf, safeName, nextRef, storeFiles, fileList, notifyOwner, notifySupplier, supplierRecipients, runMilestoneReminders, ownerEmails };

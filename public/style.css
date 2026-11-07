@@ -1096,3 +1096,9 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .pk-main{display:grid;min-width:0;flex:1}.pk-main b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pk-main .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pick-empty{text-align:center;color:var(--muted);padding:24px}
 .pick-foot{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid var(--line,#eadfdc);background:#fcf9f8}
+
+/* New-project badge in the supplier menu */
+.nav-badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#e5484d;color:#fff;font-size:11.5px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 0 0 2px #fff;flex:none}
+.sb-nav a{position:relative}
+.new-tag{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#e5484d;color:#fff;font-size:11px;font-weight:700;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em}
+tr.is-new td{background:#fff8f7}tr.is-new .sp-name{font-weight:700}

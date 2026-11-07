@@ -47,7 +47,7 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
     <a class="sb-brand" href="${nav.home}"><span class="sb-logo">L</span><span><b>Lulyboo</b><small>${t('SUPPLIER PORTAL', '供应商平台')}</small></span></a>
     <div class="sb-workspace"><span class="sb-avatar">${initial}</span><span class="sb-co"><b>${co}</b><small>${t('Company account', '公司账号')}</small></span></div>
     <nav class="sb-nav">
-      ${main.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.icon ? icon(i.icon, 17) : ''}<span>${i.label}</span></a>`)}
+      ${main.map((i) => { const n = req.navBadges?.[i.href] || 0; return html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.icon ? icon(i.icon, 17) : ''}<span>${i.label}</span>${n ? html`<span class="nav-badge" title="${n} new">${n > 99 ? '99+' : n}</span>` : ''}</a>`; })}
     </nav>
     <div class="sb-foot">
       <div class="sb-user"><span class="sb-avatar sm">${String(who).charAt(0).toUpperCase() || 'U'}</span><span class="sb-co"><b>${req.user?.name || '—'}</b><small>${req.user?.email || ''}</small></span></div>

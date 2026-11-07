@@ -35,6 +35,7 @@ const draftMsg = (r) => m(`Draft saved${photosMsg(r.saved)}. Finish and submit i
 const submittedMsg = (r) => m(`Submitted for review${photosMsg(r.saved)}. Thank you!`, `已提交审核${r.saved ? `（${r.saved} 张图片）` : ''}，谢谢！`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 const savedMsg = (r, plus) => m(`Saved${photosMsg(r.saved, plus)}`, `已保存${r.saved ? `（${plus ? '新增' : ''}${r.saved} 张图片）` : ''}`) + (r.errors.length ? ' · ' + r.errors.join(' · ') : '');
 
+const { newProjectCount } = require('../projects');
 module.exports = supplierRoutes;
 module.exports.nav = nav;
 function supplierRoutes(router, { db, config }) {
@@ -45,6 +46,7 @@ function supplierRoutes(router, { db, config }) {
     req.supplier = cur.supplier;
     req.user = cur.user;
     req.base = '/portal';
+    req.navBadges = { '/portal/projects': await newProjectCount(db, cur.supplier.id) };
     return fn(req, res);
   };
   const NOT_FOUND = m('Product not found', '未找到该产品');
