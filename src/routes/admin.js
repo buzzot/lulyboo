@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const { html, raw, fmt } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash, sign, unsign } = require('../lib/http');
 const { icon } = require('../views/icons');
-const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, fileDrop } = require('../views/layout');
+const { page, adminNav, productFields, imageGrid, photoSection, pager, statusPill, fileDrop, licenseDrop } = require('../views/layout');
+const LIC = require('../license');
 const F = require('../fields');
 const { analyzeProduct } = require('../calc');
 const S = require('../services');
@@ -168,12 +169,62 @@ function guard(config, fn) {
   };
 }
 
+
+// ── Business license card (supplier detail page)
+function licenseCard(s) {
+  const id = s.id; const info = s.license_info || null; const code = LIC.normalizeNo(s.business_license_no);
+  const ck = code && LIC.looksChinese(s) ? LIC.checkUSCC(code) : null;
+  const fileUrl = `/admin/suppliers/${id}/license-file`; const isImg = /\.(jpe?g|png|webp)$/i.test(s.business_license_path || '');
+  const lic = info?.license || {}; const reg = info?.registry || {};
+  const row = (label, a, b) => (a || b ? html`<tr><th>${label}</th><td>${a || html`<span class="none">—</span>`}</td><td>${b || html`<span class="none">—</span>`}</td></tr>` : '');
+  const verdict = info ? (info.verdict === 'ok' ? html`<span class="pill s-selected">Verified by AI</span>` : info.verdict === 'review' ? html`<span class="pill s-new">Needs review</span>` : html`<span class="pill">Not confirmed</span>`) : '';
+  return html`<section class="card lic-card"><div class="head-row"><h2>Business license</h2>${verdict}</div>
+    <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${id}/license" class="lic-form">
+      <label><span class="lbl">License number / credit code</span><input name="business_license_no" value="${s.business_license_no || ''}" maxlength="40" autocomplete="off" spellcheck="false" placeholder="e.g. 91320000MA1XXXXXXX (18 characters)"></label>
+      ${ck ? html`<p class="lic-ck ${ck.valid ? 'ok' : 'bad'}">${ck.valid ? html`✓ Valid China credit code${ck.province ? ` · registered in ${ck.province}` : ''}` : html`✗ ${ck.reason}`}</p>` : ''}
+      <div class="lic-file">${s.business_license_path ? html`<div class="lic-current">
+          <button type="button" class="att-face" data-preview="${fileUrl}?inline=1" data-type="${isImg ? 'image' : 'doc'}" data-dl="${fileUrl}" aria-label="View license">${isImg ? html`<img src="${fileUrl}?inline=1" alt="">` : html`<span class="att-ic">📄</span><span class="att-ext">PDF</span>`}<span class="att-zoom" aria-hidden="true">${icon('search', 14)}</span></button>
+          <div class="sub">License on file<br><a href="${fileUrl}">Download</a> · <button class="link danger" formaction="/admin/suppliers/${id}/license/remove" formnovalidate data-confirm="Remove the license file?">Remove</button></div></div>` : ''}
+        ${licenseDrop({ has: !!s.business_license_path })}</div>
+      <div class="form-actions"><button class="btn small">Save license</button></div>
+    </form>
+    <div class="lic-ai">
+      <form method="post" action="/admin/suppliers/${id}/license/check"><button class="btn small ghost" data-busy ${code || s.business_license_path ? '' : raw('disabled')}>${icon('sparkles', 15)} ${info ? 'Check again with AI' : 'Check with AI'}</button></form>
+      <p class="sub">Optional. AI reads the license, looks the company up in public registry sources${LIC.looksChinese(s) ? ' (gsxt.gov.cn, Qichacha, Tianyancha)' : ''}, translates the data to English and saves it here.</p>
+    </div>
+    ${info ? html`<div class="lic-result">
+      ${info.issues?.length ? html`<div class="flash warn"><b>Check these points</b><ul>${info.issues.map((x) => html`<li>${x}</li>`)}</ul></div>` : info.verdict === 'ok' ? html`<div class="flash ok">License and registry data match this supplier.</div>` : ''}
+      ${info.errors?.length ? html`<p class="sub neg">${info.errors.join(' · ')}</p>` : ''}
+      <div class="table-wrap"><table class="list compact lic-table"><thead><tr><th></th><th>On the license</th><th>Public registry${reg.registry_status_en ? html` · <b>${reg.registry_status_en}</b>` : ''}</th></tr></thead><tbody>
+        ${row('Company name', lic.name_en ? html`${lic.name_en}<div class="sub">${lic.name_original || ''}</div>` : '', reg.name_en ? html`${reg.name_en}<div class="sub">${reg.name_original || ''}</div>` : '')}
+        ${row('Credit code', lic.credit_code, reg.credit_code)}
+        ${row('Company type', lic.company_type_en, reg.company_type_en)}
+        ${row('Legal representative', lic.legal_representative, reg.legal_representative)}
+        ${row('Registered capital', lic.registered_capital_en, reg.registered_capital_en)}
+        ${row('Paid-in capital', '', reg.paid_in_capital_en)}
+        ${row('Established', lic.established_date, reg.established_date)}
+        ${row('Business term', lic.business_term_en, '')}
+        ${row('Address', lic.address_en ? html`${lic.address_en}<div class="sub">${lic.address_original || ''}</div>` : '', reg.address_en)}
+        ${row('Insured employees', '', reg.insured_employees)}
+        ${row('Business scope', lic.business_scope_en, reg.business_scope_en)}
+        ${row('Issued by', lic.issuing_authority_en ? `${lic.issuing_authority_en}${lic.issue_date ? ` · ${lic.issue_date}` : ''}` : '', '')}
+      </tbody></table></div>
+      ${lic.legibility_notes ? html`<p class="sub">Image notes: ${lic.legibility_notes}</p>` : ''}
+      ${reg.sources?.length ? html`<p class="sub lic-src">Sources: ${reg.sources.map((x, i) => html`${i ? ' · ' : ''}<a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title || new URL(x.url).hostname}</a>`)}</p>` : ''}
+      <p class="sub">Checked ${fmt.date(info.checked_at)} by AI. It can be wrong; confirm on the official register${LIC.officialLinks(s).length ? html`: ${LIC.officialLinks(s).map((l, i) => html`${i ? ' · ' : ''}<a href="${l.url}" target="_blank" rel="noopener noreferrer">${l.label}</a>`)}` : '.'}</p>
+    </div>` : ''}
+  </section>`;
+}
+
 // ── Shared filter logic ───────────────────────────────────────
 function sendFile(res, buffer, name, type, inline = false) {
   res.statusCode = 200;
   res.setHeader('Content-Type', type || 'application/octet-stream');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (inline) res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
+  if (inline) {
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', /pdf/i.test(type || '') || /\.pdf$/i.test(name) ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'");
+  }
   res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
   res.setHeader('Content-Length', buffer.length);
   res.setHeader('Cache-Control', 'private, no-store');
@@ -879,6 +930,7 @@ module.exports = function adminRoutes(router, { db, config }) {
             <div class="span2"><button class="btn">Save</button></div>
           </form></section>
         ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
+        ${licenseCard(s)}
         <section class="card"><h2>Activity</h2>
           <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
             <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
@@ -925,6 +977,44 @@ module.exports = function adminRoutes(router, { db, config }) {
     await db.update('suppliers', { id: req.params.id }, row);
     flash(res, 'ok', 'Saved');
     res.redirect(`/admin/suppliers/${req.params.id}`);
+  }));
+  // ── Business license: save number/file, serve file, AI check
+  const licErr = (e) => (/business_license|license_info|license_checked/i.test(String(e.message)) ? 'Run the business-license SQL in Supabase first (new supplier columns are missing).' : e.message);
+  router.post('/admin/suppliers/:id/license', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id); if (!s) throw new HttpError(404, 'Supplier not found');
+    const { fields, files } = await parseForm(req, { limitBytes: LIC.MAX_LICENSE_BYTES + 1024 * 1024 });
+    const no = LIC.normalizeNo(fields.business_license_no);
+    const st = await LIC.storeLicense(db, s.id, [].concat(files?.license_file || [])[0]);
+    if (st.error) { flash(res, 'error', st.error); return res.redirect(`/admin/suppliers/${s.id}`); }
+    const patch = { business_license_no: no };
+    if (st.saved) { patch.business_license_path = st.saved.path; patch.business_license_name = st.saved.name; }
+    if (no !== (s.business_license_no || null) || st.saved) { patch.license_info = null; patch.license_checked_at = null; }
+    try { await db.update('suppliers', { id: s.id }, patch); } catch (e) { flash(res, 'error', licErr(e)); return res.redirect(`/admin/suppliers/${s.id}`); }
+    if (st.saved && s.business_license_path) await db.docs.remove([s.business_license_path]).catch(() => {});
+    const ck = no && LIC.looksChinese({ ...s, business_license_no: no }) ? LIC.checkUSCC(no) : null;
+    flash(res, ck && !ck.valid ? 'warn' : 'ok', ck && !ck.valid ? `Saved, but the credit code looks wrong: ${ck.reason}` : 'Business license saved');
+    res.redirect(`/admin/suppliers/${s.id}`);
+  }));
+  router.post('/admin/suppliers/:id/license/remove', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id); if (!s) throw new HttpError(404, 'Supplier not found');
+    if (s.business_license_path) { await db.docs.remove([s.business_license_path]).catch(() => {}); await db.update('suppliers', { id: s.id }, { business_license_path: null, business_license_name: null, license_info: null, license_checked_at: null }); }
+    flash(res, 'ok', 'License file removed'); res.redirect(`/admin/suppliers/${s.id}`);
+  }));
+  router.get('/admin/suppliers/:id/license-file', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id); if (!s?.business_license_path) throw new HttpError(404, 'No license file');
+    const ext = LIC.extOf(s.business_license_path);
+    sendFile(res, await db.docs.download(s.business_license_path), s.business_license_name || `business-license${ext}`, LIC.LICENSE_MIME[ext], req.query.inline === '1');
+  }));
+  router.post('/admin/suppliers/:id/license/check', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id); if (!s) throw new HttpError(404, 'Supplier not found');
+    if (!AI.enabled()) { flash(res, 'error', 'AI is not configured: set ANTHROPIC_API_KEY in Railway'); return res.redirect(`/admin/suppliers/${s.id}`); }
+    if (!s.business_license_no && !s.business_license_path) { flash(res, 'error', 'Add the license number or upload the license first'); return res.redirect(`/admin/suppliers/${s.id}`); }
+    try {
+      const info = await LIC.runCheck({ db, supplier: s });
+      await db.update('suppliers', { id: s.id }, { license_info: info, license_checked_at: info.checked_at });
+      flash(res, info.verdict === 'ok' ? 'ok' : 'warn', info.verdict === 'ok' ? 'License checked: data matches' : info.verdict === 'review' ? 'License checked: some points need your review' : 'License checked: could not confirm the company');
+    } catch (e) { flash(res, 'error', `License check failed: ${licErr(e)}`); }
+    res.redirect(`/admin/suppliers/${s.id}`);
   }));
   router.post('/admin/suppliers/:id/users', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);

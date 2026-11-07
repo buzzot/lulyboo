@@ -3,7 +3,8 @@
 const { html, raw, fmt, t, m, biText, confirmAttr } = require('../lib/html');
 const { HttpError, parseForm, flash, takeFlash } = require('../lib/http');
 const { icon } = require('../views/icons');
-const { page, productFields, groupFields, photoSection, fileDrop } = require('../views/layout');
+const { page, productFields, groupFields, photoSection, fileDrop, licenseDrop } = require('../views/layout');
+const LIC = require('../license');
 const { SUPPLIER_COLUMNS, SUPPLIER_FIELDS, cleanProduct, cleanSupplier } = require('../fields');
 const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
@@ -363,12 +364,38 @@ function supplierRoutes(router, { db, config }) {
     res.html(page({ title: 'Company', nav: nav('profile'), req, flash: takeFlash(req, res), body: profileForm(req.base, req.supplier) }));
   }));
   router.post('/portal/profile', A(async (req, res) => {
-    const { fields } = await parseForm(req);
+    const { fields, files } = await parseForm(req, { limitBytes: LIC.MAX_LICENSE_BYTES + 1024 * 1024 });
     const { row, errors } = cleanSupplier(fields);
     if (errors.length) { flash(res, 'error', errors.join(' · ')); return res.redirect(`${req.base}/profile`); }
-    await db.update('suppliers', { id: req.supplier.id }, row);
-    flash(res, 'ok', m('Saved', '已保存'));
+    const s = req.supplier;
+    const st = await LIC.storeLicense(db, s.id, [].concat(files?.license_file || [])[0]);
+    if (st.error) { flash(res, 'error', m(st.error, '营业执照需为照片（JPG、PNG、WEBP）或 PDF，且不超过 10 MB')); return res.redirect(`${req.base}/profile`); }
+    if ('business_license_no' in fields) {
+      const no = LIC.normalizeNo(fields.business_license_no);
+      if (no !== (s.business_license_no || null) || st.saved) { row.license_info = null; row.license_checked_at = null; }
+      row.business_license_no = no;
+    }
+    if (st.saved) { row.business_license_path = st.saved.path; row.business_license_name = st.saved.name; }
+    try { await db.update('suppliers', { id: s.id }, row); }
+    catch (e) {
+      if (!/business_license|license_info|license_checked/i.test(String(e.message))) throw e;
+      for (const k of ['business_license_no', 'business_license_path', 'business_license_name', 'license_info', 'license_checked_at']) delete row[k];
+      await db.update('suppliers', { id: s.id }, row);
+    }
+    if (st.saved && s.business_license_path) await db.docs.remove([s.business_license_path]).catch(() => {});
+    const ck = row.business_license_no && LIC.looksChinese({ ...s, ...row }) ? LIC.checkUSCC(row.business_license_no) : null;
+    if (ck && !ck.valid) flash(res, 'warn', m(`Saved. Please check the license number: ${ck.reason}`, '已保存。请检查营业执照号码：统一社会信用代码格式或校验位不正确。'));
+    else flash(res, 'ok', m('Saved', '已保存'));
     res.redirect(`${req.base}/profile`);
+  }));
+  router.get('/portal/license-file', A(async (req, res) => {
+    const s = req.supplier; if (!s.business_license_path) throw new HttpError(404, m('No license file', '暂无营业执照文件'));
+    const ext = LIC.extOf(s.business_license_path); const buf = await db.docs.download(s.business_license_path);
+    const inline = req.query.inline === '1';
+    res.statusCode = 200; res.setHeader('Content-Type', LIC.LICENSE_MIME[ext] || 'application/octet-stream'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'private, no-store');
+    if (inline) { res.setHeader('X-Frame-Options', 'SAMEORIGIN'); res.setHeader('Content-Security-Policy', ext === '.pdf' ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'"); }
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(s.business_license_name || `business-license${ext}`)}`);
+    res.end(buf);
   }));
 
   // ── Account: change password
@@ -402,11 +429,21 @@ function supplierRoutes(router, { db, config }) {
 };
 
 function profileForm(base, s) {
+  const isImg = /\.(jpe?g|png|webp)$/i.test(s.business_license_path || '');
+  const url = `${base}/license-file`;
   return html`<h1>${t('Company details', '公司信息')}</h1>
-  <form method="post" action="${base}/profile" class="card"><div class="grid two">
+  <form method="post" enctype="multipart/form-data" action="${base}/profile" class="card"><div class="grid two">
     ${SUPPLIER_FIELDS.map((f) => html`<label class="${f.type === 'textarea' ? 'span2' : ''}"><span class="lbl">${t(f.en, f.cn)}${f.required ? html`<b class="req">*</b>` : ''}</span>
       ${f.type === 'textarea' ? html`<textarea name="${f.key}" rows="2">${s[f.key] || ''}</textarea>` : html`<input name="${f.key}" value="${s[f.key] || ''}" ${f.required ? raw('required') : ''} ${f.type === 'url' ? raw('inputmode="url" autocapitalize="off" spellcheck="false" placeholder="www.example.com"') : ''}>`}</label>`)}
-  </div><div class="form-actions"><button class="btn">${t('Save', '保存')}</button></div></form>`;
+  </div>
+  <h2 class="sec mt">${t('Business license', '营业执照')}</h2>
+  <div class="grid two lic-sup">
+    <label><span class="lbl">${t('License number / Unified Social Credit Code', '营业执照号码 / 统一社会信用代码')}</span><input name="business_license_no" value="${s.business_license_no || ''}" maxlength="40" autocomplete="off" spellcheck="false" placeholder="91320000MA1XXXXXXX"></label>
+    <div><span class="lbl">${t('License photo or PDF', '营业执照照片或 PDF')}</span>
+      ${s.business_license_path ? html`<div class="lic-current"><button type="button" class="att-face" data-preview="${url}?inline=1" data-type="${isImg ? 'image' : 'doc'}" data-dl="${url}" aria-label="View">${isImg ? html`<img src="${url}?inline=1" alt="">` : html`<span class="att-ic">📄</span><span class="att-ext">PDF</span>`}</button><span class="sub">✓ ${t('Uploaded', '已上传')}</span></div>` : ''}
+      ${licenseDrop({ has: !!s.business_license_path })}</div>
+  </div>
+  <div class="form-actions"><button class="btn">${t('Save', '保存')}</button></div></form>`;
 }
 
 function importPage(base) {

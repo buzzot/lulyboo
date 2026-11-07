@@ -219,6 +219,7 @@
     document.addEventListener('paste', function (e) {
       var t = e.target;
       if (t && t.closest && t.closest('input:not([type=file]), textarea, select, [contenteditable]')) return; // typing somewhere else
+      if (document.querySelector('[data-filebox]:hover, [data-filebox]:focus-within')) return; // a file box on this page takes it
       var cd = e.clipboardData; if (!cd) return;
       if (cd.files && cd.files.length) { e.preventDefault(); takeList(cd.files); return; }
       var text = cd.getData && cd.getData('text/plain');
@@ -235,7 +236,7 @@
   (function () {
     var zones = Array.prototype.slice.call(document.querySelectorAll('[data-filebox]'));
     if (!zones.length || !window.DataTransfer) return;
-    var MAXB = 20 * 1024 * 1024, MAXN = 20, last = null;
+    var MAXB = 20 * 1024 * 1024, last = null;
     var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
     var size = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; };
     var key = function (f) { return f.name + '|' + f.size + '|' + f.lastModified; };
@@ -244,6 +245,7 @@
     zones.forEach(function (zone) {
       var input = zone.querySelector('input[type=file]'), list = zone.querySelector('[data-list]'), note = zone.querySelector('[data-note]'), main = zone.querySelector('[data-main]');
       var box = zone.querySelector('.mdrop-box'), idle = main.innerHTML, dt = new DataTransfer();
+      var MAXN = parseInt(zone.getAttribute('data-max'), 10) || 20;
       var allowed = (input.getAttribute('accept') || '').split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
       var describe = zone.hasAttribute('data-describe'), metaEl = zone.querySelector('[data-meta]');
       var KINDS = [['drawing', 'Drawing / CAD', 'e.g. Housing – 2D drawing rev B'], ['image', 'Image / reference', 'e.g. Reference photo – colour and finish'], ['spec', 'Specification', 'e.g. Material and performance requirements'], ['certificate', 'Certificate / test report', 'e.g. Required test report (FCC / CE)'], ['other', 'Other', 'e.g. What is this file?']];
@@ -289,12 +291,13 @@
         box.classList.toggle('has-files', dt.files.length > 0);
         syncMeta();
         var n = dt.files.length;
-        main.innerHTML = n ? L(n + ' file' + (n > 1 ? 's' : '') + ' ready. <u>Add more</u>', '已选择 ' + n + ' 个文件。<u>继续添加</u>') : idle;
+        main.innerHTML = n ? (MAXN === 1 ? L('Ready to upload. <u>Choose another</u>', '已选择，保存时上传。<u>重新选择</u>') : L(n + ' file' + (n > 1 ? 's' : '') + ' ready. <u>Add more</u>', '已选择 ' + n + ' 个文件。<u>继续添加</u>')) : idle;
       };
       var add = function (files) {
         var skipped = [], have = {};
+        if (MAXN === 1 && files.length) dt = new DataTransfer(); // single-file box: a new file replaces the old one
         Array.prototype.forEach.call(dt.files, function (f) { have[key(f)] = 1; });
-        Array.prototype.forEach.call(files, function (f) {
+        Array.prototype.forEach.call(MAXN === 1 ? Array.prototype.slice.call(files, 0, 1) : files, function (f) {
           if (/^image\/(png|jpeg)$/.test(f.type) && /^image\.(png|jpe?g)$/i.test(f.name)) f = new File([f], 'pasted-image-' + stamp() + (f.type === 'image/png' ? '.png' : '.jpg'), { type: f.type, lastModified: Date.now() });
           var ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
           if (allowed.length && allowed.indexOf(ext) < 0) { skipped.push(f.name + ' (type not allowed)'); return; }
@@ -324,7 +327,7 @@
     document.addEventListener('paste', function (e) {
       var cd = e.clipboardData; if (!cd || !cd.files || !cd.files.length) return; // plain text pastes are left alone
       var form = e.target && e.target.closest && e.target.closest('form');
-      var zone = (form && form.querySelector('[data-filebox]')) || last || (zones.length === 1 ? zones[0] : null);
+      var zone = (form && form.querySelector('[data-filebox]')) || document.querySelector('[data-filebox]:hover') || (document.querySelector('[data-filedrop]') ? null : last || (zones.length === 1 ? zones[0] : null));
       if (!zone) return;
       e.preventDefault(); zone._add(cd.files);
     });

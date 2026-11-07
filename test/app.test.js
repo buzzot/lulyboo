@@ -1509,3 +1509,49 @@ test('development projects: private threads, NDA, versions, quotes, milestones a
   assert.equal((await req(base, 'GET', '/portal/projects', { cookie: A.c })).status, 200);
   assert.doesNotMatch((await req(base, 'GET', '/portal/projects', { cookie: B.c })).text, /Factory A/);
 });
+
+test('business license: credit code check, upload, AI check saved on the profile', async (t) => {
+  const LIC = require('../src/license');
+  assert.equal(LIC.checkUSCC('91350100M000100Y43').valid, true);
+  assert.equal(LIC.checkUSCC('91350100M000100Y43').province, 'Fujian');
+  assert.equal(LIC.checkUSCC('91350100M000100Y44').valid, false);
+  assert.equal(LIC.checkUSCC('9135').valid, false);
+
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch; const prevKey = process.env.ANTHROPIC_API_KEY; process.env.ANTHROPIC_API_KEY = 'test-key';
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    if (!String(url).startsWith('https://api.anthropic.com/')) return realFetch(url, opts);
+    const body = JSON.parse(opts.body); calls.push(body);
+    const isLookup = body.tools.some((x) => x.type === 'web_search_20250305');
+    const content = isLookup
+      ? [{ type: 'web_search_tool_result', content: [{ url: 'https://www.qcc.com/firm/abc.html', title: 'Qichacha' }] }, { type: 'tool_use', name: 'record_registry', input: { found: true, registry_status_en: 'Active (存续)', name_en: 'Fujian Test Toys Co., Ltd.', name_original: '福建测试玩具有限公司', credit_code: '91350100M000100Y43', legal_representative: '张三 (Zhang San)', sources: [{ title: 'Qichacha', url: 'https://www.qcc.com/firm/abc.html' }] } }]
+      : [{ type: 'tool_use', name: 'record_license', input: { is_business_license: true, credit_code: '91350100M000100Y43', name_original: '福建测试玩具有限公司', name_en: 'Fujian Test Toys Co., Ltd.', address_en: 'No. 1 Test Road, Fuzhou' } }];
+    return new Response(JSON.stringify({ model: 'claude-test', content, stop_reason: 'tool_use', usage: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { server.close(); global.fetch = realFetch; if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prevKey; });
+
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Fujian Test Toys Co., Ltd.', email: 'f@t.com', country: 'China', active: true });
+  const fd = new FormData(); fd.append('business_license_no', '9135 0100 M000 100Y43'); fd.append('license_file', new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0])], { type: 'image/jpeg' }), 'license.jpg');
+  assert.equal((await fetch(`${base}/admin/suppliers/${s.id}/license`, { method: 'POST', headers: { cookie: admin }, body: fd, redirect: 'manual' })).status, 303);
+  let row = db.tables.suppliers.find((x) => x.id === s.id);
+  assert.equal(row.business_license_no, '91350100M000100Y43'); assert.match(row.business_license_path, /^licenses\//);
+  const page1 = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin });
+  assert.match(page1.text, /Valid China credit code · registered in Fujian/);
+  assert.equal((await req(base, 'GET', `/admin/suppliers/${s.id}/license-file?inline=1`, { cookie: admin })).status, 200);
+
+  await req(base, 'POST', `/admin/suppliers/${s.id}/license/check`, { cookie: admin, form: {} });
+  row = db.tables.suppliers.find((x) => x.id === s.id);
+  assert.equal(row.license_info.verdict, 'ok'); assert.equal(row.license_info.registry.registry_status_en, 'Active (存续)');
+  assert.equal(calls.length, 2); assert.equal(calls[0].messages[0].content[0].type, 'image');
+  const page2 = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin });
+  assert.match(page2.text, /Verified by AI/); assert.match(page2.text, /No. 1 Test Road, Fuzhou/); assert.match(page2.text, /qcc\.com\/firm\/abc/);
+
+  // A different number typed later clears the old check
+  await req(base, 'POST', `/admin/suppliers/${s.id}/license`, { cookie: admin, form: { business_license_no: '91350100M000100Y44' } });
+  row = db.tables.suppliers.find((x) => x.id === s.id);
+  assert.equal(row.license_info, null);
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin })).text, /check digit does not match/);
+});

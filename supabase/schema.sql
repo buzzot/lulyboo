@@ -556,3 +556,11 @@ alter table public.dev_milestones enable row level security;
 -- Plain-language description for each project file (safe to run on an existing database)
 alter table public.dev_files add column if not exists label text;
 notify pgrst, 'reload schema';
+
+-- Supplier business license (number, private file, AI check result)
+alter table public.suppliers add column if not exists business_license_no text;
+alter table public.suppliers add column if not exists business_license_path text;
+alter table public.suppliers add column if not exists business_license_name text;
+alter table public.suppliers add column if not exists license_info jsonb;
+alter table public.suppliers add column if not exists license_checked_at timestamptz;
+notify pgrst, 'reload schema';

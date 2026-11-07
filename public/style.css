@@ -1125,3 +1125,17 @@ dialog.lightbox::backdrop{background:rgba(20,14,12,.78)}
 .lb-body img{max-width:min(1100px,96vw);max-height:84vh;border-radius:10px;background:#fff;display:block}
 dialog.lightbox.doc{width:min(1000px,96vw)}
 .lb-body iframe{width:min(1000px,96vw);height:84vh;border:0;border-radius:10px;background:#fff}
+
+/* Business license */
+.mdrop.small .mdrop-box{padding:12px 12px;gap:2px}.mdrop.small .dz-main{font-weight:600;font-size:13.5px}.mdrop.small .dz-hint{margin-top:0}
+.lic-form{display:grid;gap:10px}.lic-form label{display:grid;gap:4px}
+.lic-form input[name=business_license_no],.lic-sup input[name=business_license_no]{font-family:Menlo,Consolas,monospace;letter-spacing:.04em}
+.lic-ck{margin:-4px 0 0;font-size:13px}.lic-ck.ok{color:#1d7a43}.lic-ck.bad{color:#c8312f}
+.lic-file{display:grid;gap:10px}
+.lic-current{display:flex;align-items:center;gap:12px}.lic-current .att-face{width:96px;height:68px}
+.lic-ai{margin-top:14px;padding-top:14px;border-top:1px solid var(--line,#eadfdc)}.lic-ai .btn{display:inline-flex;align-items:center;gap:6px}.lic-ai .sub{margin:6px 0 0}
+.lic-result{margin-top:14px;display:grid;gap:10px}.lic-result .flash ul{margin:6px 0 0;padding-left:18px}
+.lic-table th:first-child{width:150px;color:var(--muted);font-weight:600;white-space:nowrap}.lic-table td{vertical-align:top;font-size:13.5px}
+.lic-src a{word-break:break-all}
+.lic-sup>div{display:grid;gap:6px;align-content:start}
+form.card h2.sec.mt{margin-top:26px}

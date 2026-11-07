@@ -244,9 +244,18 @@ function fileDrop({ name = 'file', accept = '.xlsx,.csv', main, hint, required =
   </label>`;
 }
 
+// Small single-file drop box for the business license (photo or PDF). Enhanced by app.js [data-filebox] (drag, drop, paste).
+function licenseDrop({ has = false } = {}) {
+  return html`<div class="mdrop small" data-filebox data-max="1">
+  <div class="mdrop-box"><input type="file" name="license_file" accept=".jpg,.jpeg,.png,.webp,.pdf" aria-label="Business license file">
+    <span class="dz-main" data-main>${has ? t('Replace: drop a new photo or PDF, or choose', '更换：拖入新的照片或 PDF，或点击选择') : t('Drop a photo or PDF of the license, or choose', '拖入营业执照照片或 PDF，或点击选择')}</span>
+    <span class="dz-hint">JPG, PNG, PDF · ${t('up to 10 MB', '最大 10 MB')}</span></div>
+  <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`;
+}
+
 function errorPage(status, message, req = null) {
   const head = status === 404 ? t('Not found', '页面不存在') : t('Something went wrong', '出现错误');
   return page({ title: `Error ${status}`, req, body: html`<section class="card narrow"><h1>${head}</h1><p>${biText(message)}</p></section>` });
 }
 
-module.exports = { page, adminNav, productFields, groupFields, imageGrid, photoSection, pager, statusPill, fileDrop, errorPage, bi, input };
+module.exports = { licenseDrop, page, adminNav, productFields, groupFields, imageGrid, photoSection, pager, statusPill, fileDrop, errorPage, bi, input };
