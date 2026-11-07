@@ -39,7 +39,7 @@ const siteUrl = () => (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOM
 const FONT = "Arial,'Microsoft YaHei','PingFang SC',sans-serif";
 
 /** Shared layout: brand header, body rows, footer. `preheader` is the hidden inbox preview text. */
-const layout = ({ preheader, body }) => `<!doctype html>
+const layout = ({ preheader, body, admin = false }) => `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lulyboo</title></head>
 <body style="margin:0;padding:0;background-color:#ffffff;font-family:${FONT};color:#292c30;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(preheader)}</div>
@@ -48,12 +48,12 @@ const layout = ({ preheader, body }) => `<!doctype html>
 <tr><td style="padding:0 0 22px;border-bottom:1px solid #e8e9eb;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>
 <td style="padding:0 12px 0 0;vertical-align:middle;"><img src="${siteUrl()}/static/email-logo.png" width="48" height="46" alt="" style="display:block;border:0;width:48px;height:46px;"></td>
 <td style="vertical-align:middle;"><span style="color:#de7367;font-size:28px;line-height:32px;font-weight:700;">Lulyboo</span>
-<div style="margin-top:3px;font-size:12px;line-height:16px;color:#73777d;">SUPPLIER PORTAL · 供应商平台</div></td></tr></table></td></tr>
+<div style="margin-top:3px;font-size:12px;line-height:16px;color:#73777d;">${admin ? 'ADMIN NOTIFICATION' : 'SUPPLIER PORTAL · 供应商平台'}</div></td></tr></table></td></tr>
 ${body}
-<tr><td style="border-top:1px solid #e8e9eb;padding:22px 0 0;">
-<p style="margin:0;font-size:11px;line-height:19px;color:#858990;">If you weren't expecting this email, you can ignore it.</p>
+<tr><td style="border-top:1px solid #e8e9eb;padding:22px 0 0;">${admin ? `<p style="margin:0;font-size:11px;line-height:19px;color:#858990;">Sent to Lulyboo owners (REQUEST_CC) by the supplier portal.</p>
+<p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Admin</p>` : `<p style="margin:0;font-size:11px;line-height:19px;color:#858990;">If you weren't expecting this email, you can ignore it.</p>
 <p style="margin:4px 0 0;font-size:11px;line-height:19px;color:#858990;" lang="zh-CN">如果您未预期收到此邮件，请忽略本邮件。</p>
-<p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Supplier Portal / 供应商平台</p></td></tr>
+<p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Supplier Portal / 供应商平台</p>`}</td></tr>
 </table></td></tr></table></body></html>`;
 
 function codeEmail({ code, purpose, minutes }) {
@@ -174,4 +174,34 @@ ${points.length ? `<tr><td style="padding:20px 0 0;"><ul style="margin:0;padding
   };
 }
 
-module.exports = { projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+/**
+ * Internal notices to Lulyboo owners (milestones, supplier activity). English only.
+ * items: [{ tag, tone: 'red'|'amber'|'green'|'grey', title, sub, href }]; detail: { label, text } shown in a box.
+ */
+const TONES = { red: ['#fdecec', '#c8312f'], amber: ['#fdf4e3', '#a86400'], green: ['#e7f6ec', '#1d7a43'], grey: ['#f1f1f2', '#5f6368'] };
+function adminEmail({ title, intro, project, items = [], detail, button, link, preheader }) {
+  const pill = (tag, tone) => { const [bg, fg] = TONES[tone] || TONES.grey; return `<span style="display:inline-block;padding:2px 9px;border-radius:999px;background:${bg};color:${fg};font-size:11px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">${esc(tag)}</span>`; };
+  const rows = items.map((x) => `<tr><td style="padding:14px 16px;border-top:1px solid #f0e6e4;">
+<div>${x.tag ? pill(x.tag, x.tone) : ''}</div>
+<div style="margin-top:6px;font-size:16px;line-height:22px;font-weight:600;">${x.href ? `<a href="${esc(x.href)}" style="color:#292c30;text-decoration:none;">${esc(x.title)}</a>` : esc(x.title)}</div>
+${x.sub ? `<div style="margin-top:2px;font-size:13px;line-height:20px;color:#73777d;">${esc(x.sub)}</div>` : ''}</td></tr>`).join('');
+  const text = `${title}\n${intro ? `\n${intro}\n` : ''}${project ? `\n${project}\n` : ''}${items.map((x) => `\n- ${x.tag ? `[${x.tag}] ` : ''}${x.title}${x.sub ? ` — ${x.sub}` : ''}`).join('')}${detail ? `\n\n${detail.label ? detail.label + ':\n' : ''}${detail.text}` : ''}\n\n${button}: ${link}`;
+  return {
+    text,
+    html: layout({
+      admin: true,
+      preheader: preheader || title,
+      body: `<tr><td style="padding:30px 0 0;"><h1 style="margin:0;font-size:25px;line-height:33px;font-weight:600;">${esc(title)}</h1>
+${intro ? `<p style="margin:8px 0 0;font-size:15px;line-height:24px;color:#62676e;">${esc(intro)}</p>` : ''}</td></tr>
+${project ? `<tr><td style="padding:18px 0 0;"><div style="padding:13px 16px;background:#faf6f5;border:1px solid #f0dcd9;border-radius:6px;font-size:16px;line-height:22px;font-weight:600;">${esc(project)}</div></td></tr>` : ''}
+${items.length ? `<tr><td style="padding:18px 0 0;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #f0e6e4;border-radius:8px;border-collapse:separate;overflow:hidden;">${rows.replace('border-top:1px solid #f0e6e4;', '')}</table></td></tr>` : ''}
+${detail ? `<tr><td style="padding:18px 0 0;"><div style="padding:14px 16px;background:#fdf3f1;border-left:3px solid #de7367;border-radius:4px;">
+${detail.label ? `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#73777d;text-transform:uppercase;letter-spacing:.04em;">${esc(detail.label)}</p>` : ''}
+<p style="margin:0;font-size:15px;line-height:24px;">${esc(detail.text).replace(/\n/g, '<br>')}</p></div></td></tr>` : ''}
+<tr><td style="padding:24px 0 30px;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
+<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:13px 22px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(button)}</a></td></tr></table></td></tr>`,
+    }),
+  };
+}
+
+module.exports = { adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

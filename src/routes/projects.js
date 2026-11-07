@@ -461,7 +461,13 @@ module.exports = function projectRoutes(router, { db, config }) {
     const { inv, p } = await ownInv(req); await db.update('dev_invitations', { id: inv.id }, { ack_version: p.current_version, updated_at: now() });
     await notifyAdmin(p, inv, `confirmed spec v${p.current_version}`); toDetail(res, inv.id);
   }));
-  const notifyAdmin = async (p, inv, what, extra = '') => { const s = await db.get('suppliers', inv.supplier_id); await P.notifyOwner(config, `[${p.ref}] ${s?.name || 'Supplier'} ${what}`, `${s?.name || 'A supplier'} ${what} on "${p.name}".${extra ? `\n\n${extra}` : ''}\n\n${config.publicUrl}/admin/projects/${p.id}/suppliers/${inv.id}`); };
+  const notifyAdmin = async (p, inv, what, extra = '', o = {}) => {
+    const s = await db.get('suppliers', inv.supplier_id); const who = s?.name || 'A supplier'; const url = `${config.publicUrl}/admin/projects/${p.id}/suppliers/${inv.id}`;
+    await P.notifyOwner(config, `[${p.ref}] ${s?.name || 'Supplier'} ${what}`, `${who} ${what} on "${p.name}".${extra ? `\n\n${extra}` : ''}\n\n${url}`, {
+      title: `${who} ${what}`, project: `${p.ref} · ${p.name}`, detail: extra ? { label: o.label || 'Details', text: extra } : null,
+      items: o.items || [], button: o.button || 'Open supplier thread', link: url,
+    });
+  };
 
   router.get('/portal/projects/:invId/files/:fid', A(async (req, res) => {
     const { inv, p } = await ownInv(req); if (ndaGate(p, inv)) throw new HttpError(403, NA);
@@ -484,7 +490,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
     await db.insert('dev_messages', { invitation_id: inv.id, direction: 'supplier', author: req.user?.name || req.user?.email || null, body, attachments: r.saved, created_at: now() });
     await db.update('dev_invitations', { id: inv.id }, { status: ['Invited', 'Viewed'].includes(inv.status) ? 'Questions' : inv.status, updated_at: now() });
-    await notifyAdmin(p, inv, 'sent a message', body);
+    await notifyAdmin(p, inv, 'sent a message', body, { label: 'Message', button: 'Reply in the thread' });
     flash(res, r.errors.length ? 'warn' : 'ok', m('Message sent', '留言已发送') + (r.errors.length ? ' · ' + r.errors.join(' · ') : '')); toDetail(res, inv.id);
   }));
 
@@ -500,7 +506,7 @@ module.exports = function projectRoutes(router, { db, config }) {
       tooling_cost: num(f.tooling_cost), tooling_lead_days: int(f.tooling_lead_days), moq: int(f.moq), sample_cost: num(f.sample_cost), sample_lead_days: int(f.sample_lead_days), production_lead_days: int(f.production_lead_days),
       validity_date: /^\d{4}-\d{2}-\d{2}$/.test(f.validity_date || '') ? f.validity_date : null, payment_terms: str(f.payment_terms, 300), material_notes: str(f.material_notes, 300), custom, notes: str(f.notes, 4000), attachments: r.saved.length ? r.saved : (prev?.attachments || []), created_at: now() });
     await db.update('dev_invitations', { id: inv.id }, { status: inv.status === 'Sample' ? 'Sample' : 'Quoted', ack_version: p.current_version, updated_at: now() });
-    await notifyAdmin(p, inv, prev ? `submitted a revised quote (rev ${prev.revision + 1})` : 'submitted a quote', `Unit price ${tiers[0].price} ${f.currency || 'USD'} at ${tiers[0].qty}+ pcs`);
+    await notifyAdmin(p, inv, prev ? `submitted a revised quote (rev ${prev.revision + 1})` : 'submitted a quote', `Unit price ${tiers[0].price} ${f.currency || 'USD'} at ${tiers[0].qty}+ pcs`, { label: 'Quote', button: 'Review the quote' });
     flash(res, r.errors.length ? 'warn' : 'ok', m('Quote submitted. Thank you!', '报价已提交，谢谢！') + (r.errors.length ? ' · ' + r.errors.join(' · ') : '')); toDetail(res, inv.id);
   }));
   router.post('/portal/projects/:invId/decline', A(async (req, res) => {
