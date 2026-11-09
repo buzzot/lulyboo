@@ -1686,3 +1686,35 @@ test('samples: add an already shipped sample (tracking starts, no request email)
   assert.equal(s.due_ship_date, null);
   assert.equal(db.tables.sample_events.filter((e) => e.source === 'dhl').length, 1);
 });
+
+test('samples: carrier alert emails to samples@ update the matching sample', async (t) => {
+  const crypto = require('node:crypto');
+  const S = require('../src/samples');
+  assert.equal(S.emailStatus('UPS Update: Package Scheduled for Delivery Tomorrow'), 'in_transit');
+  assert.equal(S.emailStatus('Your UPS package was delivered'), 'delivered');
+  assert.equal(S.emailStatus('UPS Update: delivery attempted, package not delivered'), 'exception');
+  assert.equal(S.emailStatus('Your package is out for delivery'), 'out_for_delivery');
+  assert.equal(S.emailStatus('Import duties are due: action required'), 'exception');
+  const db = seedDb(); const { server, base } = await startServer(db);
+  const prev = process.env.MAILGUN_SIGNING_KEY; process.env.MAILGUN_SIGNING_KEY = 'mg-key';
+  t.after(() => { server.close(); if (prev === undefined) delete process.env.MAILGUN_SIGNING_KEY; else process.env.MAILGUN_SIGNING_KEY = prev; });
+  const sup = await db.insert('suppliers', { name: 'Lier Baby', email: 'l@l.cn' });
+  const s = await db.insert('samples', { ref: 'SMP-1009', title: 'Bowl', supplier_id: sup.id, status: 'Shipped', carrier: 'ups', tracking_no: '1Z9X84A04127736512' });
+  const post = async (path, fields) => {
+    const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok' + Math.random();
+    const body = new URLSearchParams({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), ...fields });
+    return (await fetch(base + path, { method: 'POST', body })).json();
+  };
+  const r1 = await post('/hooks/mailgun-inbound', { recipient: 'samples@in.lulyboo.space', from: 'UPS <mcinfo@ups.com>', subject: 'UPS Update: Package Scheduled for Delivery Tuesday, 11/10/2026', 'body-plain': 'Tracking Number: 1Z9X 84A0 4127 7365 12\nScheduled Delivery: Tuesday 11/10/2026', 'Message-Id': '<a1@ups.com>' });
+  assert.equal(r1.matched, true); assert.equal(db.tables.samples.find((x) => x.id === s.id).status, 'In transit');
+  const again = await post('/hooks/mailgun-samples', { from: 'UPS <mcinfo@ups.com>', subject: 'UPS Update: Package Scheduled for Delivery Tuesday, 11/10/2026', 'body-plain': '1Z9X84A04127736512', 'Message-Id': '<a1@ups.com>' });
+  assert.equal(again.updated.length, 0, 'same email is not applied twice');
+  await post('/hooks/mailgun-samples', { from: 'UPS <mcinfo@ups.com>', subject: 'Your UPS Package was delivered', 'body-plain': 'Tracking Number 1Z9X84A04127736512 delivered at front door', 'Message-Id': '<a2@ups.com>' });
+  const row = db.tables.samples.find((x) => x.id === s.id);
+  assert.equal(row.status, 'Delivered'); assert.ok(row.delivered_at);
+  assert.equal(db.tables.sample_events.filter((e) => e.source === 'email').length, 2);
+  const none = await post('/hooks/mailgun-samples', { subject: 'Random', 'body-plain': 'nothing here' });
+  assert.equal(none.matched, false);
+  const bad = await fetch(base + '/hooks/mailgun-samples', { method: 'POST', body: new URLSearchParams({ timestamp: '1', token: 'x', signature: 'y', subject: 'x' }) });
+  assert.equal(bad.status, 404);
+});

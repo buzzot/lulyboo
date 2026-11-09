@@ -183,4 +183,52 @@ async function supplierBadges(db, supplierId) {
   return { '/portal/projects': projects, '/portal/samples': samples };
 }
 
-module.exports = { supplierBadges, STATUSES, STATUS_ZH, CLOSED, EVALUATED, STAGES, FILE_KINDS, FREIGHT_BY, DEFAULT_CHECKS, pillCls, nextRef, storeFiles, total, notifyStatus, notifySupplierSample, refreshSample, runTracking, runReminders, newSampleCount, readWaybill, CHECK_EVERY };
+// ── Carrier notification emails (UPS / FedEx / DHL alerts forwarded to samples@<inbound domain>)
+// Used when a carrier API is not connected. Finds tracking numbers in the email, matches them to samples,
+// reads the status from the wording and moves the sample forward like the API poller does.
+const NUM_RE = /\b(1Z[0-9A-Z]{16}|\d{22}|\d{20}|\d{15}|\d{12}|\d{10})\b/g;
+function emailStatus(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\b(was |has been |package |shipment )?delivered\b/.test(t) && !/(not|attempt(ed)?|unable to be|could not be) (be )?delivered|delivery attempt|scheduled delivery/.test(t)) return 'delivered';
+  if (/out for delivery|with delivery courier|on (its|the) way to you today/.test(t)) return 'out_for_delivery';
+  if (/customs|clearance|import (duty|charges|tax)|duties|brokerage/.test(t)) return /held|delay|action required|pay|payment|documents? (needed|required)/.test(t) ? 'exception' : 'customs';
+  if (/exception|delay(ed)?|unable to deliver|delivery attempt|returned to sender|address (issue|problem)|action required/.test(t)) return 'exception';
+  if (/label (has been )?created|shipment (details|information) (received|sent)|ready for ups|order processed/.test(t)) return 'pre_transit';
+  if (/on the way|in transit|shipped|departed|arrived|picked up|scheduled delivery|estimated delivery|update/.test(t)) return 'in_transit';
+  return null;
+}
+async function handleTrackingEmail({ db, config, from = '', subject = '', text = '', messageId = '', date = null }) {
+  const body = `${subject}\n${text}`;
+  const up = body.toUpperCase().replace(/1Z(?:[ -]?[0-9A-Z]){16}/g, (m) => m.replace(/[ -]/g, '')).replace(/(\d)[ -](?=\d)/g, '$1');
+  const nums = [...new Set((up.match(NUM_RE) || []).map(CR.clean))];
+  const refs = [...new Set(body.match(/SMP-\d{4,}/gi) || [])].map((x) => x.toUpperCase());
+  const all = await db.list('samples');
+  const matches = all.filter((s) => (s.tracking_no && nums.includes(CR.clean(s.tracking_no))) || refs.includes(s.ref));
+  if (!matches.length) return { matched: false, numbers: nums };
+  const code = emailStatus(body);
+  const at = date && !Number.isNaN(Date.parse(date)) ? new Date(date).toISOString() : now();
+  const sender = (String(from).match(/@([\w.-]+)/) || [])[1] || 'email';
+  const updated = [];
+  for (const s of matches) {
+    const key = `email|${messageId || subject}`.slice(0, 200);
+    const seen = await db.list('sample_events', { filters: { sample_id: s.id, key } });
+    if (seen.length) continue;
+    await db.insert('sample_events', { sample_id: s.id, at, code: code || 'note', description: `${String(subject).slice(0, 240)}`, location: `Email from ${sender}`.slice(0, 120), source: 'email', key, created_at: now() });
+    const patch = { last_event_at: at, stall_alerted_at: null, updated_at: now() };
+    if (code) { patch.tracking_status = code; patch.tracking_summary = String(subject).slice(0, 300); }
+    if (code === 'delivered') { patch.delivered_at = at; patch.next_check_at = null; }
+    if (!s.shipped_at && code && code !== 'pre_transit') patch.shipped_at = at;
+    const next = code ? FROM_TRACKING[code] : null;
+    const canMove = next && !CLOSED.includes(s.status) && !EVALUATED.includes(s.status) && next !== s.status && !(s.status === 'Delivered' && next !== 'Delivered');
+    if (canMove) patch.status = next;
+    await db.update('samples', { id: s.id }, patch);
+    if (canMove && ['In transit', 'Customs', 'Out for delivery', 'Delivered', 'Exception'].includes(next)) {
+      const supplier = await db.get('suppliers', s.supplier_id);
+      await notifyStatus({ db, config, sample: { ...s, ...patch }, supplier, status: next, detail: `${String(subject).slice(0, 160)} (carrier email)` });
+    }
+    updated.push({ ref: s.ref, status: canMove ? next : s.status });
+  }
+  return { matched: true, updated };
+}
+
+module.exports = { handleTrackingEmail, emailStatus, supplierBadges, STATUSES, STATUS_ZH, CLOSED, EVALUATED, STAGES, FILE_KINDS, FREIGHT_BY, DEFAULT_CHECKS, pillCls, nextRef, storeFiles, total, notifyStatus, notifySupplierSample, refreshSample, runTracking, runReminders, newSampleCount, readWaybill, CHECK_EVERY };

@@ -318,6 +318,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     const toList = String(f.recipient || f.To || '').split(/[,;]\s*/).filter(Boolean);
     const subject = String(f.subject || '');
     const text = String(f['stripped-text'] || f['body-plain'] || '');
+    // Carrier alerts sent to samples@… belong to Samples, not to RFQ threads.
+    if (toList.some((x) => /^samples@/i.test(x.trim()))) {
+      const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });
+      return res.json({ ok: true, samples: true, ...out });
+    }
     const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(f['body-plain']) || null;
     const r = ref ? (await db.list('info_requests', { filters: { ref } }))[0] : null;
     if (!r) return res.json({ ok: true, matched: false }); // 200 so Mailgun does not retry

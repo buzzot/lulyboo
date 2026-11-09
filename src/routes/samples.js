@@ -79,7 +79,7 @@ function tracker(s, zh = false) {
 }
 
 function timeline(events, { carrierOnly = false } = {}) {
-  const list = carrierOnly ? events.filter((e) => ['dhl', 'fedex', 'ups'].includes(e.source)) : events;
+  const list = carrierOnly ? events.filter((e) => ['dhl', 'fedex', 'ups', 'email'].includes(e.source)) : events;
   if (!list.length) return '';
   return html`<ul class="tl">${list.map((e, i) => html`<li class="${i === 0 ? 'now' : ''} ${e.code === 'exception' ? 'warn' : ''} ${e.code === 'delivered' ? 'ok' : ''}"><span class="tl-t">${when(e.at)}</span><span class="d"></span><div><b>${e.description || e.code}</b>${e.location ? html`<small>${e.location}</small>` : ''}</div></li>`)}</ul>`;
 }
@@ -268,8 +268,8 @@ module.exports = function sampleRoutes(router, { db, config }) {
     const s = await load(req.params.id);
     const allSup = await db.list('suppliers', { select: 'id,name,active,country,email,contact_name', order: 'name.asc' });
     const [supplier, events, files, project] = await Promise.all([db.get('suppliers', s.supplier_id), db.list('sample_events', { filters: { sample_id: s.id }, order: 'at.desc' }), db.list('sample_files', { filters: { sample_id: s.id }, order: 'created_at.asc' }), s.project_id ? db.get('dev_projects', s.project_id) : null]);
-    const carrierEv = events.filter((e) => ['dhl', 'fedex', 'ups'].includes(e.source));
-    const logEv = events.filter((e) => !['dhl', 'fedex', 'ups'].includes(e.source));
+    const carrierEv = events.filter((e) => ['dhl', 'fedex', 'ups', 'email'].includes(e.source));
+    const logEv = events.filter((e) => !['dhl', 'fedex', 'ups', 'email'].includes(e.source));
     const auto = s.tracking_no && CR.configured(s.carrier);
     const na = nextAction(s, today());
     const checks = (s.eval_checks?.length ? s.eval_checks : S.DEFAULT_CHECKS.map((label) => ({ label, result: null })));
@@ -476,6 +476,21 @@ module.exports = function sampleRoutes(router, { db, config }) {
     res.redirect('/admin/samples');
   }));
 
+  // ── Carrier alert emails → samples. Mailgun route: match_recipient("samples@<inbound domain>") → forward to /hooks/mailgun-samples
+  //    (the existing /hooks/mailgun-inbound also hands samples@ mail over here, so a catch-all route works too).
+  router.post('/hooks/mailgun-samples', async (req, res) => {
+    const key = process.env.MAILGUN_SIGNING_KEY;
+    if (!key) return res.json({ error: 'not found' }, 404);
+    let parsed; try { parsed = await parseForm(req, { limitBytes: 45 * 1024 * 1024 }); } catch { return res.json({ error: 'bad request' }, 400); }
+    const f = parsed.fields;
+    const crypto = require('node:crypto');
+    const expect = crypto.createHmac('sha256', key).update(String(f.timestamp || '') + String(f.token || '')).digest('hex');
+    const sig = String(f.signature || ''); const fresh = Math.abs(Date.now() / 1000 - Number(f.timestamp)) < 15 * 60;
+    if (!(sig.length === expect.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect)) && fresh)) return res.json({ error: 'not found' }, 404);
+    const out = await S.handleTrackingEmail({ db, config, from: f.from || f.sender, subject: f.subject, text: f['body-plain'] || f['stripped-text'] || '', messageId: f['Message-Id'] || f['message-id'], date: f.Date });
+    res.json({ ok: true, ...out });
+  });
+
   // ═════════════════════════ SUPPLIER PORTAL ═════════════════════════
   async function own(req) { const s = await db.get('samples', req.params.id); if (!s || s.supplier_id !== req.supplier.id) throw new HttpError(404, m('Sample not found', '未找到样品')); return s; }
   const supAction = (s) => ({ Requested: [t('Confirm', '确认'), 'bad'], Confirmed: [t('Ship & add tracking', '寄出并填写运单号'), 'bad'], Revise: [t('Revise', '修改'), 'warn'] }[s.status] || null);
@@ -499,7 +514,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
     const [events, files] = await Promise.all([db.list('sample_events', { filters: { sample_id: s.id }, order: 'at.desc' }), db.list('sample_files', { filters: { sample_id: s.id }, order: 'created_at.asc' })]);
     const href = (f) => `/portal/sample-files/${f.id}`;
     const dt = (x) => (x ? String(x).slice(0, 10) : '');
-    const carrierEv = events.filter((e) => ['dhl', 'fedex', 'ups'].includes(e.source));
+    const carrierEv = events.filter((e) => ['dhl', 'fedex', 'ups', 'email'].includes(e.source));
     const steps = [['Confirm', '确认', ['Requested']], ['Ship', '寄送', ['Confirmed']], ['Delivered', '已签收', ['Shipped', 'In transit', 'Customs', 'Out for delivery', 'Exception', 'Delivered']], ['Result', '评估结果', ['Approved', 'Revise', 'Rejected']]];
     const curStep = steps.findIndex((x) => x[2].includes(s.status));
     res.html(page({ title: `${s.ref} ${s.title}`, nav: supNav(), flash: takeFlash(req, res), req,

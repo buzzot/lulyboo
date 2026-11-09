@@ -830,7 +830,11 @@ module.exports = function adminRoutes(router, { db, config }) {
     let list = suppliers;
     if (req.query.crm) list = list.filter((s) => s.crm_status === req.query.crm);
     if (req.query.q) { const t = req.query.q.toLowerCase(); list = list.filter((s) => [s.name, s.contact_name, s.email, s.country, s.categories_supplied].some((v) => v && v.toLowerCase().includes(t))); }
-    const due = (s) => s.next_follow_up && s.next_follow_up <= today() || acts.some((a) => a.supplier_id === s.id && !a.done && a.follow_up_date && a.follow_up_date <= today());
+    // Next follow-up = the earliest open item from "Schedule a follow-up" (older activity follow-ups and the old date field still count).
+    const open = await require('../crm').openItems(db).catch(() => []);
+    const nextOf = {}; for (const i of open) if (i.supplier_id && i.due_date && !nextOf[i.supplier_id]) nextOf[i.supplier_id] = i.due_date;
+    const nextFu = (s) => [nextOf[s.id], s.next_follow_up].filter(Boolean).sort()[0] || null;
+    const due = (s) => { const d = nextFu(s); return !!d && d <= today(); };
     if (req.query.followup === '1') list = list.filter(due);
     const lastAct = (id) => acts.find((a) => a.supplier_id === id)?.activity_date;
     res.html(page({
@@ -848,7 +852,7 @@ module.exports = function adminRoutes(router, { db, config }) {
           <td>${s.contact_name || '—'}<div class="sub">${s.email || ''}</div></td><td>${s.country || '—'}</td>
           <td>${s.crm_status}</td><td>${s.rating ? '★'.repeat(s.rating) : '—'}</td>
           <td class="r">${ps.length}</td><td class="r">${ps.filter((p) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length}</td>
-          <td>${fmt.date(lastAct(s.id))}</td><td class="${due(s) ? 'neg' : ''}">${fmt.date(s.next_follow_up)}</td>
+          <td>${fmt.date(lastAct(s.id))}</td><td class="${due(s) ? 'neg' : ''}">${fmt.date(nextFu(s))}</td>
           <td>${portal(s)}</td></tr>`; })}</tbody></table></div>
       <details class="card" ${suppliers.length ? '' : raw('open')}><summary><h2 class="inline">+ Add supplier</h2></summary>
         <p class="muted">The supplier receives an invitation link. They verify this email with a 6-digit code, fill in their company details and create a password. This email becomes their login.</p>
@@ -937,7 +941,6 @@ module.exports = function adminRoutes(router, { db, config }) {
             <label><span class="lbl">CRM status</span><select name="crm_status">${CRM_STATUSES.map((c) => html`<option ${c === s.crm_status ? raw('selected') : ''}>${c}</option>`)}</select></label>
             <label><span class="lbl">Rating</span><select name="rating"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${s.rating === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
             <label><span class="lbl">Categories supplied</span><input name="categories_supplied" value="${s.categories_supplied || ''}"></label>
-            <label><span class="lbl">Next follow-up</span><input type="date" name="next_follow_up" value="${s.next_follow_up || ''}"></label>
             <label class="span2"><span class="lbl">Notes</span><textarea name="notes" rows="3">${s.notes || ''}</textarea></label>
             <div class="span2"><button class="btn">Save</button></div>
           </form></section>
