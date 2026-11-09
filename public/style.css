@@ -1281,3 +1281,13 @@ img.ph{object-fit:cover;padding:0}
 .smp-thumb{flex:none;width:72px;height:72px;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff;cursor:zoom-in}
 .smp-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .smp-head .smp-title{flex:1;min-width:0}.smp-head:has(.smp-thumb){align-items:center}
+
+/* Review table: everything lines up on the first line of the row */
+.review-table tbody td{vertical-align:top!important;padding-top:10px;padding-bottom:10px}
+.review-table td>input,.review-table td>select,.review-table .rv-dims{height:34px;box-sizing:border-box}
+.review-table input:not([type=checkbox]),.review-table select{height:34px;box-sizing:border-box}
+.review-table td:first-child input[type=checkbox]{margin-top:1px}
+.review-table .rv-dims{display:flex;align-items:center}
+.review-table input.rv-sku{width:100px;font-family:inherit}
+.review-table .rv-flags{margin-top:4px}
+.review-table thead th{vertical-align:bottom}

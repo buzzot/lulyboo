@@ -288,7 +288,7 @@ async function extractProducts({ table = null, file = null, supplierName = '', c
       supplier: { type: 'object', description: 'The SELLER (the company that issued the document), not the buyer/consignee', properties: { company: str, address: str, contact_name: str, phone: str, email: str, website: str } },
       products: { type: 'array', items: { type: 'object', properties: {
         source_row: { type: 'integer', description: 'The R<number> of the row the product is on (spreadsheets only)' },
-        product_name: { type: 'string', description: 'Short clear English name, e.g. "Stainless steel pet bowl with anti-slip rubber ring, 18 cm". Translate Chinese.' },
+        product_name: { type: 'string', description: 'Short clear English name, e.g. "Stainless steel pet bowl with anti-slip rubber ring, 18 cm". Translate Chinese. Do not repeat the item number/SKU in the name (it goes in supplier_sku).' },
         supplier_sku: { type: 'string', description: 'Item / model number' },
         category: { type: 'string', enum: categories.length ? categories : undefined },
         description: str, materials: str, product_size_cm: { type: 'string', description: 'e.g. 18 x 18 x 3.9' },

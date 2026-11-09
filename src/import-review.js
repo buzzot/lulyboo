@@ -17,7 +17,7 @@ const TTL_MS = 30 * 60 * 1000;
 const MAX_STAGED_BYTES = 150 * 1024 * 1024;
 
 // Main fields shown (and editable) in the review table.
-const EDIT_KEYS = ['product_name', 'category', 'unit_price', 'currency', 'moq', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg', 'production_lead_days'];
+const EDIT_KEYS = ['supplier_sku', 'product_name', 'category', 'unit_price', 'currency', 'moq', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg', 'production_lead_days'];
 
 // Everything else on a product is editable in the pop-up (only changed values are applied).
 const EXTRA_FIELDS = PRODUCT_FIELDS.filter((f) => !EDIT_KEYS.includes(f.key));
@@ -259,6 +259,7 @@ function readEdits(v, extraIn = {}) {
   if (currency && !CURRENCIES.includes(currency)) errors.push(m(`Currency must be one of: ${CURRENCIES.join(', ')}`, `币种须为：${CURRENCIES.join('、')}`));
   const numeric = {};
   for (const k of EDIT_KEYS) if (!['product_name', 'category', 'currency'].includes(k)) numeric[k] = v[k];
+  if (numeric.supplier_sku !== undefined) numeric.supplier_sku = String(numeric.supplier_sku || '').trim();
   const { row, errors: numErrors } = cleanProduct({ ...numeric, ...extraIn }, { partial: true });
   errors.push(...numErrors);
   const patch = { ...row, product_name: name.slice(0, 500), category: category || null, currency: currency || 'USD' };
@@ -482,13 +483,14 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     return html`<tr class="${on ? '' : 'rv-off'} ${errs.length ? 'rv-bad' : ''}">
       <td><input type="checkbox" class="rv-use" name="use_${rn}" value="1"${on ? raw(' checked') : ''} aria-label="Import ${values[rn].product_name}"></td>
       <td class="rv-photo"><button type="button" class="rv-thumb" data-rv-open="rv-dlg-${rn}" title="${T('Open product details', '打开产品详情')}" aria-label="${T('Open product details', '打开产品详情')}">${nimg ? html`<img src="${imgUrl(rn, 0)}" alt="" loading="lazy">${nimg > 1 ? html`<span class="rv-more">+${nimg - 1}</span>` : ''}` : html`<span class="rv-none">${T('No photo', '无图')}</span>`}</button></td>
+      <td><input class="rv-sku" name="r_${rn}_supplier_sku" data-sync="r_${rn}_supplier_sku" value="${values[rn].supplier_sku}" maxlength="60" aria-label="SKU / item no." placeholder="—"></td>
       <td><input class="rv-name" name="r_${rn}_product_name" data-sync="r_${rn}_product_name" value="${values[rn].product_name}" aria-label="Product name">${flagsFor(p).length ? html`<div class="rv-flags">${flagsFor(p).map((x) => html`<span class="rv-flag">${x}</span>`)}</div>` : ''}</td>
       <td>${select(rn, 'category', CATEGORIES)}</td>
       <td>${num(rn, 'unit_price')}</td><td>${select(rn, 'currency', CURRENCIES)}</td>
       <td>${num(rn, 'moq')}</td><td>${num(rn, 'units_per_carton')}</td>
       <td><div class="rv-dims">${num(rn, 'carton_l_cm', 'sm')}×${num(rn, 'carton_w_cm', 'sm')}×${num(rn, 'carton_h_cm', 'sm')}</div></td>
       <td>${num(rn, 'carton_gw_kg')}</td><td>${num(rn, 'production_lead_days')}</td>
-    </tr>${errs.length ? html`<tr class="rv-errrow"><td></td><td colspan="10"><b>${values[rn].product_name}:</b> ${errs.map((e) => html`<div>${biText(e)}</div>`)}</td></tr>` : ''}`;
+    </tr>${errs.length ? html`<tr class="rv-errrow"><td></td><td colspan="11"><b>${values[rn].product_name}:</b> ${errs.map((e) => html`<div>${biText(e)}</div>`)}</td></tr>` : ''}`;
   });
   const n = selected.size;
   return html`<section class="card import-review" data-import-review data-action="${action}" data-containers="${JSON.stringify(CONTAINERS)}">
@@ -506,7 +508,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     <form id="review-form" method="post" action="${action}/confirm" data-review-form>
       <input type="hidden" name="token" value="${token}">
       <div class="table-wrap"><table class="list review-table"><thead><tr>
-        <th><input type="checkbox" data-review-all aria-label="Select all"${n === parsed.products.length ? raw(' checked') : ''}></th><th>${T('Photo', '图片')}</th><th>${T('Product', '产品')}</th><th>${T('Category', '类别')}</th><th>${T('Price', '单价')}</th><th>${T('Cur.', '币种')}</th><th>${T('MOQ', '起订量')}</th><th>${T('Pcs / carton', '件/箱')}</th><th>${T('Carton L×W×H cm', '外箱 长×宽×高 cm')}</th><th>${T('Gross kg', '毛重 kg')}</th><th>${T('Prod. days', '交期(天)')}</th>
+        <th><input type="checkbox" data-review-all aria-label="Select all"${n === parsed.products.length ? raw(' checked') : ''}></th><th>${T('Photo', '图片')}</th><th>${T('SKU / Item no.', '货号')}</th><th>${T('Product', '产品')}</th><th>${T('Category', '类别')}</th><th>${T('Price', '单价')}</th><th>${T('Cur.', '币种')}</th><th>${T('MOQ', '起订量')}</th><th>${T('Pcs / carton', '件/箱')}</th><th>${T('Carton L×W×H cm', '外箱 长×宽×高 cm')}</th><th>${T('Gross kg', '毛重 kg')}</th><th>${T('Prod. days', '交期(天)')}</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
       ${parsed.products.map((p, i) => dialog(p, i))}
     </form>
