@@ -228,7 +228,7 @@ function renderWorkspace(c) {
           <input type="hidden" name="section" value="review"><input type="hidden" name="stores_present" value="1">
           <label class="frow"><span>Status</span><select name="status">${F.STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
           <label class="frow"><span>Score</span><select name="score"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${p.score === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
-          <fieldset class="frow stores"><legend>Target stores</legend><div class="chips">${F.STORES.map((s) => html`<label class="chip"><input type="checkbox" name="target_stores" value="${s}" ${(p.target_stores || []).includes(s) ? raw('checked') : ''}><span>${s}</span></label>`)}</div></fieldset>
+          <div class="frow stores" role="group" aria-labelledby="lbl-stores"><span id="lbl-stores">Target stores</span><div class="store-picks">${F.STORES.map((s) => html`<label class="store-pick"><input type="checkbox" name="target_stores" value="${s}" ${(p.target_stores || []).includes(s) ? raw('checked') : ''}><span><i aria-hidden="true"></i>${s}</span></label>`)}</div></div>
           <label class="frow top"><span>Reviewer notes</span><textarea name="review_notes" rows="5">${p.review_notes || ''}</textarea></label>
           <div class="form-actions"><button class="btn" data-save>Save review</button>${dirty}</div>
         </form></section>

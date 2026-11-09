@@ -1321,3 +1321,16 @@ img.ph{object-fit:cover;padding:0}
    the product header sticks just below the menu instead of covering it. */
 .top{z-index:40}
 .pw-head{top:var(--top-h,64px)}
+
+/* Review: target stores as one row of toggle pills */
+.store-picks{display:flex;flex-wrap:wrap;gap:8px}
+.store-pick{position:relative;cursor:pointer}
+.store-pick input{position:absolute;opacity:0;pointer-events:none}
+.store-pick span{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px 0 10px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:13.5px;color:var(--ink);transition:background .12s,border-color .12s}
+.store-pick i{width:16px;height:16px;border-radius:50%;border:1.5px solid #c9cfcc;box-sizing:border-box;display:inline-grid;place-items:center;flex:none}
+.store-pick:hover span{border-color:#c9cfcc;background:#fafbfb}
+.store-pick input:checked+span{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-dark,#b6453a);font-weight:600}
+.store-pick input:checked+span i{background:var(--brand);border-color:var(--brand)}
+.store-pick input:checked+span i::after{content:"";width:6px;height:3px;border:solid #fff;border-width:0 0 2px 2px;transform:translateY(-1px) rotate(-45deg)}
+.store-pick input:focus-visible+span{outline:2px solid var(--brand);outline-offset:2px}
+.pw-body .fields .frow.stores{align-items:center}
