@@ -1309,3 +1309,11 @@ img.ph{object-fit:cover;padding:0}
 .sku-cell{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:#55605a;white-space:nowrap}
 /* Sticky product header: paint its background edge to edge so the top bar and cards do not peek out at the sides */
 .pw-head{box-shadow:0 0 0 100vmax var(--bg,#faf9f7);clip-path:inset(0 -100vmax)}
+
+/* Product photos: show the whole image, never crop; open in the popup */
+.pd-hero{background:#fff;cursor:zoom-in}.pd-hero img{object-fit:contain!important;padding:6px;box-sizing:border-box}
+.pd-thumbs a{display:block;cursor:zoom-in}.pd-thumbs img{object-fit:contain!important;background:#fff}
+.ph a,.thumbs a{cursor:zoom-in}
+.lb-nav{display:none;position:fixed;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:50%;border:0;background:rgba(255,255,255,.92);font-size:30px;line-height:1;cursor:pointer;z-index:2;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+.lb-prev{left:max(12px,2vw)}.lb-next{right:max(12px,2vw)}dialog.lightbox.multi .lb-nav{display:block}.lb-nav:hover{background:#fff}
+.lb-count{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;font-weight:600;background:rgba(0,0,0,.35);padding:4px 10px;border-radius:999px}.lb-count:empty{display:none}

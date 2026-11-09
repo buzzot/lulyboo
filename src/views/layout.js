@@ -191,7 +191,7 @@ function imageGrid(images, urls, { deleteAction } = {}) {
   if (!images?.length) return '';
   return html`<div class="thumbs">${images.map((im) => html`
     <figure>
-      <a href="${urls[im.path] || '#'}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path] || ''}" alt="" loading="lazy"></a>
+      <a href="${urls[im.path] || '#'}" data-preview="${urls[im.path] || urls[im.thumb_path] || ''}" data-type="image" data-gallery="photos"><img src="${urls[im.thumb_path] || ''}" alt="" loading="lazy"></a>
       ${deleteAction ? html`<button class="link danger" type="submit" formaction="${deleteAction(im)}" formmethod="post" formenctype="application/x-www-form-urlencoded" formnovalidate${confirmAttr('Delete this photo?', '确定删除该图片？')}>${t('Delete', '删除')}</button>` : ''}
     </figure>`)}</div>`;
 }

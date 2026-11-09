@@ -68,8 +68,8 @@ function productDetails({ p, imgs, urls }) {
   return html`<section class="card pd" id="details">
     <div class="pd-grid">
       <div class="pd-photos">
-        ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" target="_blank" rel="noopener"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
-          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 5).map((im) => html`<a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 5 ? html`<span class="pd-more">+${imgs.length - 5}</span>` : ''}</div>` : ''}`
+        ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" data-preview="${urls[hero.path] || urls[hero.thumb_path]}" data-type="image" data-gallery="product"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
+          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 5).map((im) => html`<a href="${urls[im.path]}" data-preview="${urls[im.path] || urls[im.thumb_path]}" data-type="image" data-gallery="product"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 5 ? html`<span class="pd-more">+${imgs.length - 5}</span>` : ''}</div>` : ''}`
           : html`<div class="pd-hero empty">No photo yet</div>`}
         ${p.photo_link ? html`<p class="sub"><a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">Supplier photo / catalog link ↗</a></p>` : ''}
       </div>

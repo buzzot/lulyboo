@@ -91,8 +91,8 @@ function renderWorkspace(c) {
   const overview = html`<section class="pw-panel" role="tabpanel" id="tab-overview" aria-labelledby="tabbtn-overview" data-panel="overview">
     <div class="ov-grid">
       <div class="card ov-gallery">
-        ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" target="_blank" rel="noopener"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
-          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 5).map((im) => html`<a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 5 ? html`<a class="pd-more" href="#documents" data-goto-tab="documents">+${imgs.length - 5}</a>` : ''}</div>` : ''}`
+        ${hero ? html`<a class="pd-hero" href="${urls[hero.path]}" data-preview="${urls[hero.path] || urls[hero.thumb_path]}" data-type="image" data-gallery="product"><img src="${urls[hero.path] || urls[hero.thumb_path]}" alt="${p.product_name}"></a>
+          ${imgs.length > 1 ? html`<div class="pd-thumbs">${imgs.slice(1, 5).map((im) => html`<a href="${urls[im.path]}" data-preview="${urls[im.path] || urls[im.thumb_path]}" data-type="image" data-gallery="product"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>`)}${imgs.length > 5 ? html`<a class="pd-more" href="#documents" data-goto-tab="documents">+${imgs.length - 5}</a>` : ''}</div>` : ''}`
           : html`<div class="pd-hero empty">No photo yet<br><a href="#documents" data-goto-tab="documents">Add photos</a></div>`}
         ${p.photo_link ? html`<p class="sub"><a href="${p.photo_link}" target="_blank" rel="noopener noreferrer">Supplier photo / catalog link ↗</a></p>` : ''}
       </div>
@@ -251,7 +251,7 @@ function renderWorkspace(c) {
 
   // ── Documents ─────────────────────────────────────────────
   const docRow = (d, { source = false } = {}) => html`<tr><td><span class="trunc" title="${d.name}">${d.name}</span></td><td>${source ? 'Imported source file' : DOC_KINDS[d.kind] || d.kind}</td><td>${extOf(d.name)}</td><td class="r">${fmt.bytes(d.bytes)}</td><td>${fmt.date(d.created_at)}</td>
-    <td class="r nowrap">${PREVIEWABLE.test(d.name) ? html`<a href="/admin/documents/${d.id}?inline=1" target="_blank" rel="noopener">Preview</a> · ` : ''}<a href="/admin/documents/${d.id}" download>Download</a>${!source && canDelete ? html` · <form class="inline" method="post" action="/admin/products/${p.id}/documents/${d.id}/delete" data-confirm="Delete this file?"><button class="link danger">Delete</button></form>` : ''}</td></tr>`;
+    <td class="r nowrap">${PREVIEWABLE.test(d.name) ? html`<a href="/admin/documents/${d.id}?inline=1" data-preview="/admin/documents/${d.id}?inline=1" data-dl="/admin/documents/${d.id}" data-type="${/\.(png|jpe?g|webp|gif)$/i.test(d.name) ? 'image' : 'doc'}">Preview</a> · ` : ''}<a href="/admin/documents/${d.id}" download>Download</a>${!source && canDelete ? html` · <form class="inline" method="post" action="/admin/products/${p.id}/documents/${d.id}/delete" data-confirm="Delete this file?"><button class="link danger">Delete</button></form>` : ''}</td></tr>`;
   const docTable = (rows, opts) => html`<div class="table-wrap"><table class="list compact docs"><thead><tr><th>File</th><th>Category</th><th>Type</th><th class="r">Size</th><th>Added</th><th></th></tr></thead><tbody>${rows.map((d) => docRow(d, opts))}</tbody></table></div>`;
   const photoMax = Math.max(0, 20 - imgs.length);
   const documents = html`<section class="pw-panel" role="tabpanel" id="tab-documents" aria-labelledby="tabbtn-documents" data-panel="documents" hidden>
@@ -259,7 +259,7 @@ function renderWorkspace(c) {
       ${srcDoc ? docTable([srcDoc], { source: true }) : html`<p class="d-empty">This product was not imported from a file, so there is no source file. Files you upload below are kept with it.</p>`}
       ${srcDoc ? html`<p class="sub">Provenance: imported from this file on ${fmt.date(p.created_at)}.</p>` : ''}</section>
     <section class="card"><div class="sec-row"><h2 class="sec">Photos (${imgs.length})</h2>${imgs.length > 1 ? html`<span class="sub">The first photo is the main image.</span>` : ''}</div>
-      ${imgs.length ? html`<div class="ph-grid">${imgs.map((im, i) => html`<figure class="ph"><a href="${urls[im.path]}" target="_blank" rel="noopener"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>
+      ${imgs.length ? html`<div class="ph-grid">${imgs.map((im, i) => html`<figure class="ph"><a href="${urls[im.path]}" data-preview="${urls[im.path] || urls[im.thumb_path]}" data-type="image" data-gallery="product"><img src="${urls[im.thumb_path]}" alt="" loading="lazy"></a>
         ${i === 0 ? html`<span class="ph-main">Main</span>` : ''}
         <figcaption><span>${im.width && im.height ? `${im.width}×${im.height}` : ''}</span><span>${i > 0 ? html`<form class="inline" method="post" action="/admin/products/${p.id}/photos/${im.id}/primary"><button class="link">Make main</button></form> · ` : ''}<form class="inline" method="post" action="/admin/products/${p.id}/images/${im.id}/delete" data-confirm="Delete this photo?"><button class="link danger">Delete</button></form></span></figcaption></figure>`)}</div>` : html`<p class="d-empty">No photos yet.</p>`}
       ${photoMax > 0 ? html`<form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/photos">
