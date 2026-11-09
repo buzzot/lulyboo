@@ -170,49 +170,61 @@ function guard(config, fn) {
 }
 
 
-// ── Business license card (supplier detail page)
+// ── Business license card (supplier detail page): a short summary; full text folded away.
 function licenseCard(s) {
   const id = s.id; const info = s.license_info || null; const code = LIC.normalizeNo(s.business_license_no);
   const ck = code && LIC.looksChinese(s) ? LIC.checkUSCC(code) : null;
   const fileUrl = `/admin/suppliers/${id}/license-file`; const isImg = /\.(jpe?g|png|webp)$/i.test(s.business_license_path || '');
-  const lic = info?.license || {}; const reg = info?.registry || {};
-  const row = (label, a, b) => (a || b ? html`<tr><th>${label}</th><td>${a || html`<span class="none">—</span>`}</td><td>${b || html`<span class="none">—</span>`}</td></tr>` : '');
-  const verdict = info ? (info.verdict === 'ok' ? html`<span class="pill s-selected">Verified by AI</span>` : info.verdict === 'review' ? html`<span class="pill s-new">Needs review</span>` : html`<span class="pill">Not confirmed</span>`) : '';
-  return html`<section class="card lic-card"><div class="head-row"><h2>Business license</h2>${verdict}</div>
-    <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${id}/license" class="lic-form">
+  const lic = info?.license || {}; const reg = info?.registry || null;
+  const finds = info ? LIC.findings(s, info.license, reg, ck) : (ck ? LIC.findings(s, null, null, ck) : []);
+  const bad = finds.some((f) => f.level === 'bad'); const warn = finds.some((f) => f.level === 'warn');
+  const verdict = info ? (bad ? html`<span class="pill lic-bad">Mismatch</span>` : warn ? html`<span class="pill s-new">Needs review</span>` : html`<span class="pill s-selected">Verified by AI</span>`) : '';
+  const short = (x, n) => { const v = String(x || '').trim(); return v.length > n ? `${v.slice(0, n).replace(/[\s,;]+\S*$/, '')}…` : v; };
+  const age = (d) => { const t = Date.parse(d); if (!t) return ''; const y = (Date.now() - t) / 3.156e10; return y >= 1 ? ` · ${y.toFixed(y < 10 ? 1 : 0)} yrs` : ' · under 1 yr'; };
+  const est = lic.established_date || reg?.established_date;
+  const facts = [
+    ['Legal representative', lic.legal_representative || reg?.legal_representative],
+    ['Registered capital', short((lic.registered_capital_en || reg?.registered_capital_en || '').replace(/\s*\(.*?\)/g, ''), 40)],
+    ['Established', est ? `${est}${age(est)}` : ''],
+    ['Company type', short((lic.company_type_en || reg?.company_type_en || '').replace(/\s*\(.*?\)/g, ''), 40)],
+    ['Location', lic.address_short_en || String(lic.address_en || reg?.address_en || '').split(',').map((x) => x.trim()).filter(Boolean).slice(-3).join(', ')],
+    ['Registry', reg ? (reg.found ? short(reg.registry_status_en || 'Found', 40) : 'Not found') : ''],
+    ['What they do', lic.scope_summary_en || short(lic.business_scope_en || reg?.business_scope_en, 110)],
+  ].filter(([, v]) => v);
+  const sym = { ok: '✓', warn: '!', bad: '✕' };
+  const thumb = s.business_license_path ? html`<button type="button" class="att-face lic-thumb" data-preview="${fileUrl}?inline=1" data-type="${isImg ? 'image' : 'doc'}" data-dl="${fileUrl}" aria-label="View license">${isImg ? html`<img src="${fileUrl}?inline=1" alt="">` : html`<span class="att-ic">📄</span><span class="att-ext">PDF</span>`}<span class="att-zoom" aria-hidden="true">${icon('search', 14)}</span></button>` : html`<div class="lic-thumb lic-none">No file</div>`;
+  const form = html`<form method="post" enctype="multipart/form-data" action="/admin/suppliers/${id}/license" class="lic-form">
       <label><span class="lbl">License number / credit code</span><input name="business_license_no" value="${s.business_license_no || ''}" maxlength="40" autocomplete="off" spellcheck="false" placeholder="e.g. 91320000MA1XXXXXXX (18 characters)"></label>
-      ${ck ? html`<p class="lic-ck ${ck.valid ? 'ok' : 'bad'}">${ck.valid ? html`✓ Valid China credit code${ck.province ? ` · registered in ${ck.province}` : ''}` : html`✗ ${ck.reason}`}</p>` : ''}
-      <div class="lic-file">${s.business_license_path ? html`<div class="lic-current">
-          <button type="button" class="att-face" data-preview="${fileUrl}?inline=1" data-type="${isImg ? 'image' : 'doc'}" data-dl="${fileUrl}" aria-label="View license">${isImg ? html`<img src="${fileUrl}?inline=1" alt="">` : html`<span class="att-ic">📄</span><span class="att-ext">PDF</span>`}<span class="att-zoom" aria-hidden="true">${icon('search', 14)}</span></button>
-          <div class="sub">License on file<br><a href="${fileUrl}">Download</a> · <button class="link danger" formaction="/admin/suppliers/${id}/license/remove" formnovalidate data-confirm="Remove the license file?">Remove</button></div></div>` : ''}
-        ${licenseDrop({ has: !!s.business_license_path })}</div>
-      <div class="form-actions"><button class="btn small">Save license</button></div>
-    </form>
-    <div class="lic-ai">
-      <form method="post" action="/admin/suppliers/${id}/license/check"><button class="btn small ghost" data-busy ${code || s.business_license_path ? '' : raw('disabled')}>${icon('sparkles', 15)} ${info ? 'Check again with AI' : 'Check with AI'}</button></form>
-      <p class="sub">Optional. AI reads the license, looks the company up in public registry sources${LIC.looksChinese(s) ? ' (gsxt.gov.cn, Qichacha, Tianyancha)' : ''}, translates the data to English and saves it here.</p>
+      <div><span class="lbl">${s.business_license_path ? 'Replace file' : 'License photo or PDF'}</span>${licenseDrop({ has: !!s.business_license_path })}</div>
+      <div class="form-actions"><button class="btn small">Save license</button>${s.business_license_path ? html`<button class="link danger" formaction="/admin/suppliers/${id}/license/remove" formnovalidate data-confirm="Remove the license file?">Remove file</button>` : ''}</div>
+    </form>`;
+  const links = LIC.officialLinks(s);
+  return html`<section class="card lic-card"><div class="head-row"><h2>Business license</h2>${verdict}</div>
+    ${code || s.business_license_path ? html`<div class="lic-top">${thumb}
+      <div class="lic-sum">
+        ${lic.name_en || lic.name_original ? html`<div class="lic-name">${lic.name_en || lic.name_original}${lic.name_en && lic.name_original ? html`<span>${lic.name_original}</span>` : ''}</div>` : ''}
+        ${code ? html`<div class="lic-code"><code>${code}</code>${ck ? html`<span class="${ck.valid ? 'ok' : 'bad'}">${ck.valid ? `✓ valid${ck.province ? ` · ${ck.province}` : ''}` : '✕ invalid code'}</span>` : ''}</div>` : ''}
+        ${facts.length ? html`<dl class="lic-facts">${facts.map(([k, v]) => html`<div class="${k === 'What they do' ? 'wide' : ''}"><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>` : ''}
+      </div></div>` : html`<p class="muted">No license yet. Add the number and a photo, or ask the supplier to add it on their Company page.</p>`}
+    ${finds.length ? html`<ul class="lic-checks">${finds.map((f) => html`<li class="${f.level}"><span aria-hidden="true">${sym[f.level]}</span>${f.text}</li>`)}</ul>` : ''}
+    <div class="lic-bar">
+      <form method="post" action="/admin/suppliers/${id}/license/check" class="inline"><button class="btn small ghost" data-busy ${code || s.business_license_path ? '' : raw('disabled')}>${icon('sparkles', 15)} ${info ? 'Check again' : 'Check with AI'}</button></form>
+      ${links.length ? html`<span class="sub">Verify: ${links.map((l, i) => html`${i ? ' · ' : ''}<a href="${l.url}" target="_blank" rel="noopener noreferrer">${l.label.replace(' (official)', '')}</a>`)}</span>` : ''}
     </div>
-    ${info ? html`<div class="lic-result">
-      ${info.issues?.length ? html`<div class="flash warn"><b>Check these points</b><ul>${info.issues.map((x) => html`<li>${x}</li>`)}</ul></div>` : info.verdict === 'ok' ? html`<div class="flash ok">License and registry data match this supplier.</div>` : ''}
-      ${info.errors?.length ? html`<p class="sub neg">${info.errors.join(' · ')}</p>` : ''}
-      <div class="table-wrap"><table class="list compact lic-table"><thead><tr><th></th><th>On the license</th><th>Public registry${reg.registry_status_en ? html` · <b>${reg.registry_status_en}</b>` : ''}</th></tr></thead><tbody>
-        ${row('Company name', lic.name_en ? html`${lic.name_en}<div class="sub">${lic.name_original || ''}</div>` : '', reg.name_en ? html`${reg.name_en}<div class="sub">${reg.name_original || ''}</div>` : '')}
-        ${row('Credit code', lic.credit_code, reg.credit_code)}
-        ${row('Company type', lic.company_type_en, reg.company_type_en)}
-        ${row('Legal representative', lic.legal_representative, reg.legal_representative)}
-        ${row('Registered capital', lic.registered_capital_en, reg.registered_capital_en)}
-        ${row('Paid-in capital', '', reg.paid_in_capital_en)}
-        ${row('Established', lic.established_date, reg.established_date)}
-        ${row('Business term', lic.business_term_en, '')}
-        ${row('Address', lic.address_en ? html`${lic.address_en}<div class="sub">${lic.address_original || ''}</div>` : '', reg.address_en)}
-        ${row('Insured employees', '', reg.insured_employees)}
-        ${row('Business scope', lic.business_scope_en, reg.business_scope_en)}
-        ${row('Issued by', lic.issuing_authority_en ? `${lic.issuing_authority_en}${lic.issue_date ? ` · ${lic.issue_date}` : ''}` : '', '')}
-      </tbody></table></div>
-      ${lic.legibility_notes ? html`<p class="sub">Image notes: ${lic.legibility_notes}</p>` : ''}
-      ${reg.sources?.length ? html`<p class="sub lic-src">Sources: ${reg.sources.map((x, i) => html`${i ? ' · ' : ''}<a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title || new URL(x.url).hostname}</a>`)}</p>` : ''}
-      <p class="sub">Checked ${fmt.date(info.checked_at)} by AI. It can be wrong; confirm on the official register${LIC.officialLinks(s).length ? html`: ${LIC.officialLinks(s).map((l, i) => html`${i ? ' · ' : ''}<a href="${l.url}" target="_blank" rel="noopener noreferrer">${l.label}</a>`)}` : '.'}</p>
-    </div>` : ''}
+    ${info ? html`<details class="lic-more"><summary>Full license details</summary>
+      <dl class="lic-full">
+        ${lic.name_original ? html`<dt>Name (original)</dt><dd>${lic.name_original}</dd>` : ''}
+        ${lic.address_en ? html`<dt>Address</dt><dd>${lic.address_en}${lic.address_original ? html`<div class="sub">${lic.address_original}</div>` : ''}</dd>` : ''}
+        ${lic.business_term_en ? html`<dt>Business term</dt><dd>${lic.business_term_en}</dd>` : ''}
+        ${lic.issuing_authority_en ? html`<dt>Issued by</dt><dd>${lic.issuing_authority_en}${lic.issue_date ? ` · ${lic.issue_date}` : ''}</dd>` : ''}
+        ${reg?.found && reg.paid_in_capital_en ? html`<dt>Paid-in capital</dt><dd>${reg.paid_in_capital_en}</dd>` : ''}
+        ${reg?.found && reg.insured_employees ? html`<dt>Insured employees</dt><dd>${reg.insured_employees}</dd>` : ''}
+        ${lic.business_scope_en || reg?.business_scope_en ? html`<dt>Business scope</dt><dd class="scope">${lic.business_scope_en || reg.business_scope_en}</dd>` : ''}
+        ${lic.legibility_notes ? html`<dt>Image notes</dt><dd>${lic.legibility_notes}</dd>` : ''}
+        ${reg?.found && reg.sources?.length ? html`<dt>Sources</dt><dd>${reg.sources.map((x, i) => html`${i ? ' · ' : ''}<a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title || x.url}</a>`)}</dd>` : ''}
+      </dl></details>` : ''}
+    <details class="lic-edit" ${code || s.business_license_path ? '' : raw('open')}><summary>${code || s.business_license_path ? 'Edit number or replace file' : 'Add license'}</summary>${form}</details>
+    ${info ? html`<p class="sub lic-foot">Checked ${fmt.date(info.checked_at)} by AI · can be wrong, confirm on the official register.${info.errors?.length ? html` <span class="neg">${info.errors.map((e) => short(e, 120)).join(' · ')}</span>` : ''}</p>` : ''}
   </section>`;
 }
 
@@ -930,7 +942,6 @@ module.exports = function adminRoutes(router, { db, config }) {
             <div class="span2"><button class="btn">Save</button></div>
           </form></section>
         ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
-        ${licenseCard(s)}
         <section class="card"><h2>Activity</h2>
           <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
             <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
@@ -944,6 +955,7 @@ module.exports = function adminRoutes(router, { db, config }) {
             ${a.follow_up_date && !a.done ? html`<form method="post" action="/admin/activities/${a.id}/done" class="inline"><button class="link">Mark done</button></form>` : ''}</li>`)}</ul>
         </section>
       </div>
+      ${licenseCard(s)}
       <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
         <div class="actions"><a class="btn small ghost" href="/admin/archive?supplier=${s.id}">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
         ${dupAlert(dup)}

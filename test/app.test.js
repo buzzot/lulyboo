@@ -1539,7 +1539,7 @@ test('business license: credit code check, upload, AI check saved on the profile
   let row = db.tables.suppliers.find((x) => x.id === s.id);
   assert.equal(row.business_license_no, '91350100M000100Y43'); assert.match(row.business_license_path, /^licenses\//);
   const page1 = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin });
-  assert.match(page1.text, /Valid China credit code · registered in Fujian/);
+  assert.match(page1.text, /✓ valid · Fujian/);
   assert.equal((await req(base, 'GET', `/admin/suppliers/${s.id}/license-file?inline=1`, { cookie: admin })).status, 200);
 
   await req(base, 'POST', `/admin/suppliers/${s.id}/license/check`, { cookie: admin, form: {} });
@@ -1547,11 +1547,11 @@ test('business license: credit code check, upload, AI check saved on the profile
   assert.equal(row.license_info.verdict, 'ok'); assert.equal(row.license_info.registry.registry_status_en, 'Active (存续)');
   assert.equal(calls.length, 2); assert.equal(calls[0].messages[0].content[0].type, 'image');
   const page2 = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin });
-  assert.match(page2.text, /Verified by AI/); assert.match(page2.text, /No. 1 Test Road, Fuzhou/); assert.match(page2.text, /qcc\.com\/firm\/abc/);
+  assert.match(page2.text, /Verified by AI/); assert.match(page2.text, /No. 1 Test Road, Fuzhou/); assert.match(page2.text, /qcc\.com\/firm\/abc/); assert.match(page2.text, /Company name matches the profile/);
 
   // A different number typed later clears the old check
   await req(base, 'POST', `/admin/suppliers/${s.id}/license`, { cookie: admin, form: { business_license_no: '91350100M000100Y44' } });
   row = db.tables.suppliers.find((x) => x.id === s.id);
   assert.equal(row.license_info, null);
-  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin })).text, /check digit does not match/);
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin })).text, /Credit code is not valid/);
 });

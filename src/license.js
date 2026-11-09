@@ -63,6 +63,9 @@ const READ_TOOL = {
       business_term_en: { type: 'string', description: 'e.g. 2015-03-02 to long-term' },
       address_original: { type: 'string' }, address_en: { type: 'string' },
       business_scope_en: { type: 'string', description: 'Translated business scope, concise.' },
+      scope_summary_en: { type: 'string', description: 'One short line (max 15 words) on what the company does, e.g. "Trading: sells machinery, electronics and lighting".' },
+      business_model: { type: 'string', enum: ['manufacturer', 'trading', 'manufacturer_and_trading', 'unclear'], description: 'manufacturer if the scope includes producing/processing (生产/制造/加工); trading if only sales/agency/import-export.' },
+      address_short_en: { type: 'string', description: 'District, city, province only.' },
       issuing_authority_en: { type: 'string' },
       issue_date: { type: 'string' },
       legibility_notes: { type: 'string', description: 'Anything unreadable, cropped or suspicious.' },
@@ -103,7 +106,7 @@ const LOOKUP_TOOL = {
       address_en: { type: 'string' },
       business_scope_en: { type: 'string' },
       insured_employees: { type: 'string', description: 'Social-insurance headcount if published.' },
-      risk_notes_en: { type: 'string', description: 'Abnormal operation listings, penalties, court cases, name changes, anything a buyer should know.' },
+      risk_notes_en: { type: 'string', description: 'Only real findings about THIS company (abnormal operation listing, penalties, court cases, name changes), max 2 short sentences. Empty if none or not found.' },
       sources: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, url: { type: 'string' } } } },
     },
     required: ['found'],
@@ -139,9 +142,8 @@ Translate everything into English. Only record facts you saw on a page; list eve
     if (rec) {
       const out = rec.input || {};
       const urls = new Set(seen.map((x) => x.url));
-      out.sources = (out.sources || []).filter((x) => x?.url && /^https?:\/\//.test(x.url)).slice(0, 8);
-      if (!out.sources.length) out.sources = seen.slice(0, 5);
-      out.sources_checked = out.sources.every((x) => urls.has(x.url)); // every cited page was actually opened by search
+      // Keep only pages the model cited AND that the search really returned; never pad with unrelated search hits.
+      out.sources = out.found ? (out.sources || []).filter((x) => x?.url && /^https?:\/\//.test(x.url) && urls.has(x.url)).slice(0, 5) : [];
       return out;
     }
     if (data.stop_reason === 'pause_turn' || data.stop_reason === 'end_turn') {
@@ -156,18 +158,30 @@ Translate everything into English. Only record facts you saw on a page; list eve
 
 // ── Compare license vs registry and the supplier profile
 const simplify = (s) => String(s || '').toLowerCase().replace(/co\.?,?|ltd\.?|limited|company|inc\.?|有限公司|有限责任公司|股份/g, '').replace(/[^a-z0-9一-鿿]/g, '');
-function compare(s, lic, reg) {
-  const issues = [];
+// Short, plain findings for the summary. Each: { level: 'ok' | 'warn' | 'bad', text }.
+function findings(s, lic, reg, ck) {
+  const out = [];
   const code = normalizeNo(s.business_license_no);
-  if (lic && lic.is_business_license === false) issues.push('The uploaded file does not look like a business license.');
-  if (lic?.credit_code && code && normalizeNo(lic.credit_code) !== code) issues.push(`Number typed on the profile (${code}) differs from the license image (${normalizeNo(lic.credit_code)}).`);
-  if (reg?.found && reg.credit_code && (code || lic?.credit_code) && normalizeNo(reg.credit_code) !== (code || normalizeNo(lic.credit_code))) issues.push(`Registry shows credit code ${normalizeNo(reg.credit_code)}.`);
+  if (ck) out.push(ck.valid ? { level: 'ok', text: `Credit code is valid${ck.province ? ` (registered in ${ck.province})` : ''}` } : { level: 'bad', text: 'Credit code is not valid (wrong check digit or length)' });
+  if (lic && lic.is_business_license === false) out.push({ level: 'bad', text: 'Uploaded file is not a business license' });
+  if (lic?.credit_code && code && normalizeNo(lic.credit_code) !== code) out.push({ level: 'bad', text: `Number on the image (${normalizeNo(lic.credit_code)}) differs from the number typed` });
   const names = [lic?.name_en, lic?.name_original, reg?.name_en, reg?.name_original].filter(Boolean).map(simplify);
-  if (names.length && s.name && !names.some((n) => n && (n.includes(simplify(s.name)) || simplify(s.name).includes(n)))) issues.push(`Company name on the profile ("${s.name}") does not match the license/registry name.`);
-  if (reg?.found && reg.registry_status_en && !/active|存续|在业|开业/i.test(reg.registry_status_en)) issues.push(`Registry status: ${reg.registry_status_en}.`);
-  if (reg?.risk_notes_en) issues.push(reg.risk_notes_en);
-  return issues;
+  if (names.length && s.name) {
+    const same = names.some((n) => n && (n.includes(simplify(s.name)) || simplify(s.name).includes(n)));
+    out.push(same ? { level: 'ok', text: 'Company name matches the profile' } : { level: 'bad', text: `License is for "${lic?.name_en || reg?.name_en || lic?.name_original}", not "${s.name}"` });
+  }
+  if (lic?.business_model === 'trading') out.push({ level: 'warn', text: 'Trading company, not a factory (no production in business scope)' });
+  else if (lic?.business_model === 'manufacturer' || lic?.business_model === 'manufacturer_and_trading') out.push({ level: 'ok', text: 'Business scope includes manufacturing' });
+  if (reg) {
+    if (!reg.found) out.push({ level: 'warn', text: 'Not found in public registry search; verify on gsxt.gov.cn' });
+    else if (reg.registry_status_en && !/active|存续|在业|开业/i.test(reg.registry_status_en)) out.push({ level: 'bad', text: `Registry status: ${reg.registry_status_en}` });
+    else out.push({ level: 'ok', text: `Registered${reg.registry_status_en ? ` · ${reg.registry_status_en}` : ''}` });
+    if (reg.found && reg.credit_code && (code || lic?.credit_code) && normalizeNo(reg.credit_code) !== (code || normalizeNo(lic.credit_code))) out.push({ level: 'bad', text: `Registry shows a different credit code (${normalizeNo(reg.credit_code)})` });
+    if (reg.found && reg.risk_notes_en) out.push({ level: 'warn', text: String(reg.risk_notes_en).slice(0, 220) });
+  }
+  return out;
 }
+const compare = (s, lic, reg, ck) => findings(s, lic, reg, ck).filter((x) => x.level !== 'ok').map((x) => x.text);
 
 async function runCheck({ db, supplier: s }) {
   const out = { checked_at: new Date().toISOString(), model: AI.model(), code: normalizeNo(s.business_license_no), checksum: null, license: null, registry: null, issues: [], errors: [] };
@@ -182,8 +196,7 @@ async function runCheck({ db, supplier: s }) {
   if (code || s.name) {
     try { out.registry = await lookupRegistry({ code, name: out.license?.name_original || s.name, country: s.country }); } catch (e) { out.errors.push(e.message); }
   }
-  out.issues = compare(s, out.license, out.registry);
-  if (out.checksum && !out.checksum.valid) out.issues.unshift(`Credit code check failed: ${out.checksum.reason}`);
+  out.issues = compare(s, out.license, out.registry, out.checksum);
   out.verdict = out.issues.length ? 'review' : (out.registry?.found || out.license?.is_business_license) ? 'ok' : 'unknown';
   return out;
 }
@@ -198,4 +211,4 @@ const officialLinks = (s) => {
   ] : [];
 };
 
-module.exports = { normalizeNo, checkUSCC, looksChinese, storeLicense, readLicense, lookupRegistry, compare, runCheck, officialLinks, LICENSE_EXT, LICENSE_MIME, MAX_LICENSE_BYTES, extOf };
+module.exports = { findings, normalizeNo, checkUSCC, looksChinese, storeLicense, readLicense, lookupRegistry, compare, runCheck, officialLinks, LICENSE_EXT, LICENSE_MIME, MAX_LICENSE_BYTES, extOf };
