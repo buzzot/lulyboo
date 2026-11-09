@@ -19,6 +19,13 @@ const DOC_TYPES = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'ima
 const A = require('../auth');
 const { createInvite, INVITE_DAYS } = require('./supplier-auth');
 
+// Product name without a leading copy of its SKU ("PA602 Pet bowl…" → "Pet bowl…").
+function skuless(p) {
+  const name = String(p.product_name || ''), sku = String(p.supplier_sku || '').trim();
+  if (!sku || !name.toLowerCase().startsWith(sku.toLowerCase())) return name;
+  return name.slice(sku.length).replace(/^[\s\-–—:·|/]+/, '') || name;
+}
+
 const CRM_STATUSES = ['Prospect', 'Contacted', 'Quoting', 'Active', 'On hold', 'Blocked'];
 const ACTIVITY_TYPES = ['Call', 'Email', 'WeChat/WhatsApp', 'Meeting', 'Factory visit', 'Sample', 'Quote', 'Note'];
 const PER_PAGE = 50;
@@ -909,6 +916,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     const docs = await db.list('supplier_documents', { filters: { supplier_id: s.id }, order: 'created_at.desc' }).catch(() => []);
     const imgs = await S.imagesFor(db, items.map(({ product: p }) => p.id));
     const urls = await db.storage.signedUrls(items.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
+    const hasSku = items.some(({ product: p }) => p.supplier_sku);
     res.html(page({
       title: s.name, nav: adminNav('suppliers'), wide: true,
       flash: fl && fl.type !== 'link' ? fl : null,
@@ -970,8 +978,8 @@ module.exports = function adminRoutes(router, { db, config }) {
           <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
           <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
           ${archiveButtons('/admin/products/bulk')}</div>
-        <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th><th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
+        <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th>${hasSku ? html`<th>SKU</th>` : ''}<th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
+        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td>${hasSku ? html`<td class="sku-cell">${p.supplier_sku || '—'}</td>` : ''}<td><a href="/admin/products/${p.id}">${skuless(p)}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>
         <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
           ${fileDrop({ accept: '.xlsx,.csv,.pdf,.png,.jpg,.jpeg,.webp', main: raw('Drag &amp; drop a product list here, or <u>choose a file</u>'), hint: 'Our template, or any supplier layout: price list, proforma invoice, quotation (.xlsx, .csv, PDF or a photo). Non-standard files are read by AI · max 15 MB' })}

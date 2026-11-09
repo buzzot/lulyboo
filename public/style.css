@@ -1304,3 +1304,6 @@ img.ph{object-fit:cover;padding:0}
 .rv-modal:modal .import-review .import-actions{position:sticky;bottom:0;z-index:3;background:#fff;margin:12px -24px 0;padding:12px 24px;border-top:1px solid var(--line);box-shadow:0 -6px 16px rgba(0,0,0,.04)}
 .rv-modal:modal .review-table input.rv-name{width:clamp(220px,21vw,420px)}
 .rv-modal:modal .table-wrap{overflow-x:auto}
+
+.t-req{font-weight:600;white-space:nowrap;color:var(--accent,#2f6f5e)}
+.sku-cell{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:#55605a;white-space:nowrap}

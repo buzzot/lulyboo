@@ -37,14 +37,23 @@ module.exports = function crmRoutes(router, { db, config }) {
     </form>`;
   }
 
-  function itemRow(i, { names, today, back }) {
+  async function requestRefs(db) {
+    const rows = await db.list('info_requests', { select: 'id,ref' }).catch(() => []);
+    const out = {};
+    for (const r of rows) { if (r.ref) { out[r.id] = r.ref; out[r.ref] = r.id; } }
+    return out;
+  }
+
+  function itemRow(i, { names, today, back, refs = {} }) {
+    const titleRef = (String(i.title || '') + ' ' + String(i.notes || '')).match(/\bLB-\d{3,7}\b/);
+    const reqId = i.request_id || (titleRef && refs[titleRef[0]]) || null;
     const late = i.due_date < today;
     const supplier = i.supplier_id ? html`<a href="/admin/suppliers/${i.supplier_id}">${names[i.supplier_id] || 'Supplier'}</a>` : html`<span class="muted">General</span>`;
     const doneUrl = i.kind === 'task' ? `/admin/crm/tasks/${i.id}/done` : `/admin/activities/${i.id}/done`;
     const snooze = (days, label) => html`<form method="post" action="/admin/crm/tasks/${i.id}/snooze" class="inline"><input type="hidden" name="back" value="${back}"><input type="hidden" name="days" value="${days}"><button class="link">${label}</button></form>`;
     return html`<li class="task ${tyClass(i.type)} ${late ? 'late' : ''}">
       <div class="t-main"><span class="date ${late ? 'late' : ''}">${C.dayName(i.due_date)}${i.due_time ? ' · ' + i.due_time : ''}</span>
-        <span class="tag ${tyClass(i.type)}">${i.type}</span> <b>${i.title}</b> · ${supplier}${i.notes ? html`<div class="sub">${i.notes}</div>` : ''}</div>
+        <span class="tag ${tyClass(i.type)}">${i.type}</span> <b>${i.title}</b> · ${supplier}${reqId ? html` · <a class="t-req" href="/admin/requests/${reqId}">${refs[reqId] ? `Open ${refs[reqId]}` : 'Open request'} ›</a>` : ''}${i.notes ? html`<div class="sub">${i.notes}</div>` : ''}</div>
       <div class="t-act">
         <form method="post" action="${doneUrl}" class="inline"><input type="hidden" name="back" value="${back}"><button class="link ok">✓ Done</button></form>
         ${i.kind === 'task' ? html`${snooze(1, '+1 day')}${snooze(7, '+1 week')}
@@ -64,9 +73,10 @@ module.exports = function crmRoutes(router, { db, config }) {
   // Used by the supplier page: this supplier's open items + a form to schedule one.
   router.crmWidget = async (supplierId, back) => {
     const [items, suppliers, names] = await Promise.all([C.openItems(db, { supplierId }), db.list('suppliers', { select: 'id,name', order: 'name.asc' }), C.supplierNames(db)]);
+    const refs = await requestRefs(db);
     const today = C.localNow().date;
     return html`<section class="card" id="next-actions"><div class="head-row"><h2>Next actions</h2><a class="btn small ghost" href="/admin/crm/calendar">Calendar</a></div>
-      ${items.length ? html`<ul class="tasks">${items.map((i) => itemRow(i, { names, today, back }))}</ul>` : html`<p class="muted">Nothing scheduled with this supplier.</p>`}
+      ${items.length ? html`<ul class="tasks">${items.map((i) => itemRow(i, { names, today, back, refs }))}</ul>` : html`<p class="muted">Nothing scheduled with this supplier.</p>`}
       <details class="t-edit"><summary class="btn small">+ Schedule a follow-up</summary>${taskForm({ suppliers, date: today, back, supplierId })}</details></section>`;
   };
 
@@ -89,7 +99,8 @@ module.exports = function crmRoutes(router, { db, config }) {
       ['Later', items.filter((i) => i.due_date > week), ''],
     ];
     const back = '/admin/crm' + (supplierFilter ? `?supplier=${supplierFilter}` : '');
-    const ctx = { names, today, back };
+    const refs = await requestRefs(db);
+    const ctx = { names, today, back, refs };
     res.html(page({
       title: 'CRM', nav: adminNav('crm'), flash: takeFlash(req, res),
       body: html`<div class="head-row"><h1>CRM</h1>${tabs('list')}</div>

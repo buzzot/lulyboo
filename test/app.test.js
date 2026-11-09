@@ -1752,3 +1752,25 @@ test('import: a non-standard supplier file (proforma invoice) is read by AI, rev
   assert.equal(made[0].units_per_carton ?? null, null, '"opp bag" is not read as a carton quantity');
   assert.ok((db.tables.product_images || []).length >= 6, 'pictures from the sheet are attached');
 });
+
+test('supplier page: SKU column and follow-ups link to their request', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const login = await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } });
+  const cookie = login.cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Youdeshun', status: 'active' });
+  await db.insert('products', { supplier_id: s.id, product_name: 'PA602 Pet bowl, 18 cm', supplier_sku: 'PA602', category: 'Pet', status: 'New', unit_price: 5, currency: 'CNY' });
+  const r = await db.insert('info_requests', { ref: 'LB-1042', supplier_id: s.id, status: 'Sent' });
+  const today = new Date().toISOString().slice(0, 10);
+  await db.insert('crm_tasks', { title: 'Follow up specs', supplier_id: s.id, request_id: r.id, type: 'Follow-up', due_date: today, status: 'open' });
+  await db.insert('crm_tasks', { title: 'Check LB-1042 answers', supplier_id: s.id, type: 'Follow-up', due_date: today, status: 'open' });
+  const pg = await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie });
+  assert.equal(pg.status, 200);
+  assert.match(pg.text, /<th>SKU<\/th>/);
+  assert.match(pg.text, /class="sku-cell">PA602</);
+  assert.match(pg.text, />Pet bowl, 18 cm</);
+  assert.equal((pg.text.match(new RegExp(`href="/admin/requests/${r.id}">Open LB-1042`, 'g')) || []).length, 2);
+  const crm = await req(base, 'GET', '/admin/crm', { cookie });
+  assert.match(crm.text, /Open LB-1042/);
+});
