@@ -94,6 +94,20 @@ function docTiles(files, hrefOf, { zh = false, del = null } = {}) {
   })}</ul>`;
 }
 
+// Supplier field as a popup with search (single choice). Leaves out inactive and "Pending: email" suppliers.
+const pickableSuppliers = (all, keepId) => all.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || x.id === keepId);
+const supplierPicker = (suppliers, sel) => html`<div class="pick1" data-single-pick><span class="lbl">Supplier</span>
+              <input type="hidden" name="supplier_id" value="${sel}" data-pick-value required>
+              <button type="button" class="pick1-btn" data-pick-open><span data-pick-label>${suppliers.find((x) => x.id === sel)?.name || 'Choose a supplier…'}</span><span aria-hidden="true">▾</span></button>
+              <dialog class="pick-dlg" data-pick-dlg aria-label="Choose a supplier">
+                <div class="pick-head"><div class="pick-title"><h3>Choose a supplier</h3><button type="button" class="pick-x" data-pick-close aria-label="Close">×</button></div>
+                  <input type="search" class="pick-q" placeholder="Search by name, country, contact or email" autocomplete="off" data-pick-q><span class="sub" data-pick-count>${suppliers.length} suppliers</span></div>
+                <ul class="pick-list">${suppliers.map((x) => html`<li><button type="button" class="pick1-row ${x.id === sel ? 'on' : ''}" data-id="${x.id}" data-name="${x.name}" data-q="${[x.name, x.country, x.contact_name, x.email].filter(Boolean).join(' ').toLowerCase()}">
+                  <span class="pk-av" aria-hidden="true">${String(x.name).replace(/\(.*?\)/g, '').split(/[\s,.-]+/).filter((w) => /^[a-z0-9]/i.test(w) && !/^(co|ltd|inc|llc|the)$/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?'}</span>
+                  <span class="pk-main"><b>${x.name}</b><span class="sub">${[x.country, x.contact_name, x.email].filter(Boolean).join(' · ')}</span></span><span class="pick1-check" aria-hidden="true">✓</span></button></li>`)}</ul>
+                <p class="pick-empty" data-pick-empty hidden>No suppliers match your search.</p>
+              </dialog></div>`;
+
 module.exports = function sampleRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
   const A = (fn) => async (req, res) => {
@@ -167,7 +181,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
   router.get('/admin/samples/new', G(async (req, res) => {
     const [allSup, projects] = await Promise.all([db.list('suppliers', { select: 'id,name,active,country,email,contact_name', order: 'name.asc' }), db.list('dev_projects', { order: 'created_at.desc' })]);
     // Only real suppliers: not inactive, not unfinished invitations ("Pending: email").
-    const suppliers = allSup.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || x.id === req.query.supplier);
+    const suppliers = pickableSuppliers(allSup, req.query.supplier);
     let pre = { supplier_id: req.query.supplier || '', project_id: req.query.project || '', invitation_id: req.query.invitation || '', title: '', stage: '', qty: '' };
     if (pre.invitation_id) { const inv = await db.get('dev_invitations', pre.invitation_id); if (inv) { pre.supplier_id = inv.supplier_id; pre.project_id = inv.project_id; } }
     if (req.query.from) { const o = await db.get('samples', req.query.from); if (o) pre = { ...pre, supplier_id: o.supplier_id, project_id: o.project_id || '', invitation_id: o.invitation_id || '', title: o.title, stage: o.stage || '', qty: o.qty || '', note: o.eval_notes ? `Revised sample. Changes needed:\n${o.eval_notes}` : '' }; }
@@ -185,17 +199,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
           </div>
           <div class="f2">
             <label class="full"><span class="lbl">What sample</span><input name="title" required maxlength="160" value="${pre.title}" placeholder="e.g. Salon Teether Set – 3PC"></label>
-            <div class="pick1" data-single-pick><span class="lbl">Supplier</span>
-              <input type="hidden" name="supplier_id" value="${pre.supplier_id}" data-pick-value required>
-              <button type="button" class="pick1-btn" data-pick-open><span data-pick-label>${suppliers.find((x) => x.id === pre.supplier_id)?.name || 'Choose a supplier…'}</span><span aria-hidden="true">▾</span></button>
-              <dialog class="pick-dlg" data-pick-dlg aria-label="Choose a supplier">
-                <div class="pick-head"><div class="pick-title"><h3>Choose a supplier</h3><button type="button" class="pick-x" data-pick-close aria-label="Close">×</button></div>
-                  <input type="search" class="pick-q" placeholder="Search by name, country, contact or email" autocomplete="off" data-pick-q><span class="sub" data-pick-count>${suppliers.length} suppliers</span></div>
-                <ul class="pick-list">${suppliers.map((x) => html`<li><button type="button" class="pick1-row ${x.id === pre.supplier_id ? 'on' : ''}" data-id="${x.id}" data-name="${x.name}" data-q="${[x.name, x.country, x.contact_name, x.email].filter(Boolean).join(' ').toLowerCase()}">
-                  <span class="pk-av" aria-hidden="true">${String(x.name).replace(/\(.*?\)/g, '').split(/[\s,.-]+/).filter((w) => /^[a-z0-9]/i.test(w) && !/^(co|ltd|inc|llc|the)$/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?'}</span>
-                  <span class="pk-main"><b>${x.name}</b><span class="sub">${[x.country, x.contact_name, x.email].filter(Boolean).join(' · ')}</span></span><span class="pick1-check" aria-hidden="true">✓</span></button></li>`)}</ul>
-                <p class="pick-empty" data-pick-empty hidden>No suppliers match your search.</p>
-              </dialog></div>
+            ${supplierPicker(suppliers, pre.supplier_id)}
             <label><span class="lbl">Development project <span class="muted">(optional)</span></span><select name="project_id"><option value="">—</option>${projects.map((p) => html`<option value="${p.id}" ${p.id === pre.project_id ? raw('selected') : ''}>${p.ref} · ${p.name}</option>`)}</select></label>
             <label><span class="lbl">Stage</span><select name="stage"><option value="">—</option>${S.STAGES.map((x) => html`<option ${x === pre.stage ? raw('selected') : ''}>${x}</option>`)}</select></label>
             <label><span class="lbl">Quantity (pcs)</span><input name="qty" type="number" min="1" step="1" value="${pre.qty}"></label>
@@ -262,6 +266,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
   // ── Detail
   router.get('/admin/samples/:id', G(async (req, res) => {
     const s = await load(req.params.id);
+    const allSup = await db.list('suppliers', { select: 'id,name,active,country,email,contact_name', order: 'name.asc' });
     const [supplier, events, files, project] = await Promise.all([db.get('suppliers', s.supplier_id), db.list('sample_events', { filters: { sample_id: s.id }, order: 'at.desc' }), db.list('sample_files', { filters: { sample_id: s.id }, order: 'created_at.asc' }), s.project_id ? db.get('dev_projects', s.project_id) : null]);
     const carrierEv = events.filter((e) => ['dhl', 'fedex', 'ups'].includes(e.source));
     const logEv = events.filter((e) => !['dhl', 'fedex', 'ups'].includes(e.source));
@@ -274,7 +279,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
       title: `${s.ref} ${s.title}`, nav: adminNav('samples'), flash: takeFlash(req, res), wide: true, req,
       body: html`<p class="sub crumbs"><a href="/admin/samples">Samples</a> › ${s.ref}</p>
       <div class="smp-head">${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)) ? html`<button type="button" class="smp-thumb" data-preview="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}?inline=1" data-type="image" data-dl="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}" aria-label="View photo"><img src="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}?inline=1" alt=""></button>` : ''}<div class="smp-title"><h1>${s.title}${s.stage ? html` <span class="tag">${s.stage}</span>` : ''}</h1>
-        <p><a href="/admin/suppliers/${s.supplier_id}">${supplier?.name || 'Supplier'}</a>${project ? html` · <a href="/admin/projects/${project.id}${s.invitation_id ? `/suppliers/${s.invitation_id}` : ''}">${project.ref}</a>` : ''}${s.qty ? ` · ${s.qty} pcs` : ''} · requested ${shortDate(s.created_at)}</p></div>
+        <p><a href="/admin/suppliers/${s.supplier_id}">${supplier?.name || 'Supplier'}</a> <a class="ic-btn sm-edit" href="#edit" title="Change sample or supplier" aria-label="Edit">${icon('pencil', 14)}</a>${project ? html` · <a href="/admin/projects/${project.id}${s.invitation_id ? `/suppliers/${s.invitation_id}` : ''}">${project.ref}</a>` : ''}${s.qty ? ` · ${s.qty} pcs` : ''} · requested ${shortDate(s.created_at)}</p></div>
         <div class="smp-actions">${statusPill(s.status)}
           ${s.status === 'Revise' ? html`<a class="btn" href="/admin/samples/new?from=${s.id}">Request revised sample</a>` : ''}
           ${!['Delivered', ...S.CLOSED, ...S.EVALUATED].includes(s.status) ? html`<form method="post" action="/admin/samples/${s.id}/status" class="inline"><input type="hidden" name="to" value="Delivered"><button class="btn ghost">Mark delivered</button></form>` : ''}
@@ -307,9 +312,11 @@ module.exports = function sampleRoutes(router, { db, config }) {
             <div class="form-actions eval-actions"><button class="btn ok" name="result" value="Approved" ${canEval ? '' : raw('disabled')}>✓ Approve</button><button class="btn ghost" name="result" value="Revise" ${canEval ? '' : raw('disabled')}>↺ Needs revision</button><button class="btn ghost danger" name="result" value="Rejected" ${canEval ? '' : raw('disabled')}>✕ Reject</button><button class="link" name="result" value="" ${canEval ? '' : raw('disabled')}>Save without result</button></div>
           </form></section>
       </div><div>
-        <section class="card"><h2>Shipment</h2>
+        <section class="card" id="edit"><h2>Sample & shipment</h2>
           <form method="post" action="/admin/samples/${s.id}/update" class="fields compact-f">
             <div class="f2">
+              <label class="full"><span class="lbl">What sample</span><input name="title" required maxlength="160" value="${s.title}"></label>
+              <div class="full">${supplierPicker(pickableSuppliers(allSup, s.supplier_id), s.supplier_id)}</div>
               <label><span class="lbl">Ship by</span><input type="date" name="due_ship_date" value="${dt(s.due_ship_date)}"></label>
               <label><span class="lbl">Shipped</span><input type="date" name="shipped_at" value="${dt(s.shipped_at)}"></label>
               <label><span class="lbl">Quantity</span><input type="number" name="qty" min="0" value="${s.qty ?? ''}"></label>
@@ -348,7 +355,11 @@ module.exports = function sampleRoutes(router, { db, config }) {
 
   router.post('/admin/samples/:id/update', G(async (req, res) => {
     const s = await load(req.params.id); const { fields: f } = await parseForm(req);
+    let newSupplier = null;
+    if (f.supplier_id && f.supplier_id !== s.supplier_id) { newSupplier = await db.get('suppliers', f.supplier_id); if (!newSupplier) { flash(res, 'error', 'Supplier not found'); return res.redirect(`/admin/samples/${s.id}`); } }
     const patch = {
+      ...(str(f.title, 160) ? { title: str(f.title, 160) } : {}),
+      ...(newSupplier ? { supplier_id: newSupplier.id, invitation_id: null, supplier_seen_at: null } : {}),
       due_ship_date: day(f.due_ship_date), qty: int(f.qty), stage: str(f.stage, 40), boxes: int(f.boxes), weight_kg: num(f.weight_kg), declared_value: num(f.declared_value),
       freight_by: S.FREIGHT_BY[f.freight_by] ? f.freight_by : null, sample_fee: num(f.sample_fee), freight_cost: num(f.freight_cost), duties: num(f.duties),
       currency: ['USD', 'CNY', 'EUR'].includes(f.currency) ? f.currency : 'USD', fee_refundable: f.fee_refundable === '1', request_note: str(f.request_note), internal_notes: str(f.internal_notes), updated_at: now(),
@@ -356,7 +367,8 @@ module.exports = function sampleRoutes(router, { db, config }) {
     if (day(f.shipped_at) && day(f.shipped_at) !== String(s.shipped_at || '').slice(0, 10)) patch.shipped_at = `${f.shipped_at}T12:00:00Z`;
     if (patch.due_ship_date !== s.due_ship_date) { patch.late_reminded_on = null; patch.late_reminders = 0; }
     await db.update('samples', { id: s.id }, patch);
-    flash(res, 'ok', 'Saved'); res.redirect(`/admin/samples/${s.id}`);
+    if (newSupplier) await log(s.id, `Supplier changed to ${newSupplier.name}`, 'admin');
+    flash(res, 'ok', newSupplier ? `Saved · supplier is now ${newSupplier.name}` : 'Saved'); res.redirect(`/admin/samples/${s.id}`);
   }));
 
   // Shared: set a tracking number, detect the carrier, check immediately.
