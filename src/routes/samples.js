@@ -163,7 +163,9 @@ module.exports = function sampleRoutes(router, { db, config }) {
 
   // ── Request a sample
   router.get('/admin/samples/new', G(async (req, res) => {
-    const [suppliers, projects] = await Promise.all([db.list('suppliers', { select: 'id,name,active', order: 'name.asc' }), db.list('dev_projects', { order: 'created_at.desc' })]);
+    const [allSup, projects] = await Promise.all([db.list('suppliers', { select: 'id,name,active,country,email,contact_name', order: 'name.asc' }), db.list('dev_projects', { order: 'created_at.desc' })]);
+    // Only real suppliers: not inactive, not unfinished invitations ("Pending: email").
+    const suppliers = allSup.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || x.id === req.query.supplier);
     let pre = { supplier_id: req.query.supplier || '', project_id: req.query.project || '', invitation_id: req.query.invitation || '', title: '', stage: '', qty: '' };
     if (pre.invitation_id) { const inv = await db.get('dev_invitations', pre.invitation_id); if (inv) { pre.supplier_id = inv.supplier_id; pre.project_id = inv.project_id; } }
     if (req.query.from) { const o = await db.get('samples', req.query.from); if (o) pre = { ...pre, supplier_id: o.supplier_id, project_id: o.project_id || '', invitation_id: o.invitation_id || '', title: o.title, stage: o.stage || '', qty: o.qty || '', note: o.eval_notes ? `Revised sample. Changes needed:\n${o.eval_notes}` : '' }; }
@@ -176,7 +178,17 @@ module.exports = function sampleRoutes(router, { db, config }) {
           <input type="hidden" name="invitation_id" value="${pre.invitation_id}">
           <div class="f2">
             <label class="full"><span class="lbl">What sample</span><input name="title" required maxlength="160" value="${pre.title}" placeholder="e.g. Salon Teether Set – 3PC"></label>
-            <label><span class="lbl">Supplier</span><select name="supplier_id" required><option value="">Choose…</option>${suppliers.filter((x) => x.active !== false || x.id === pre.supplier_id).map((x) => html`<option value="${x.id}" ${x.id === pre.supplier_id ? raw('selected') : ''}>${x.name}</option>`)}</select></label>
+            <div class="pick1" data-single-pick><span class="lbl">Supplier</span>
+              <input type="hidden" name="supplier_id" value="${pre.supplier_id}" data-pick-value required>
+              <button type="button" class="pick1-btn" data-pick-open><span data-pick-label>${suppliers.find((x) => x.id === pre.supplier_id)?.name || 'Choose a supplier…'}</span><span aria-hidden="true">▾</span></button>
+              <dialog class="pick-dlg" data-pick-dlg aria-label="Choose a supplier">
+                <div class="pick-head"><div class="pick-title"><h3>Choose a supplier</h3><button type="button" class="pick-x" data-pick-close aria-label="Close">×</button></div>
+                  <input type="search" class="pick-q" placeholder="Search by name, country, contact or email" autocomplete="off" data-pick-q><span class="sub" data-pick-count>${suppliers.length} suppliers</span></div>
+                <ul class="pick-list">${suppliers.map((x) => html`<li><button type="button" class="pick1-row ${x.id === pre.supplier_id ? 'on' : ''}" data-id="${x.id}" data-name="${x.name}" data-q="${[x.name, x.country, x.contact_name, x.email].filter(Boolean).join(' ').toLowerCase()}">
+                  <span class="pk-av" aria-hidden="true">${String(x.name).replace(/\(.*?\)/g, '').split(/[\s,.-]+/).filter((w) => /^[a-z0-9]/i.test(w) && !/^(co|ltd|inc|llc|the)$/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?'}</span>
+                  <span class="pk-main"><b>${x.name}</b><span class="sub">${[x.country, x.contact_name, x.email].filter(Boolean).join(' · ')}</span></span><span class="pick1-check" aria-hidden="true">✓</span></button></li>`)}</ul>
+                <p class="pick-empty" data-pick-empty hidden>No suppliers match your search.</p>
+              </dialog></div>
             <label><span class="lbl">Development project <span class="muted">(optional)</span></span><select name="project_id"><option value="">—</option>${projects.map((p) => html`<option value="${p.id}" ${p.id === pre.project_id ? raw('selected') : ''}>${p.ref} · ${p.name}</option>`)}</select></label>
             <label><span class="lbl">Stage</span><select name="stage"><option value="">—</option>${S.STAGES.map((x) => html`<option ${x === pre.stage ? raw('selected') : ''}>${x}</option>`)}</select></label>
             <label><span class="lbl">Quantity (pcs)</span><input name="qty" type="number" min="1" step="1" value="${pre.qty}"></label>

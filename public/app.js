@@ -431,6 +431,24 @@
     input.addEventListener('change', read);
   })();
 
+  // Single choice popup (e.g. supplier on "Request a sample"): search, click a row to choose.
+  document.querySelectorAll('[data-single-pick]').forEach(function (box) {
+    var dlg = box.querySelector('[data-pick-dlg]'), q = box.querySelector('[data-pick-q]'), val = box.querySelector('[data-pick-value]'), label = box.querySelector('[data-pick-label]');
+    var rows = Array.prototype.slice.call(dlg.querySelectorAll('.pick1-row')), count = box.querySelector('[data-pick-count]'), empty = box.querySelector('[data-pick-empty]');
+    var filter = function () { var w = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean), n = 0;
+      rows.forEach(function (r) { var ok = w.every(function (x) { return r.getAttribute('data-q').indexOf(x) >= 0; }); r.parentNode.hidden = !ok; if (ok) n++; });
+      count.textContent = n + ' supplier' + (n === 1 ? '' : 's'); empty.hidden = n > 0; };
+    var choose = function (r) { val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close(); };
+    box.querySelector('[data-pick-open]').addEventListener('click', function () { dlg.showModal(); q.value = ''; filter(); q.focus(); });
+    box.querySelector('[data-pick-close]').addEventListener('click', function () { dlg.close(); });
+    dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+    rows.forEach(function (r) { r.addEventListener('click', function () { choose(r); }); });
+    q.addEventListener('input', filter);
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var v = rows.filter(function (r) { return !r.parentNode.hidden; }); if (v.length) choose(v[0]); } });
+    var form = box.closest('form');
+    if (form) form.addEventListener('submit', function (e) { if (!val.value) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
+  });
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

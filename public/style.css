@@ -1258,3 +1258,13 @@ form.card h2.sec.mt{margin-top:26px}
 .decline{margin-left:auto}.decline summary{list-style:none;cursor:pointer}.decline>div{display:grid;gap:8px;margin-top:8px;min-width:260px}
 @media(max-width:900px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dt-grid{grid-template-columns:minmax(0,1fr)}.f2{grid-template-columns:minmax(0,1fr)}.tl li{grid-template-columns:84px 14px minmax(0,1fr)}.tl li:before{left:100px}.track .s{font-size:11px}}
 .doc-add .btn{justify-self:start}
+
+/* Single-choice picker (supplier on Request a sample) */
+.pick1{display:grid;gap:4px;min-width:0}
+.pick1-btn{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font:inherit;text-align:left;cursor:pointer;color:var(--ink)}
+.pick1-btn:hover{border-color:var(--brand-line)}.pick1.invalid .pick1-btn{border-color:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
+.pick1-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick1-row{display:flex;align-items:center;gap:12px;width:100%;padding:9px 12px;border:0;border-radius:10px;background:none;font:inherit;text-align:left;cursor:pointer;color:inherit}
+.pick1-row:hover,.pick1-row:focus-visible{background:#faf4f2;outline:none}.pick1-row.on{background:var(--brand-soft)}
+.pick1-check{margin-left:auto;color:var(--brand);font-weight:800;visibility:hidden}.pick1-row.on .pick1-check{visibility:visible}
+.pick-list li[hidden]{display:none}

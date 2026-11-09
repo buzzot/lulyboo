@@ -191,7 +191,7 @@ module.exports = function projectRoutes(router, { db, config }) {
           <div class="form-actions"><button class="btn" data-upload-btn disabled>Upload</button><span class="muted small">Describe each file so suppliers know what it is. PDF, images, Office, ZIP, STEP/STP, IGES, DXF, DWG, AI, STL · 20 MB each.</span></div></form></section>`;
     } else if (tab === 'suppliers') {
       const invited = new Set(invs.map((i) => i.supplier_id));
-      const pickList = suppliers.filter((x) => x.active !== false || invited.has(x.id));
+      const pickList = suppliers.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || invited.has(x.id));
       body = html`<section class="card"><h2 class="sec">Invited suppliers</h2>
         ${invs.length ? html`<div class="table-wrap"><table class="list"><thead><tr><th>Supplier</th><th>Status</th><th>Spec</th><th>Quote</th><th>Last message</th><th></th></tr></thead><tbody>
           ${invs.map((i) => { const q = quotesBy[i.id]; const lm = lastMsg[i.id]; return html`<tr><td><a class="sp-name" href="/admin/projects/${p.id}/suppliers/${i.id}">${sname[i.supplier_id] || 'Supplier'}</a>${p.nda_required ? html`<div class="sub">${i.nda_accepted_at ? `NDA accepted ${fmt.date(i.nda_accepted_at)}` : html`<span class="neg">NDA not accepted</span>`}</div>` : ''}</td>
