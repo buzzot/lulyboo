@@ -139,7 +139,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
     res.html(page({
       title: 'Samples', nav: adminNav('samples'), flash: takeFlash(req, res), wide: true, req,
       body: html`<div class="smp-head"><div><h1>Samples</h1><p>Every sample from request to evaluation. DHL, FedEx and UPS tracking updates arrive automatically.</p></div>
-        <div class="smp-actions"><span class="conn">${conn.map(([c, ok]) => html`<span class="conn-c ${ok ? 'on' : ''}" title="${ok ? 'API connected' : 'API not connected: add keys in Railway'}">${carrierBadge(c)}${ok ? '✓' : '—'}</span>`)}</span><a class="btn" href="/admin/samples/new">+ Request sample</a></div></div>
+        <div class="smp-actions"><span class="conn">${conn.map(([c, ok]) => html`<span class="conn-c ${ok ? 'on' : ''}" title="${ok ? 'API connected' : 'API not connected: add keys in Railway'}">${carrierBadge(c)}${ok ? '✓' : '—'}</span>`)}</span><a class="btn ghost" href="/admin/samples/new?mode=shipped">+ Add shipped sample</a><a class="btn" href="/admin/samples/new">+ Request sample</a></div></div>
         <div class="kpis">
           <a class="kpi2 ${kpi.action ? 'alert' : ''}" href="?f=action"><b>${kpi.action}</b><span>Need your action</span></a>
           <a class="kpi2" href="?f=transit"><b>${kpi.transit}</b><span>In transit</span></a>
@@ -170,12 +170,17 @@ module.exports = function sampleRoutes(router, { db, config }) {
     if (pre.invitation_id) { const inv = await db.get('dev_invitations', pre.invitation_id); if (inv) { pre.supplier_id = inv.supplier_id; pre.project_id = inv.project_id; } }
     if (req.query.from) { const o = await db.get('samples', req.query.from); if (o) pre = { ...pre, supplier_id: o.supplier_id, project_id: o.project_id || '', invitation_id: o.invitation_id || '', title: o.title, stage: o.stage || '', qty: o.qty || '', note: o.eval_notes ? `Revised sample. Changes needed:\n${o.eval_notes}` : '' }; }
     if (pre.project_id && !pre.title) { const p = projects.find((x) => x.id === pre.project_id); if (p) pre.title = p.name; }
+    const shipped = req.query.mode === 'shipped';
     const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
     res.html(page({
-      title: 'Request sample', nav: adminNav('samples'), flash: takeFlash(req, res), req,
-      body: html`<p class="sub crumbs"><a href="/admin/samples">Samples</a> › New</p><h1>Request a sample</h1>
-        <form method="post" action="/admin/samples" class="card fields smp-form">
+      title: 'New sample', nav: adminNav('samples'), flash: takeFlash(req, res), req,
+      body: html`<p class="sub crumbs"><a href="/admin/samples">Samples</a> › New</p><h1>New sample</h1>
+        <form method="post" action="/admin/samples" class="card fields smp-form" data-sample-mode="${shipped ? 'shipped' : 'request'}">
           <input type="hidden" name="invitation_id" value="${pre.invitation_id}">
+          <div class="mode-seg" role="radiogroup" aria-label="Type">
+            <label><input type="radio" name="mode" value="request" ${shipped ? '' : raw('checked')}><span><b>Request a sample</b><small>Ask the supplier to send one</small></span></label>
+            <label><input type="radio" name="mode" value="shipped" ${shipped ? raw('checked') : ''}><span><b>Already shipped</b><small>Add a sample that is on its way</small></span></label>
+          </div>
           <div class="f2">
             <label class="full"><span class="lbl">What sample</span><input name="title" required maxlength="160" value="${pre.title}" placeholder="e.g. Salon Teether Set – 3PC"></label>
             <div class="pick1" data-single-pick><span class="lbl">Supplier</span>
@@ -192,13 +197,20 @@ module.exports = function sampleRoutes(router, { db, config }) {
             <label><span class="lbl">Development project <span class="muted">(optional)</span></span><select name="project_id"><option value="">—</option>${projects.map((p) => html`<option value="${p.id}" ${p.id === pre.project_id ? raw('selected') : ''}>${p.ref} · ${p.name}</option>`)}</select></label>
             <label><span class="lbl">Stage</span><select name="stage"><option value="">—</option>${S.STAGES.map((x) => html`<option ${x === pre.stage ? raw('selected') : ''}>${x}</option>`)}</select></label>
             <label><span class="lbl">Quantity (pcs)</span><input name="qty" type="number" min="1" step="1" value="${pre.qty}"></label>
-            <label><span class="lbl">Ship by</span><input name="due_ship_date" type="date" value="${inDays(7)}"></label>
+            <label data-for="request"><span class="lbl">Ship by</span><input name="due_ship_date" type="date" value="${inDays(7)}"></label>
+            <label data-for="shipped"><span class="lbl">Tracking number</span><input name="tracking_no" autocomplete="off" spellcheck="false" placeholder="e.g. 3471829104" data-detect-carrier></label>
+            <label data-for="shipped"><span class="lbl">Carrier</span><select name="carrier"><option value="">Detect automatically</option>${['dhl', 'fedex', 'ups', 'other'].map((c) => html`<option value="${c}">${CR.CARRIERS[c].name}</option>`)}</select></label>
+            <label data-for="shipped"><span class="lbl">Ship date</span><input name="shipped_at" type="date" value="${inDays(0)}"></label>
+            <label data-for="shipped"><span class="lbl">Sample fee</span><input name="sample_fee" inputmode="decimal" placeholder="0 = free"></label>
+            <label data-for="shipped"><span class="lbl">Freight cost</span><input name="freight_cost" inputmode="decimal"></label>
+            <label data-for="shipped" class="chk"><input type="checkbox" name="fee_paid" value="1"> Sample fee already paid</label>
             <label><span class="lbl">Freight</span><select name="freight_by">${Object.entries(S.FREIGHT_BY).map(([k, v]) => html`<option value="${k}" ${k === 'supplier' ? raw('selected') : ''}>${v[0]}</option>`)}</select></label>
-            <label class="full"><span class="lbl">Instructions for the supplier <span class="muted">(shared)</span></span><textarea name="request_note" rows="3" placeholder="Colour, material, packaging, what to include, ship-to address…">${pre.note || ''}</textarea></label>
+            <label class="full" data-for="request"><span class="lbl">Instructions for the supplier <span class="muted">(shared)</span></span><textarea name="request_note" rows="3" placeholder="Colour, material, packaging, what to include, ship-to address…">${pre.note || ''}</textarea></label>
             <label class="full"><span class="lbl">Internal notes <span class="muted">(only you)</span></span><textarea name="internal_notes" rows="2"></textarea></label>
           </div>
-          <label class="chk"><input type="checkbox" name="send_email" value="1" checked> Email the request to the supplier now (English + 中文)</label>
-          <div class="form-actions"><button class="btn">Request sample</button><a class="link" href="/admin/samples">Cancel</a></div>
+          <label class="chk" data-for="request"><input type="checkbox" name="send_email" value="1" checked> Email the request to the supplier now (English + 中文)</label>
+          <p class="muted small" data-for="shipped">Tracking starts right away. The supplier can see the sample and add documents in the portal; no request email is sent.</p>
+          <div class="form-actions"><button class="btn" data-for="request">Request sample</button><button class="btn" data-for="shipped">Add shipped sample</button><a class="link" href="/admin/samples">Cancel</a></div>
         </form>`,
     }));
   }));
@@ -208,11 +220,22 @@ module.exports = function sampleRoutes(router, { db, config }) {
     const supplier = await db.get('suppliers', f.supplier_id);
     if (!supplier || !str(f.title)) { flash(res, 'error', 'Choose a supplier and describe the sample'); return res.redirect('/admin/samples/new'); }
     const inv = f.invitation_id ? await db.get('dev_invitations', f.invitation_id) : null;
+    const isShipped = f.mode === 'shipped';
+    if (isShipped && !CR.clean(f.tracking_no)) { flash(res, 'error', 'Enter the tracking number of the shipped sample'); return res.redirect('/admin/samples/new?mode=shipped'); }
     const s = await db.insert('samples', {
       ref: await S.nextRef(db), title: str(f.title, 160), supplier_id: supplier.id, project_id: f.project_id || inv?.project_id || null, invitation_id: inv && inv.supplier_id === supplier.id ? inv.id : null,
       stage: str(f.stage, 40), qty: int(f.qty), status: 'Requested', request_note: str(f.request_note), internal_notes: str(f.internal_notes), due_ship_date: day(f.due_ship_date),
       freight_by: S.FREIGHT_BY[f.freight_by] ? f.freight_by : null, currency: 'USD', eval_checks: S.DEFAULT_CHECKS.map((label) => ({ label, result: null })), created_at: now(), updated_at: now(),
     });
+    if (isShipped) {
+      await db.update('samples', { id: s.id }, { sample_fee: num(f.sample_fee), freight_cost: num(f.freight_cost), fee_paid_at: f.fee_paid === '1' && num(f.sample_fee) ? now() : null, due_ship_date: null, confirmed_at: now() });
+      await log(s.id, 'Shipped sample added', 'admin');
+      const r = await setTracking({ ...s, status: 'Confirmed' }, f, 'admin');
+      if (inv && inv.status !== 'Selected') await db.update('dev_invitations', { id: inv.id }, { status: 'Sample' }).catch(() => {});
+      const now2 = await db.get('samples', s.id);
+      flash(res, now2.tracking_error ? 'warn' : 'ok', `${s.ref} added · ${CR.CARRIERS[r.carrier]?.name || 'Carrier'} ${r.no}${r.auto ? (now2.tracking_error ? ` · ${now2.tracking_error}` : ' · tracking started') : ' · automatic tracking not available for this carrier'}`);
+      return res.redirect(`/admin/samples/${s.id}`);
+    }
     await log(s.id, 'Sample requested', 'admin');
     if (inv && inv.status !== 'Selected') await db.update('dev_invitations', { id: inv.id }, { status: 'Sample' }).catch(() => {});
     if (f.send_email === '1') await S.notifySupplierSample(db, config, supplier, s, {

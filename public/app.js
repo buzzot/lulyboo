@@ -449,6 +449,17 @@
     if (form) form.addEventListener('submit', function (e) { if (!val.value) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
   });
 
+  // New sample: switch between "Request a sample" and "Already shipped".
+  (function () {
+    var form = document.querySelector('[data-sample-mode]'); if (!form) return;
+    var apply = function () { var m = (form.querySelector('input[name=mode]:checked') || {}).value || 'request';
+      form.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = el.getAttribute('data-for') !== m; });
+      var tn = form.querySelector('[name=tracking_no]'); if (tn) tn.required = m === 'shipped';
+      var due = form.querySelector('[name=due_ship_date]'); if (due) due.disabled = m === 'shipped'; };
+    form.querySelectorAll('input[name=mode]').forEach(function (r) { r.addEventListener('change', apply); });
+    apply();
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

@@ -1268,3 +1268,11 @@ form.card h2.sec.mt{margin-top:26px}
 .pick1-row:hover,.pick1-row:focus-visible{background:#faf4f2;outline:none}.pick1-row.on{background:var(--brand-soft)}
 .pick1-check{margin-left:auto;color:var(--brand);font-weight:800;visibility:hidden}.pick1-row.on .pick1-check{visibility:visible}
 .pick-list li[hidden]{display:none}
+
+.mode-seg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.mode-seg label{cursor:pointer;margin:0}.mode-seg input{position:absolute;opacity:0;pointer-events:none}
+.mode-seg span{display:block;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:#fff}
+.mode-seg b{display:block;font-size:15px}.mode-seg small{color:var(--muted)}
+.mode-seg input:checked+span{border-color:var(--brand);background:var(--brand-soft)}.mode-seg input:focus-visible+span{box-shadow:0 0 0 3px var(--brand-soft)}
+[data-for][hidden]{display:none!important}
+@media(max-width:640px){.mode-seg{grid-template-columns:1fr}}

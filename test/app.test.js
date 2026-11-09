@@ -1667,3 +1667,22 @@ test('samples: request, supplier confirms and ships, carrier tracking moves stat
   assert.equal((await req(base, 'POST', `/admin/samples/${late.id}/delete`, { cookie: admin, form: {} })).status, 303);
   assert.equal(db.tables.samples.length, 1);
 });
+
+test('samples: add an already shipped sample (tracking starts, no request email)', async (t) => {
+  const CR = require('../src/carriers');
+  const db = seedDb(); const { server, base } = await startServer(db);
+  const prev = process.env.DHL_API_KEY; process.env.DHL_API_KEY = 'k';
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => (/api-eu\.dhl\.com/.test(String(url)) ? new Response(JSON.stringify({ shipments: [{ status: { timestamp: '2026-11-08T10:00:00Z', statusCode: 'transit', description: 'Arrived at Sort Facility', location: { address: { addressLocality: 'SHENZHEN - CHINA' } } }, events: [{ timestamp: '2026-11-08T10:00:00Z', statusCode: 'transit', description: 'Arrived at Sort Facility' }] }] }), { status: 200 }) : realFetch(url, opts));
+  t.after(() => { server.close(); global.fetch = realFetch; if (prev === undefined) delete process.env.DHL_API_KEY; else process.env.DHL_API_KEY = prev; CR._tokens.clear(); });
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const sup = await db.insert('suppliers', { name: 'Kangde Silicone', email: 'k@k.cn' });
+  assert.match((await req(base, 'GET', '/admin/samples/new?mode=shipped', { cookie: admin })).text, /Add shipped sample/);
+  const r0 = await req(base, 'POST', '/admin/samples', { cookie: admin, form: { mode: 'shipped', title: 'Bib', supplier_id: sup.id, tracking_no: '' } });
+  assert.match(r0.location, /mode=shipped/); assert.equal((db.tables.samples || []).length, 0, 'tracking number required');
+  await req(base, 'POST', '/admin/samples', { cookie: admin, form: { mode: 'shipped', title: 'Bib', supplier_id: sup.id, tracking_no: '3471829104', shipped_at: '2026-11-07', sample_fee: '20', fee_paid: '1' } });
+  const s = db.tables.samples[0];
+  assert.equal(s.status, 'In transit'); assert.equal(s.carrier, 'dhl'); assert.ok(s.fee_paid_at); assert.equal(String(s.shipped_at).slice(0, 10), '2026-11-07');
+  assert.equal(s.due_ship_date, null);
+  assert.equal(db.tables.sample_events.filter((e) => e.source === 'dhl').length, 1);
+});
