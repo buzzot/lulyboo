@@ -701,7 +701,7 @@ test('supplier page: bulk-set status on ticked products and return to the suppli
   assert.match(page.text, /formaction="\/admin\/products\/bulk"/);
   // The product import is a drag-and-drop / paste box (still a normal file input underneath)
   assert.match(page.text, /data-filedrop/);
-  assert.match(page.text, /<input type="file" name="file" accept="\.xlsx,\.csv" required>/);
+  assert.match(page.text, /<input type="file" name="file" accept="\.xlsx,\.csv[^"]*" required>/);
   assert.match(page.text, /Quotation form/);
   const r = await req(base, 'POST', '/admin/products/bulk', { cookie, form: new URLSearchParams([['action', 'status'], ['status', 'Shortlisted'], ['back', `/admin/suppliers/${s.id}`], ['ids', a.id], ['ids', b.id]]) });
   assert.equal(r.status, 303); assert.equal(r.location, `/admin/suppliers/${s.id}`);
@@ -1717,4 +1717,38 @@ test('samples: carrier alert emails to samples@ update the matching sample', asy
   assert.equal(none.matched, false);
   const bad = await fetch(base + '/hooks/mailgun-samples', { method: 'POST', body: new URLSearchParams({ timestamp: '1', token: 'x', signature: 'y', subject: 'x' }) });
   assert.equal(bad.status, 404);
+});
+
+test('import: a non-standard supplier file (proforma invoice) is read by AI, reviewed, then imported with its pictures', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db);
+  const prevKey = process.env.ANTHROPIC_API_KEY; process.env.ANTHROPIC_API_KEY = 'test-key';
+  const realFetch = global.fetch; let sent = null;
+  global.fetch = async (url, opts) => {
+    if (!String(url).startsWith('https://api.anthropic.com/')) return realFetch(url, opts);
+    sent = JSON.parse(opts.body);
+    const p = (row, name, size, price, mat) => ({ source_row: row, product_name: name, supplier_sku: name.slice(0, 5), product_size_cm: size, materials: mat, hs_code: '7323.93.00', packaging_type: 'opp bag', unit_price: price, category: 'Pet' });
+    const input = { document_type: 'proforma invoice', currency: 'CNY', incoterm: 'EXW', payment_terms: '100% T/T before delivery', products: [
+      p(11, 'PA602 stainless steel pet bowl, anti-slip rubber ring, 18 cm', '18x18x3.9', 5, 'SS201, rubber'), p(12, 'PA602 stainless steel pet bowl, anti-slip rubber ring, 22 cm', '22x22x4.6', 7, 'SS201, rubber'),
+      p(13, 'PA855 pet bowl, half silicone base, 14 cm', '14x14x4.3', 9, 'SS201, silicone'), p(14, 'PA855 pet bowl, half silicone base, 18 cm', '18x18x5.6', 12, 'SS201, silicone'),
+      p(15, 'PA851 pet bowl, silicone base, 14 cm', '14x14x4.3', 9.5, 'SS201, silicone'), p(16, 'PA851 pet bowl, silicone base, 18 cm', '18x18x5.6', 12.5, 'SS201, silicone')], skipped: ['Freight charge 25 RMB', 'Total 80 RMB'] };
+    return new Response(JSON.stringify({ model: 'claude-test', content: [{ type: 'tool_use', name: 'record_products', input }], stop_reason: 'tool_use', usage: {} }), { status: 200 });
+  };
+  t.after(() => { server.close(); global.fetch = realFetch; if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prevKey; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Guangdong Youdeshun Technology' });
+  const fd = new FormData(); fd.append('file', new Blob([fs.readFileSync(path.join(__dirname, 'fixtures', 'proforma_invoice.xlsx'))]), 'Sample_PI.xlsx');
+  const res = await fetch(`${base}/admin/suppliers/${s.id}/import`, { method: 'POST', headers: { cookie }, body: fd });
+  const page = await res.text();
+  assert.match(page, /Read by AI from a proforma invoice/); assert.match(page, /Freight charge/);
+  assert.match(sent.messages[0].content.at(-1).text, /R11: +\| 1 \| PA602 \| PA602 Pet bowl/, 'the sheet is sent as numbered rows');
+  const token = /name="token" value="([0-9a-f]+)"/.exec(page)[1];
+  const rns = [...new Set([...page.matchAll(/name="use_(\d+)"/g)].map((x) => x[1]))];
+  assert.deepEqual(rns, ['11', '12', '13', '14', '15', '16']);
+  const f2 = new URLSearchParams({ token }); for (const rn of rns) f2.set(`use_${rn}`, '1');
+  const ok = await req(base, 'POST', `/admin/suppliers/${s.id}/import/confirm`, { cookie, form: f2 });
+  assert.match(ok.text, /<strong>6<\/strong> products added/);
+  const made = db.tables.products.filter((x) => x.supplier_id === s.id);
+  assert.equal(made.length, 6); assert.equal(made[0].currency, 'CNY'); assert.equal(made[0].incoterm, 'EXW'); assert.equal(Number(made[0].unit_price), 5);
+  assert.equal(made[0].units_per_carton ?? null, null, '"opp bag" is not read as a carton quantity');
+  assert.ok((db.tables.product_images || []).length >= 6, 'pictures from the sheet are attached');
 });

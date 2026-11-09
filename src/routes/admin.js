@@ -974,8 +974,8 @@ module.exports = function adminRoutes(router, { db, config }) {
         <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td><td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
         <h3>Import products for this supplier</h3>
         <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
-          ${fileDrop({ main: raw('Drag &amp; drop an .xlsx or .csv here, or <u>choose a file</u>'), hint: 'Or paste (Ctrl/⌘+V) a copied file, or copied spreadsheet cells including the header row · max 20 MB' })}
-          <div class="import-actions"><button class="btn small">Import</button>
+          ${fileDrop({ accept: '.xlsx,.csv,.pdf,.png,.jpg,.jpeg,.webp', main: raw('Drag &amp; drop a product list here, or <u>choose a file</u>'), hint: 'Our template, or any supplier layout: price list, proforma invoice, quotation (.xlsx, .csv, PDF or a photo). Non-standard files are read by AI · max 15 MB' })}
+          <div class="import-actions"><button class="btn small">Import</button><label class="chk small"><input type="checkbox" name="ai" value="1"> Always read with AI</label>
             <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form>
       </section>
       ${docs.length ? html`<section class="card"><h2>Documents</h2>
@@ -1113,11 +1113,11 @@ module.exports = function adminRoutes(router, { db, config }) {
   router.post('/admin/suppliers/:id/import', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);
     if (!s) throw new HttpError(404, 'Supplier not found');
-    const { files } = await parseForm(req, { limitBytes: 15 * 1024 * 1024 });
+    const { files, fields: ff } = await parseForm(req, { limitBytes: 16 * 1024 * 1024 });
     const file = files.file?.[0];
     if (!file) { flash(res, 'error', 'Choose a file'); return res.redirect(`/admin/suppliers/${s.id}`); }
     // Step 1: read the file and show the main fields for checking. Nothing is saved until you approve.
-    const r = await IR.startReview(db, file, s.id, { admin: true, action: `/admin/suppliers/${s.id}/import` });
+    const r = await IR.startReview(db, file, s.id, { admin: true, action: `/admin/suppliers/${s.id}/import` }, { ai: ff?.ai === '1' });
     res.html(page({ title: 'Import', nav: adminNav('suppliers'), body: html`<h1>Import for ${s.name}</h1>${r.page ? r.page : importResult(r.result, null)}<p><a href="/admin/suppliers/${s.id}">← Back to ${s.name}</a></p>` }));
   }));
   router.post('/admin/suppliers/:id/import/confirm', G(async (req, res) => {

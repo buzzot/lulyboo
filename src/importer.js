@@ -492,4 +492,4 @@ function parseUpload(file) {
   return mapRows(parseCsv(decodeText(file.buffer)));
 }
 
-module.exports = { readHeader, parseCsv, parseXlsx, extractXlsxImages, mapRows, parseUpload, decodeText };
+module.exports = { readHeader, parseCsv, parseXlsx, extractXlsxImages, mapRows, parseUpload, decodeText, attachPictures };

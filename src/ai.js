@@ -273,4 +273,44 @@ async function checkListing({ fields, photos }) {
   return { ok: !!result.ok, issues: (result.issues || []).slice(0, 6).map(String) };
 }
 
-module.exports = { callTool, cleanDescription, draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };
+/**
+ * Read a product list in ANY layout (supplier price list, proforma invoice, quotation, PDF, photo) and return
+ * products in Lulyboo fields. `table` is the sheet as "R<row>: cell | cell" lines; or `file` = { buffer, mime } for PDF/images.
+ * Nothing is invented: values must be in the document.
+ */
+async function extractProducts({ table = null, file = null, supplierName = '', categories = [] }) {
+  const num = { type: 'number' }; const str = { type: 'string' }; const int = { type: 'integer' };
+  const tool = { name: 'record_products', description: 'Record every product (sellable item) in the document, in Lulyboo fields.',
+    input_schema: { type: 'object', properties: {
+      document_type: { type: 'string', description: 'e.g. proforma invoice, price list, quotation, catalogue' },
+      currency: { type: 'string', enum: ['USD', 'CNY', 'EUR'], description: 'Currency of the prices (RMB/¥ = CNY)' },
+      incoterm: str, fob_port: str, payment_terms: str, quote_valid_until: { type: 'string', description: 'YYYY-MM-DD if stated' },
+      supplier: { type: 'object', description: 'The SELLER (the company that issued the document), not the buyer/consignee', properties: { company: str, address: str, contact_name: str, phone: str, email: str, website: str } },
+      products: { type: 'array', items: { type: 'object', properties: {
+        source_row: { type: 'integer', description: 'The R<number> of the row the product is on (spreadsheets only)' },
+        product_name: { type: 'string', description: 'Short clear English name, e.g. "Stainless steel pet bowl with anti-slip rubber ring, 18 cm". Translate Chinese.' },
+        supplier_sku: { type: 'string', description: 'Item / model number' },
+        category: { type: 'string', enum: categories.length ? categories : undefined },
+        description: str, materials: str, product_size_cm: { type: 'string', description: 'e.g. 18 x 18 x 3.9' },
+        unit_net_weight_kg: num, packaging_type: str, certifications: str, hs_code: str, brand: str,
+        unit_price: { type: 'number', description: 'Price for ONE unit/set, not the line total' },
+        currency: { type: 'string', enum: ['USD', 'CNY', 'EUR'] }, incoterm: { type: 'string', enum: ['FOB', 'EXW', 'FCA', 'CIF', 'DDP', 'DAP', 'CFR'] }, fob_port: str,
+        moq: { type: 'integer', description: 'Minimum order quantity only if stated as MOQ (an ordered quantity on an invoice is NOT the MOQ)' },
+        units_per_inner: int, units_per_carton: { type: 'integer', description: 'Units per export/master carton (a packing description like "opp bag" is packaging_type, not this)' },
+        carton_l_cm: num, carton_w_cm: num, carton_h_cm: num, carton_nw_kg: num, carton_gw_kg: num,
+        sample_lead_days: int, production_lead_days: int, factory_notes: str,
+      }, required: ['product_name'] } },
+      skipped: { type: 'array', items: { type: 'string' }, description: 'Lines that are not products (freight, totals, discounts), briefly' },
+    }, required: ['products'] } };
+  const content = [];
+  if (file) {
+    const data = file.buffer.toString('base64');
+    content.push(file.mime === 'application/pdf' ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } } : { type: 'image', source: { type: 'base64', media_type: file.mime, data } });
+  }
+  content.push({ type: 'text', text: `${supplierName ? `Supplier: ${supplierName}\n` : ''}Read this ${table ? 'spreadsheet' : 'document'} and record every product in it.${table ? `\n\n${table}` : ''}` });
+  const { result, model: used } = await callTool({ tool, content, maxTokens: 16000,
+    system: 'You turn supplier product lists of any layout into structured product records for a US importer. Copy numbers exactly; convert units only when clear (inches→cm, lbs→kg). Translate Chinese to English. One record per sellable item (each size/colour variant with its own price is its own record). Skip freight, sample charges, totals and blank rows. Never invent values: leave a field out if the document does not state it.' });
+  return { ...result, model: used };
+}
+
+module.exports = { extractProducts, callTool, cleanDescription, draftDescription, checkListing, enabled, model, reviewProduct, findSimilar, compareProducts, matchCategory, rankCandidates, facts };

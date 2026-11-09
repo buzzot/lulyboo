@@ -8,7 +8,8 @@ const { CATEGORIES, CURRENCIES, PRODUCT_FIELDS, cleanProduct } = require('./fiel
 const sharp = require('sharp');
 const AI = require('./ai');
 const { CONTAINERS } = require('./calc');
-const { parseUpload } = require('./importer');
+const { parseUpload, parseXlsx, parseCsv, decodeText } = require('./importer');
+const { attachPictures } = require('./importer');
 const { saveProductImages } = require('./images');
 
 const MAX_IMAGES = 10;
@@ -102,9 +103,66 @@ function importResult(r, base) {
  * Returns { result } when there is nothing to review (nothing could be read), or { page } with the review form.
  * view = { admin, action }  (action = the import URL; /confirm and /cancel hang off it)
  */
-async function startReview(db, file, supplierId, view) {
-  let parsed;
-  try { parsed = parseUpload(file); } catch (e) { return { result: failed(e.message) }; }
+
+// ── AI reading for files that are not in the Lulyboo layout (proforma invoices, price lists, PDFs, photos)
+const AI_FILE = /\.(pdf|png|jpe?g|webp)$/i;
+const MIME_OF = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+function sheetText(rows) {
+  const out = []; let size = 0;
+  rows.forEach((r, i) => {
+    const cells = r.map((c) => String(c ?? '').replace(/\s+/g, ' ').trim()).map((c) => (/^=DISPIMG\(/i.test(c) ? '[picture]' : c.slice(0, 300)));
+    if (!cells.some(Boolean)) return;
+    while (cells.length && !cells[cells.length - 1]) cells.pop();
+    const line = `R${i + 1}: ${cells.join(' | ')}`; size += line.length;
+    if (size < 150000 && out.length < 600) out.push(line);
+  });
+  return out.join('\n');
+}
+async function aiParse(file, supplierName) {
+  const name = String(file.name || '').toLowerCase();
+  const ext = (name.match(/\.([a-z0-9]+)$/) || [])[1] || '';
+  const isXlsx = name.endsWith('.xlsx') || (file.buffer[0] === 0x50 && file.buffer[1] === 0x4b);
+  let table = null; let doc = null;
+  if (AI_FILE.test(name)) doc = { buffer: file.buffer, mime: MIME_OF[ext] };
+  else table = sheetText(isXlsx ? parseXlsx(file.buffer) : parseCsv(decodeText(file.buffer)));
+  const r = await AI.extractProducts({ table, file: doc, supplierName, categories: CATEGORIES });
+  const products = []; const errors = []; const used = new Set();
+  (r.products || []).slice(0, 300).forEach((x, i) => {
+    let rn = Number.isInteger(x.source_row) && x.source_row > 0 && table ? x.source_row : 100000 + i;
+    if (used.has(rn)) rn = 200000 + i; used.add(rn); // two variants on one line keep separate review rows
+    const input = { currency: r.currency, incoterm: r.incoterm, fob_port: r.fob_port, payment_terms: r.payment_terms };
+    for (const [k, v] of Object.entries(x)) if (k !== 'source_row' && v !== null && v !== undefined && v !== '') input[k] = v;
+    for (const k of Object.keys(input)) if (input[k] === undefined || input[k] === null || input[k] === '') delete input[k];
+    if (input.product_size_cm !== undefined) input.product_size_cm = String(input.product_size_cm);
+    const { row, errors: errs } = cleanProduct(input);
+    if (errs.length) errors.push({ rowNumber: rn, messages: errs, name: input.product_name });
+    else products.push({ rowNumber: rn, row });
+  });
+  const sup = r.supplier || {};
+  const header = Object.fromEntries(['company', 'address', 'contact_name', 'phone', 'email', 'website'].filter((k) => sup[k]).map((k) => [k, String(sup[k]).slice(0, 300)]));
+  const terms = Object.fromEntries(['incoterm', 'fob_port', 'payment_terms', 'quote_valid_until'].filter((k) => r[k]).map((k) => [k, String(r[k]).slice(0, 200)]));
+  const parsed = { products, errors, unknownColumns: [], skipped: (r.skipped || []).length, header, terms, ai: { model: r.model, documentType: r.document_type || '', skippedLines: r.skipped || [] } };
+  if (isXlsx && !AI_FILE.test(name)) { try { attachPictures(parsed, file.buffer); } catch { /* pictures are optional */ } }
+  return parsed;
+}
+
+async function startReview(db, file, supplierId, view, { ai = false } = {}) {
+  let parsed = null; let stdError = null;
+  const aiFile = AI_FILE.test(String(file.name || ''));
+  if (!aiFile && !ai) { try { parsed = parseUpload(file); } catch (e) { stdError = e.message; } }
+  // Not the Lulyboo layout (no products found, or most rows failed): let AI read it. Admin only.
+  const weak = !parsed || !parsed.products.length || parsed.errors.length > parsed.products.length;
+  if (view.admin && (ai || aiFile || weak)) {
+    if (!AI.enabled()) { if (aiFile || ai || !parsed) return { result: failed('This file is not in the Lulyboo layout and AI reading is not enabled (set ANTHROPIC_API_KEY).') }; }
+    else {
+      try {
+        const supplier0 = await db.get('suppliers', supplierId);
+        const viaAi = await aiParse(file, supplier0?.name || '');
+        if (viaAi.products.length || !parsed) parsed = viaAi;
+      } catch (e) { if (!parsed) return { result: failed(`AI could not read this file: ${String(e.message).slice(0, 200)}`) }; }
+    }
+  }
+  if (!parsed) return { result: failed(stdError || 'Could not read this file') };
   if (!parsed.products.length) return { result: { inserted: 0, photos: 0, skipped: parsed.skipped, errors: parsed.errors, unknownColumns: parsed.unknownColumns } };
   sweep();
   const token = crypto.randomBytes(12).toString('hex');
@@ -437,6 +495,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     <h2>${T('Review before importing', '导入前请核对')}</h2>
     <p>${T(`${parsed.products.length} product${parsed.products.length === 1 ? '' : 's'} found in ${fileName || 'your file'}. Check the main fields, click a picture to see and edit everything about a product, and untick rows you do not want. Nothing is saved until you approve.`, `在 ${fileName || '文件'} 中找到 ${parsed.products.length} 个产品。请核对主要字段，点击图片可查看并编辑产品的全部信息，并取消勾选不需要的行。确认之前不会保存任何内容。`)}</p>
     ${notice ? html`<p class="flash error" role="alert">${biText(notice)}</p>` : ''}
+    ${parsed.ai ? html`<div class="flash ok ai-read"><b>✦ Read by AI${parsed.ai.documentType ? ` from a ${parsed.ai.documentType}` : ''}.</b> This file is not in the Lulyboo layout, so AI found ${parsed.products.length} product${parsed.products.length === 1 ? '' : 's'}${parsed.ai.skippedLines.length ? ` and left out: ${parsed.ai.skippedLines.slice(0, 4).join('; ')}` : ''}. Check names, prices and cartons before approving.</div>` : ''}
     ${overview}
     ${parsed.errors.length ? html`<div class="rv-problems"><strong>${T('These rows cannot be imported:', '以下行无法导入：')}</strong><ul class="errors">${parsed.errors.map((e) => html`<li>${e.rowNumber ? html`${T('Row', '第')} ${e.rowNumber}${T('', ' 行')}${e.name ? ` (${e.name})` : ''}: ` : ''}${biText(e.messages.join('; '))}</li>`)}</ul></div>` : ''}
     ${parsed.unknownColumns?.length ? html`<p class="muted">${T('Columns not recognised (ignored):', '无法识别的列（已忽略）：')} ${parsed.unknownColumns.join(', ')}</p>` : ''}
