@@ -938,6 +938,9 @@
     // The compact header is shorter; the lost height is added back as margin so the page
     // below doesn't jump (on short pages that jump used to flip the header back and forth).
     if (head) {
+      var topBar = document.querySelector('header.top');
+      var setTop = function () { var h = topBar && getComputedStyle(topBar).position === 'sticky' ? topBar.offsetHeight : 0; document.documentElement.style.setProperty('--top-h', h + 'px'); };
+      setTop(); window.addEventListener('resize', setTop);
       var baseMb = parseFloat(getComputedStyle(head).marginBottom) || 0, tick = false;
       var setStuck = function (on) {
         if (on === head.classList.contains('stuck')) return;
