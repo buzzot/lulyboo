@@ -438,7 +438,11 @@
     var filter = function () { var w = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean), n = 0;
       rows.forEach(function (r) { var ok = w.every(function (x) { return r.getAttribute('data-q').indexOf(x) >= 0; }); r.parentNode.hidden = !ok; if (ok) n++; });
       count.textContent = n + ' supplier' + (n === 1 ? '' : 's'); empty.hidden = n > 0; };
-    var choose = function (r) { val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close(); };
+    var choose = function (r) { var changed = val.value !== r.getAttribute('data-id'); val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close();
+      // Opened from the pencil next to the supplier name: save straight away.
+      if (box.getAttribute('data-autosave') === '1') { box.removeAttribute('data-autosave'); var fm = box.closest('form'); if (changed && fm) { if (fm.requestSubmit) fm.requestSubmit(); else fm.submit(); } } };
+    dlg.addEventListener('close', function () { setTimeout(function () { box.removeAttribute('data-autosave'); }, 0); });
+    document.querySelectorAll('[data-change-supplier]').forEach(function (btn) { if (box.closest('#edit')) btn.addEventListener('click', function () { box.setAttribute('data-autosave', '1'); dlg.showModal(); q.value = ''; filter(); q.focus(); }); });
     box.querySelector('[data-pick-open]').addEventListener('click', function () { dlg.showModal(); q.value = ''; filter(); q.focus(); });
     box.querySelector('[data-pick-close]').addEventListener('click', function () { dlg.close(); });
     dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
