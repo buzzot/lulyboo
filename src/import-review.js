@@ -493,7 +493,11 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     </tr>${errs.length ? html`<tr class="rv-errrow"><td></td><td colspan="11"><b>${values[rn].product_name}:</b> ${errs.map((e) => html`<div>${biText(e)}</div>`)}</td></tr>` : ''}`;
   });
   const n = selected.size;
-  return html`<section class="card import-review" data-import-review data-action="${action}" data-containers="${JSON.stringify(CONTAINERS)}">
+  // The review opens as a full-screen window (public/app.js [data-rv-modal]); without JS it shows in the page.
+  return html`<div class="rv-shell"><p class="rv-reopen" hidden>${T('The review is open in a full-screen window.', '核对窗口已全屏打开。')} <button type="button" class="btn small" data-rv-modal-open>${T('Open review', '打开核对')}</button></p>
+  <dialog class="rv-modal" data-rv-modal open aria-label="Review before importing">
+  <div class="rv-modal-bar"><b>${T('Review import', '核对导入')}</b><span class="sub">${fileName || ''} · ${parsed.products.length} ${T('products', '个产品')}</span><span class="grow"></span><button type="button" class="btn ghost small" data-rv-modal-close>✕ ${T('Close', '关闭')}</button></div>
+  <section class="card import-review" data-import-review data-action="${action}" data-containers="${JSON.stringify(CONTAINERS)}">
     <h2>${T('Review before importing', '导入前请核对')}</h2>
     <p>${T(`${parsed.products.length} product${parsed.products.length === 1 ? '' : 's'} found in ${fileName || 'your file'}. Check the main fields, click a picture to see and edit everything about a product, and untick rows you do not want. Nothing is saved until you approve.`, `在 ${fileName || '文件'} 中找到 ${parsed.products.length} 个产品。请核对主要字段，点击图片可查看并编辑产品的全部信息，并取消勾选不需要的行。确认之前不会保存任何内容。`)}</p>
     ${notice ? html`<p class="flash error" role="alert">${biText(notice)}</p>` : ''}
@@ -515,7 +519,7 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
     <form id="cancel-form" method="post" action="${action}/cancel"><input type="hidden" name="token" value="${token}"></form>
     <div class="import-actions"><button class="btn" form="review-form" data-approve>${T('Approve & import', '确认并导入')} <span data-count>${n}</span> ${T('products', '个产品')}</button>
       <button class="btn ghost" form="cancel-form">${T('Cancel', '取消')}</button></div>
-  </section>`;
+  </section></dialog></div>`;
 }
 
 const expiredResult = () => failed(m('This review expired (files are only kept for 30 minutes). Please upload the file again.', '此次审核已过期（文件仅保留 30 分钟），请重新上传文件。'));

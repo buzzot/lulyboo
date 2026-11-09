@@ -464,6 +464,18 @@
     apply();
   })();
 
+  // Import review: open it as a full-screen window (more room for the row fields).
+  (function () {
+    var dlg = document.querySelector('[data-rv-modal]'); if (!dlg || !dlg.showModal) return;
+    var reopen = document.querySelector('.rv-reopen');
+    try { if (dlg.open) dlg.close(); dlg.showModal(); } catch (e) { return; }
+    var closeBtn = dlg.querySelector('[data-rv-modal-close]');
+    if (closeBtn) closeBtn.addEventListener('click', function () { dlg.close(); });
+    dlg.addEventListener('close', function () { if (reopen) reopen.hidden = false; });
+    var openBtn = document.querySelector('[data-rv-modal-open]');
+    if (openBtn) openBtn.addEventListener('click', function () { reopen.hidden = true; dlg.showModal(); });
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

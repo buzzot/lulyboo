@@ -1291,3 +1291,16 @@ img.ph{object-fit:cover;padding:0}
 .review-table input.rv-sku{width:100px;font-family:inherit}
 .review-table .rv-flags{margin-top:4px}
 .review-table thead th{vertical-align:bottom}
+
+/* Import review as a full-screen window */
+.rv-modal{padding:0;border:0;background:transparent;max-width:none;max-height:none}
+.rv-modal:not(:modal){position:static;display:block;width:auto;margin:0}
+.rv-modal:not(:modal) .rv-modal-bar{display:none}
+.rv-modal:modal{width:100vw;height:100dvh;margin:0;background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+.rv-modal::backdrop{background:rgba(20,14,12,.5)}
+.rv-modal-bar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:#fff;border-bottom:1px solid var(--line);flex:none}
+.rv-modal-bar b{font-size:16px}.rv-modal-bar .grow{flex:1}
+.rv-modal:modal .import-review{flex:1;min-height:0;overflow:auto;margin:0!important;border-radius:0;border:0;box-shadow:none;padding:16px 24px 0!important;max-width:none}
+.rv-modal:modal .import-review .import-actions{position:sticky;bottom:0;z-index:3;background:#fff;margin:12px -24px 0;padding:12px 24px;border-top:1px solid var(--line);box-shadow:0 -6px 16px rgba(0,0,0,.04)}
+.rv-modal:modal .review-table input.rv-name{width:clamp(220px,21vw,420px)}
+.rv-modal:modal .table-wrap{overflow-x:auto}
