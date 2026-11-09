@@ -111,7 +111,7 @@ function adminNav(active) {
   const group = (label, items) => ({ label, items: items.map(([k, href, l]) => ({ href, label: l, active: on(k) })), active: items.some(([k]) => on(k)) });
   const groups = [
     { label: 'Dashboard', href: '/admin', active: on('dashboard') },
-    group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers'], ['requests', '/admin/requests', 'RFQs & requests'], ['projects', '/admin/projects', 'Development']]),
+    group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers'], ['requests', '/admin/requests', 'RFQs & requests'], ['projects', '/admin/projects', 'Development'], ['samples', '/admin/samples', 'Samples']]),
     group('Catalog', [['products', '/admin/products', 'Products'], ['pricing', '/admin/pricing', 'Pricing'], ['categories', '/admin/categories', 'Categories'], ['archive', '/admin/archive', 'Archive']]),
     group('Operations', [['logistics', '/admin/logistics', 'Logistics'], ['crm', '/admin/crm', 'Follow-ups'], ['calendar', '/admin/crm/calendar', 'Calendar']]),
     group('AI Tools', [['ai', '/admin/ai', 'AI Assistant']]),

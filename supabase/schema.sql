@@ -564,3 +564,94 @@ alter table public.suppliers add column if not exists business_license_name text
 alter table public.suppliers add column if not exists license_info jsonb;
 alter table public.suppliers add column if not exists license_checked_at timestamptz;
 notify pgrst, 'reload schema';
+
+
+-- ── Samples ───────────────────────────────────────────────
+-- Samples: requests, shipping, tracking (DHL / FedEx / UPS APIs), costs, documents, evaluation
+create table if not exists public.samples (
+  id               uuid primary key default gen_random_uuid(),
+  ref              text unique not null,                          -- SMP-1001
+  title            text not null,
+  supplier_id      uuid not null references public.suppliers(id) on delete cascade,
+  project_id       uuid references public.dev_projects(id) on delete set null,
+  invitation_id    uuid references public.dev_invitations(id) on delete set null,
+  product_id       uuid references public.products(id) on delete set null,
+  stage            text,                                          -- EVT, DVT, PVT, Golden sample...
+  qty              integer,
+  status           text not null default 'Requested',
+  request_note     text,
+  due_ship_date    date,                                          -- supplier should ship by
+  confirmed_at     timestamptz,
+  supplier_seen_at timestamptz,
+  -- shipping
+  carrier          text,                                          -- dhl | fedex | ups | other
+  carrier_other    text,
+  tracking_no      text,
+  shipped_at       timestamptz,
+  eta              timestamptz,
+  delivered_at     timestamptz,
+  signed_by        text,
+  boxes            integer,
+  weight_kg        numeric,
+  declared_value   numeric,
+  freight_by       text,                                          -- supplier | lulyboo | included
+  -- tracking state (filled by the carrier poller)
+  tracking_status  text,
+  tracking_summary text,
+  tracking_location text,
+  tracking_error   text,
+  last_event_at    timestamptz,
+  last_checked_at  timestamptz,
+  next_check_at    timestamptz,
+  stall_alerted_at timestamptz,
+  -- money
+  currency         text not null default 'USD',
+  sample_fee       numeric,
+  freight_cost     numeric,
+  duties           numeric,
+  fee_paid_at      timestamptz,
+  fee_refundable   boolean not null default false,
+  -- evaluation
+  eval_checks      jsonb not null default '[]'::jsonb,            -- [{label, result: pass|fail|null, note}]
+  eval_notes       text,
+  eval_score       integer,
+  evaluated_at     timestamptz,
+  eval_reminded_at timestamptz,
+  -- reminders
+  late_reminded_on date,
+  late_reminders   integer not null default 0,
+  internal_notes   text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create table if not exists public.sample_events (
+  id          uuid primary key default gen_random_uuid(),
+  sample_id   uuid not null references public.samples(id) on delete cascade,
+  at          timestamptz,
+  code        text,                                               -- pre_transit, in_transit, customs, out_for_delivery, delivered, exception, note
+  description text,
+  location    text,
+  source      text,                                               -- dhl | fedex | ups | supplier | admin | system
+  key         text,                                               -- de-duplicates carrier events
+  created_at  timestamptz not null default now()
+);
+create table if not exists public.sample_files (
+  id          uuid primary key default gen_random_uuid(),
+  sample_id   uuid not null references public.samples(id) on delete cascade,
+  kind        text not null default 'other',                      -- proforma, waybill, invoice, photo, payment, other
+  name        text not null,
+  path        text not null,
+  mime        text,
+  bytes       integer,
+  uploaded_by text,                                               -- admin | supplier
+  created_at  timestamptz not null default now()
+);
+create index if not exists samples_supplier_idx on public.samples (supplier_id);
+create index if not exists samples_next_check_idx on public.samples (next_check_at) where tracking_no is not null;
+create index if not exists sample_events_sample_idx on public.sample_events (sample_id, at desc);
+create unique index if not exists sample_events_key_idx on public.sample_events (sample_id, key);
+create index if not exists sample_files_sample_idx on public.sample_files (sample_id);
+alter table public.samples enable row level security;
+alter table public.sample_events enable row level security;
+alter table public.sample_files enable row level security;
+notify pgrst, 'reload schema';

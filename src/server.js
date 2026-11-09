@@ -53,6 +53,7 @@ function createApp({ db, config }) {
   require('./routes/admin-tools')(router, { db, config });
   require('./routes/requests')(router, { db, config });
   require('./routes/projects')(router, { db, config });
+  require('./routes/samples')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/api')(router, { db, config });
   require('./routes/staff')(router, { db, config });
@@ -111,6 +112,14 @@ if (require.main === module) {
     setTimeout(tick, 15_000); setInterval(tick, 60_000);
   } else console.warn('TELEGRAM_BOT_TOKEN is not set: CRM reminders on Telegram are off.');
   { const { runMilestoneReminders } = require('./projects'); const run = () => runMilestoneReminders({ db, config }).catch((e) => console.error('Milestone reminders failed:', e.message)); setTimeout(run, 30_000); setInterval(run, 60 * 60_000); }
+  // Samples: carrier tracking every 10 minutes (each shipment has its own next-check time), reminders hourly.
+  { const SM = require('./samples');
+    const CR = require('./carriers');
+    const on = ['dhl', 'fedex', 'ups'].filter((c) => CR.configured(c));
+    console.log(on.length ? `Sample tracking on for: ${on.join(', ')}` : 'Sample tracking: no carrier API keys set (DHL_API_KEY, FEDEX_CLIENT_ID/SECRET, UPS_CLIENT_ID/SECRET).');
+    const track = () => SM.runTracking({ db, config }).catch((e) => { if (!/samples|PGRST205/.test(e.message)) console.error('Sample tracking failed:', e.message); });
+    const remind = () => SM.runReminders({ db, config }).catch((e) => { if (!/samples|PGRST205/.test(e.message)) console.error('Sample reminders failed:', e.message); });
+    setTimeout(track, 45_000); setInterval(track, 10 * 60_000); setTimeout(remind, 90_000); setInterval(remind, 60 * 60_000); }
   server.listen(config.port, () => console.log(`Lulyboo portal on :${config.port} (${config.publicUrl})`));
 }
 

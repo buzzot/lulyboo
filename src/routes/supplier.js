@@ -25,6 +25,7 @@ function nav(active) {
       { href: `${b}/products/new`, icon: 'plus', label: t('Add product', '新增产品'), active: active === 'new' },
       { href: `${b}/import`, icon: 'upload', label: t('Bulk upload', '批量上传'), active: active === 'import' },
       { href: `${b}/projects`, icon: 'clipboard', label: t('Development projects', '开发项目'), active: active === 'projects' },
+      { href: `${b}/samples`, icon: 'truck', label: t('Samples', '样品'), active: active === 'samples' },
       { href: `${b}/profile`, icon: 'building', label: t('Company', '公司信息'), active: active === 'profile' },
       { href: `${b}/account`, icon: 'user', label: t('Account', '账号'), active: active === 'account' },
       { href: '/logout', out: true, label: t('Sign out', '退出') },
@@ -47,7 +48,7 @@ function supplierRoutes(router, { db, config }) {
     req.supplier = cur.supplier;
     req.user = cur.user;
     req.base = '/portal';
-    req.navBadges = { '/portal/projects': await newProjectCount(db, cur.supplier.id) };
+    req.navBadges = await require('../samples').supplierBadges(db, cur.supplier.id);
     return fn(req, res);
   };
   const NOT_FOUND = m('Product not found', '未找到该产品');

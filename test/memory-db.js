@@ -44,6 +44,9 @@ function createMemoryDb(seed = {}) {
     api_log: () => ({ created_at: new Date().toISOString() }),
     crm_tasks: () => ({ type: 'Follow-up', done: false, remind_minutes: 15, created_at: new Date().toISOString() }),
     info_requests: () => ({ status: 'Sent', product_ids: [], items: [], to_emails: [], cc_emails: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+    samples: () => ({ status: 'Requested', currency: 'USD', fee_refundable: false, eval_checks: [], late_reminders: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+    sample_events: () => ({ created_at: new Date().toISOString() }),
+    sample_files: () => ({ kind: 'other', created_at: new Date().toISOString() }),
     info_request_messages: () => ({ to_emails: [], attachments: [], created_at: new Date().toISOString() }),
   };
 

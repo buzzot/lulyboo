@@ -77,7 +77,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const cur = await currentSupplierUser(db, config, req);
     if (!cur) return res.redirect('/login');
     req.supplier = cur.supplier; req.user = cur.user; req.base = '/portal';
-    req.navBadges = { '/portal/projects': await P.newProjectCount(db, cur.supplier.id) };
+    req.navBadges = await require('../samples').supplierBadges(db, cur.supplier.id);
     return fn(req, res);
   };
   const now = () => new Date().toISOString();
@@ -339,6 +339,7 @@ module.exports = function projectRoutes(router, { db, config }) {
 
   router.get('/admin/projects/:id/suppliers/:invId', G(async (req, res) => {
     const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId);
+    const smps = await db.list('samples', { filters: { invitation_id: inv.id }, order: 'created_at.desc' }).catch(() => []);
     const [s, msgs, quotes] = await Promise.all([db.get('suppliers', inv.supplier_id), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), db.list('dev_quotes', { filters: { invitation_id: inv.id }, order: 'revision.desc' })]);
     res.html(page({
       title: `${s?.name} · ${p.name}`, nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
@@ -349,7 +350,7 @@ module.exports = function projectRoutes(router, { db, config }) {
         <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (x.author || s?.name) : (x.author || 'Lulyboo')}</b>${when(x.created_at)}</header><p>${x.body}</p>${attLinks(x.attachments, (i) => `/admin/dev-files/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">No messages yet.</p>`}</div>
         <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt"><label class="frow top"><span>Reply</span><textarea name="body" rows="4" required placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
           <label class="frow"><span>Attach</span>${multiFile('files')}</label><label class="chk"><input type="checkbox" name="notify" value="1" checked> Email the supplier</label><div class="form-actions"><button class="btn">Send</button></div></form></section>
-        <aside class="dp-side"><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
+        <aside class="dp-side"><section class="card"><div class="head-row"><h2 class="sec">Samples</h2><a class="btn small" href="/admin/samples/new?invitation=${inv.id}">+ Request sample</a></div>${smps.length ? html`<ul class="smp-mini">${smps.map((x) => html`<li><a href="/admin/samples/${x.id}">${x.ref}${x.stage ? ` · ${x.stage}` : ''}</a><span class="stp ${require('../samples').pillCls(x.status)}"><i></i>${x.status}</span></li>`)}</ul>` : html`<p class="muted small">No samples yet.</p>`}</section><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
           ${quotes.length > 1 ? html`<details class="fold mt"><summary><b>Earlier revisions (${quotes.length - 1})</b></summary>${quotes.slice(1).map((q) => html`<h3 class="sec2">Rev ${q.revision} · ${fmt.date(q.created_at)}</h3>${quoteCards(q, p, { admin: true })}`)}</details>` : ''}</section></aside></div>`,
     }));
   }));

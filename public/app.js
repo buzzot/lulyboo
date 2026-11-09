@@ -400,6 +400,37 @@
     });
   })();
 
+  // Samples: show the detected carrier under a tracking-number field, and read a waybill photo with AI to fill the ship form.
+  (function () {
+    var detect = function (v) { v = String(v || '').toUpperCase().replace(/[\s-]/g, '');
+      if (/^1Z[0-9A-Z]{16}$/.test(v)) return 'UPS'; if (/^\d{10}$/.test(v) || /^JJD\d{10,}$/.test(v)) return 'DHL Express';
+      if (/^(\d{12}|\d{15}|\d{20}|\d{22})$/.test(v)) return 'FedEx'; return ''; };
+    document.querySelectorAll('[data-detect-carrier]').forEach(function (inp) {
+      var out = inp.parentNode.querySelector('[data-detect-out]');
+      if (!out) { out = document.createElement('span'); out.className = 'detect'; inp.parentNode.appendChild(out); }
+      var run = function () { var c = detect(inp.value); out.innerHTML = c ? '✓ ' + L('Detected: ', '已识别：') + c : ''; };
+      inp.addEventListener('input', run); run();
+    });
+    var form = document.querySelector('[data-waybill-form]'); if (!form) return;
+    var input = form.querySelector('input[name=waybill]'), msg = form.querySelector('[data-waybill-result]');
+    if (!input || !window.fetch) return;
+    var read = function () {
+      var f = input.files && input.files[0]; if (!f) return;
+      var fd = new FormData(); fd.append('waybill', f);
+      msg.hidden = false; msg.className = 'read busy'; msg.innerHTML = L('Reading the waybill…', '正在识别运单…');
+      fetch(form.getAttribute('data-waybill-form'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok || !j.tracking_number) { msg.className = 'read warn'; msg.innerHTML = L('Could not read it. Please type the tracking number.', '无法识别，请手动填写运单号。'); return; }
+        var set = function (n, v) { var el = form.querySelector('[name=' + n + ']'); if (el && v != null && v !== '' && !el.value) { el.value = v; el.dispatchEvent(new Event('input')); } };
+        var tn = form.querySelector('[name=tracking_no]'); if (tn) { tn.value = j.tracking_number; tn.dispatchEvent(new Event('input')); }
+        if (j.carrier && j.carrier !== 'unknown') { var c = form.querySelector('[name=carrier]'); if (c) c.value = j.carrier; }
+        set('weight_kg', j.weight_kg); set('boxes', j.pieces); set('declared_value', j.declared_value); if (j.ship_date) { var d = form.querySelector('[name=shipped_at]'); if (d) d.value = j.ship_date; }
+        var safe = function (x) { return String(x).replace(/[^0-9A-Za-z .]/g, ''); };
+        msg.className = 'read'; msg.innerHTML = '✓ ' + L('Read from the photo: ', '已识别：') + safe((j.carrier || '').toUpperCase()) + ' · ' + safe(j.tracking_number) + (j.weight_kg ? ' · ' + safe(j.weight_kg) + ' kg' : '') + '. ' + L('Please check below.', '请核对。');
+      }).catch(function () { msg.className = 'read warn'; msg.innerHTML = L('Could not read it. Please type the tracking number.', '无法识别，请手动填写运单号。'); });
+    };
+    input.addEventListener('change', read);
+  })();
+
   // Import review: live count, select-all, no accidental approve with Enter, no double submit.
   (function () {
     var rv = document.querySelector('[data-import-review]'); if (!rv) return;

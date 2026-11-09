@@ -1555,3 +1555,115 @@ test('business license: credit code check, upload, AI check saved on the profile
   assert.equal(row.license_info, null);
   assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: admin })).text, /Credit code is not valid/);
 });
+
+test('carriers: number detection and DHL / FedEx / UPS answers normalised', async (t) => {
+  const CR = require('../src/carriers');
+  assert.equal(CR.detect('3471 829 104'), 'dhl');
+  assert.equal(CR.detect('778120439925'), 'fedex');
+  assert.equal(CR.detect('1Z9X84A04127736512'), 'ups');
+  assert.equal(CR.detect('SF1428339022'), null);
+  const env = { ...process.env };
+  Object.assign(process.env, { DHL_API_KEY: 'k', FEDEX_CLIENT_ID: 'i', FEDEX_CLIENT_SECRET: 's', UPS_CLIENT_ID: 'i', UPS_CLIENT_SECRET: 's' });
+  CR._tokens.clear();
+  const realFetch = global.fetch; const seen = [];
+  global.fetch = async (url, opts = {}) => {
+    seen.push(String(url));
+    const J = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
+    if (/oauth\/token/.test(url)) return J({ access_token: 'tok', expires_in: 3600 });
+    if (/api-eu\.dhl\.com/.test(url)) { assert.equal(opts.headers['DHL-API-Key'], 'k'); return J({ shipments: [{ id: '3471829104', status: { timestamp: '2026-11-09T09:42:00Z', statusCode: 'transit', description: 'Customs clearance status updated', location: { address: { addressLocality: 'CINCINNATI HUB - USA', countryCode: 'US' } } }, estimatedTimeOfDelivery: '2026-11-11T18:00:00Z', events: [{ timestamp: '2026-11-09T09:42:00Z', statusCode: 'transit', description: 'Customs clearance status updated', location: { address: { addressLocality: 'CINCINNATI HUB - USA' } } }, { timestamp: '2026-11-04T08:02:00Z', statusCode: 'transit', description: 'Shipment picked up', location: { address: { addressLocality: 'HUIZHOU - CHINA' } } }] }] }); }
+    if (/track\/v1\/trackingnumbers/.test(url)) { assert.equal(opts.headers.authorization, 'Bearer tok'); return J({ output: { completeTrackResults: [{ trackResults: [{ latestStatusDetail: { code: 'DL', derivedCode: 'DL', description: 'Delivered', scanLocation: { city: 'LAKE FOREST', stateOrProvinceCode: 'CA', countryCode: 'US' } }, dateAndTimes: [{ type: 'ACTUAL_DELIVERY', dateTime: '2026-11-08T14:02:00-08:00' }], deliveryDetails: { receivedByName: 'M.RAKH' }, scanEvents: [{ date: '2026-11-08T14:02:00-08:00', eventType: 'DL', derivedStatusCode: 'DL', eventDescription: 'Delivered', scanLocation: { city: 'LAKE FOREST' } }] }] }] } }); }
+    if (/api\/track\/v1\/details/.test(url)) return J({ trackResponse: { shipment: [{ package: [{ currentStatus: { code: '021', description: 'Out For Delivery Today' }, deliveryDate: [{ type: 'SDD', date: '20261110' }], activity: [{ date: '20261110', time: '071500', status: { type: 'I', code: 'OT', description: 'Out For Delivery Today', statusCode: '021' }, location: { address: { city: 'Irvine', stateProvince: 'CA', countryCode: 'US' } } }] }] }] } });
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; for (const k of ['DHL_API_KEY', 'FEDEX_CLIENT_ID', 'FEDEX_CLIENT_SECRET', 'UPS_CLIENT_ID', 'UPS_CLIENT_SECRET']) { if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k]; } CR._tokens.clear(); });
+  const d = await CR.track('dhl', '3471829104');
+  assert.equal(d.status, 'customs'); assert.equal(d.events.length, 2); assert.equal(d.eta, '2026-11-11T18:00:00Z'); assert.match(d.location, /CINCINNATI/);
+  const f = await CR.track('fedex', '778120439925');
+  assert.equal(f.status, 'delivered'); assert.equal(f.signedBy, 'M.RAKH'); assert.equal(f.deliveredAt, '2026-11-08T14:02:00-08:00');
+  const u = await CR.track('ups', '1Z9X84A04127736512');
+  assert.equal(u.status, 'out_for_delivery'); assert.equal(u.events[0].at, '2026-11-10T07:15:00'); assert.match(u.eta, /^2026-11-10/);
+  assert.ok(seen.some((x) => /apis\.fedex\.com\/oauth\/token/.test(x)) && seen.some((x) => /onlinetools\.ups\.com\/security\/v1\/oauth\/token/.test(x)));
+  // Tokens are reused
+  const n = seen.length; await CR.track('fedex', '778120439925'); assert.equal(seen.length, n + 1);
+});
+
+test('samples: request, supplier confirms and ships, carrier tracking moves status, evaluation, reminders', async (t) => {
+  const { hashPassword } = require('../src/auth');
+  const S = require('../src/samples');
+  const CR = require('../src/carriers');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const env = { DHL_API_KEY: process.env.DHL_API_KEY };
+  process.env.DHL_API_KEY = 'k'; CR._tokens.clear();
+  let dhlState = 'transit';
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (!/api-eu\.dhl\.com/.test(String(url))) return realFetch(url, opts);
+    const ev = [{ timestamp: '2026-11-05T08:00:00Z', statusCode: 'transit', description: 'Shipment picked up', location: { address: { addressLocality: 'HUIZHOU - CHINA' } } }];
+    if (dhlState === 'delivered') ev.unshift({ timestamp: '2026-11-09T19:00:00Z', statusCode: 'delivered', description: 'Delivered', location: { address: { addressLocality: 'LAKE FOREST - USA' } } });
+    return new Response(JSON.stringify({ shipments: [{ status: ev[0], events: ev, details: dhlState === 'delivered' ? { proofOfDelivery: { signed: { name: 'MARSEL' } } } : {} }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { server.close(); global.fetch = realFetch; if (env.DHL_API_KEY === undefined) delete process.env.DHL_API_KEY; else process.env.DHL_API_KEY = env.DHL_API_KEY; });
+
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const sup = await db.insert('suppliers', { name: 'Melikey Silicone', email: 'm@melikey.cn', country: 'China' });
+  const other = await db.insert('suppliers', { name: 'Other Co', email: 'o@o.cn' });
+  const login = async (s, email) => { await db.insert('supplier_users', { supplier_id: s.id, email, name: 'X', status: 'active', password_hash: await hashPassword('correct horse battery') }); return (await req(base, 'POST', '/login', { form: { email, password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; '); };
+  const supCookie = await login(sup, 'm@melikey.cn'); const otherCookie = await login(other, 'o@o.cn');
+
+  // Admin requests a sample
+  const created = await req(base, 'POST', '/admin/samples', { cookie: admin, form: { title: 'Teether set', supplier_id: sup.id, stage: 'PVT', qty: '3', due_ship_date: '2026-11-05', request_note: 'Pink + mint', internal_notes: 'SECRET-SMP', send_email: '1' } });
+  assert.equal(created.status, 303);
+  const s0 = db.tables.samples[0]; assert.equal(s0.ref, 'SMP-1001'); assert.equal(s0.status, 'Requested'); assert.equal(s0.eval_checks.length, S.DEFAULT_CHECKS.length);
+  assert.match((await req(base, 'GET', '/admin/samples', { cookie: admin })).text, /Teether set/);
+
+  // Supplier: badge, list, own sample only, internal notes hidden
+  const plist = await req(base, 'GET', '/portal/samples', { cookie: supCookie });
+  assert.match(plist.text, /nav-badge[^>]*>1</); assert.match(plist.text, /Teether set/);
+  const pview = await req(base, 'GET', `/portal/samples/${s0.id}`, { cookie: supCookie });
+  assert.equal(pview.status, 200); assert.doesNotMatch(pview.text, /SECRET-SMP/); assert.match(pview.text, /Pink \+ mint/);
+  assert.equal((await req(base, 'GET', `/portal/samples/${s0.id}`, { cookie: otherCookie })).status, 404);
+  assert.doesNotMatch((await req(base, 'GET', '/portal/samples', { cookie: supCookie })).text, /nav-badge[^>]*>1</, 'badge clears after opening');
+
+  // Confirm with a fee → admin sees "Pay sample fee"
+  await req(base, 'POST', `/portal/samples/${s0.id}/confirm`, { cookie: supCookie, form: { sample_fee: '30', currency: 'USD', freight_by: 'supplier', due_ship_date: '2026-11-06' } });
+  let s = db.tables.samples[0]; assert.equal(s.status, 'Confirmed'); assert.equal(Number(s.sample_fee), 30);
+  assert.match((await req(base, 'GET', '/admin/samples?f=action', { cookie: admin })).text, /Pay sample fee/);
+  await req(base, 'POST', `/admin/samples/${s0.id}/fee-paid`, { cookie: admin, form: {} });
+  assert.ok(db.tables.samples[0].fee_paid_at);
+
+  // Ship with a DHL number (carrier detected) → first check runs immediately
+  await req(base, 'POST', `/portal/samples/${s0.id}/ship`, { cookie: supCookie, form: { tracking_no: '3471 829 104', boxes: '1', weight_kg: '0.8', shipped_at: '2026-11-05' } });
+  s = db.tables.samples[0];
+  assert.equal(s.carrier, 'dhl'); assert.equal(s.tracking_no, '3471829104'); assert.equal(s.status, 'In transit'); assert.equal(s.tracking_status, 'in_transit');
+  assert.equal(db.tables.sample_events.filter((e) => e.source === 'dhl').length, 1);
+  assert.ok(s.next_check_at > s.last_checked_at, 'next check scheduled');
+
+  // Poller: not due yet → nothing; later → delivered, signed, owner + supplier notified
+  assert.equal((await S.runTracking({ db, config: { publicUrl: 'http://test' }, now: s.last_checked_at })).checked, 0);
+  dhlState = 'delivered';
+  assert.equal((await S.runTracking({ db, config: { publicUrl: 'http://test' }, now: '2099-01-01T00:00:00Z' })).checked, 1);
+  s = db.tables.samples[0];
+  assert.equal(s.status, 'Delivered'); assert.equal(s.signed_by, 'MARSEL'); assert.equal(s.next_check_at, null);
+  assert.equal(db.tables.sample_events.filter((e) => e.source === 'dhl').length, 2, 'only new events stored');
+  const detail = await req(base, 'GET', `/admin/samples/${s0.id}`, { cookie: admin });
+  assert.match(detail.text, /Evaluate sample/); assert.match(detail.text, /Shipment picked up/);
+
+  // Evaluate → Revise, supplier sees the result and fails
+  await req(base, 'POST', `/admin/samples/${s0.id}/evaluate`, { cookie: admin, form: { label_0: 'Dimensions vs drawing', r_0: 'pass', label_1: 'Colour vs reference', r_1: 'fail', label_6: 'Drop test 1 m', r_6: 'pass', eval_notes: 'Mint is too dark', eval_score: '6', result: 'Revise', notify: '1' } });
+  s = db.tables.samples[0]; assert.equal(s.status, 'Revise'); assert.equal(s.eval_checks.length, 3); assert.equal(s.eval_score, 6);
+  const pres = await req(base, 'GET', `/portal/samples/${s0.id}`, { cookie: supCookie });
+  assert.match(pres.text, /Mint is too dark/); assert.match(pres.text, /Colour vs reference/);
+  assert.match((await req(base, 'GET', `/admin/samples/new?from=${s0.id}`, { cookie: admin })).text, /Mint is too dark/, 'revised sample request prefilled');
+
+  // Reminders: a late, unshipped sample gets one reminder per day
+  const late = await db.insert('samples', { ref: 'SMP-1002', title: 'Bib', supplier_id: sup.id, status: 'Confirmed', due_ship_date: '2026-11-01' });
+  const r1 = await S.runReminders({ db, config: { publicUrl: 'http://test' }, now: '2026-11-09T18:00:00Z' });
+  assert.ok(r1.sent >= 1); assert.equal(db.tables.samples.find((x) => x.id === late.id).late_reminders, 1);
+  await S.runReminders({ db, config: { publicUrl: 'http://test' }, now: '2026-11-09T19:00:00Z' });
+  assert.equal(db.tables.samples.find((x) => x.id === late.id).late_reminders, 1, 'not twice the same day');
+
+  // Delete is Admin-only path rule includes samples
+  assert.equal((await req(base, 'POST', `/admin/samples/${late.id}/delete`, { cookie: admin, form: {} })).status, 303);
+  assert.equal(db.tables.samples.length, 1);
+});
