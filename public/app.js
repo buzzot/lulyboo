@@ -918,7 +918,22 @@
     document.querySelectorAll('form[data-go-tab]').forEach(function (f) { f.addEventListener('submit', function () { store(f.getAttribute('data-go-tab')); }); });
     // Compact sticky header
     var head = document.querySelector('[data-pw-head]');
-    if (head) { var onScroll = function () { head.classList.toggle('stuck', window.scrollY > 80); }; window.addEventListener('scroll', onScroll, { passive: true }); onScroll(); }
+    // The compact header is shorter; the lost height is added back as margin so the page
+    // below doesn't jump (on short pages that jump used to flip the header back and forth).
+    if (head) {
+      var baseMb = parseFloat(getComputedStyle(head).marginBottom) || 0, tick = false;
+      var setStuck = function (on) {
+        if (on === head.classList.contains('stuck')) return;
+        var before = head.offsetHeight;
+        head.classList.toggle('stuck', on);
+        head.style.marginBottom = on ? (baseMb + Math.max(0, before - head.offsetHeight)) + 'px' : '';
+      };
+      var onScroll = function () {
+        if (tick) return; tick = true;
+        requestAnimationFrame(function () { tick = false; var y = window.scrollY; if (y > 120) setStuck(true); else if (y < 60) setStuck(false); });
+      };
+      window.addEventListener('scroll', onScroll, { passive: true }); onScroll();
+    }
     // Unsaved changes: Save is disabled until something changes; leaving the page warns
     var dirtyCount = 0;
     root.querySelectorAll('form[data-guard]').forEach(function (f) {
