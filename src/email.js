@@ -29,6 +29,8 @@ async function sendEmail(config, { to, subject, text, html, cc, replyTo }) {
     console.error('Email send failed', res.status, t.slice(0, 300));
     const err = new Error(m('We could not send the email. Please try again later.', '邮件发送失败，请稍后再试。'));
     err.status = 502;
+    let reason = ''; try { reason = JSON.parse(t).message || ''; } catch { reason = t.slice(0, 200); }
+    err.provider = { status: res.status, reason: String(reason || '').trim() };
     throw err;
   }
   const sent = await res.json().catch(() => ({}));

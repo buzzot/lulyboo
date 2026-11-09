@@ -884,7 +884,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     return { row, errors };
   }
 
-  const linkFlash = (res, email, r) => flash(res, 'link', `${r.emailed ? `Invitation emailed to ${email}.` : `Invitation created for ${email}. Email is not configured: send this link yourself.`}|||${r.link}`);
+  const linkFlash = (res, email, r) => flash(res, 'link', `${r.emailed ? `Invitation emailed to ${email}.` : r.emailError ? `Email to ${email} was NOT sent: ${r.emailError}. The new invitation link works, copy it and send it yourself.` : `Invitation created for ${email}. Email is not configured: send this link yourself.`}|||${r.link}`);
   async function emailTaken(email) { return (await db.list('supplier_users', { filters: { email }, limit: 1 })).length > 0; }
 
   router.post('/admin/suppliers', G(async (req, res) => {

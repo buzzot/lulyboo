@@ -25,8 +25,13 @@ async function createInvite(db, config, user, { send = false, companyName } = {}
   });
   const link = `${config.publicUrl}/s/${token}`;
   let emailed = false;
-  if (send && emailConfigured()) { await sendEmail(config, { to: user.email, ...inviteEmail({ link, companyName, days: INVITE_DAYS }) }); emailed = true; }
-  return { link, emailed };
+  let emailError = null;
+  if (send && emailConfigured()) {
+    // A failed send must not lose the new link: return it so the admin can copy it, with the reason.
+    try { await sendEmail(config, { to: user.email, ...inviteEmail({ link, companyName, days: INVITE_DAYS }) }); emailed = true; }
+    catch (e) { emailError = e.provider ? `${e.provider.reason || 'rejected'} (email service ${e.provider.status})` : 'the email service could not be reached'; }
+  }
+  return { link, emailed, emailError };
 }
 
 const box = (title, body) => html`<section class="card narrow auth"><h1>${title}</h1>${body}</section>`;

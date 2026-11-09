@@ -1774,3 +1774,25 @@ test('supplier page: SKU column and follow-ups link to their request', async (t)
   const crm = await req(base, 'GET', '/admin/crm', { cookie });
   assert.match(crm.text, /Open LB-1042/);
 });
+
+test('resend invitation: a rejected email keeps the new link and shows the reason', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch, oldKey = process.env.RESEND_API_KEY;
+  process.env.RESEND_API_KEY = 're_test';
+  global.fetch = async (url, opts) => String(url).includes('api.resend.com')
+    ? new Response(JSON.stringify({ statusCode: 403, message: 'The lulyboo.space domain is not verified' }), { status: 403 })
+    : realFetch(url, opts);
+  t.after(() => { global.fetch = realFetch; if (oldKey === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = oldKey; server.close(); });
+  const login = await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } });
+  const cookie = login.cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Fubon', status: 'active' });
+  const u = await db.insert('supplier_users', { supplier_id: s.id, email: 'sales-06@fubon.test', status: 'invited' });
+  const r = await req(base, 'POST', `/admin/supplier-users/${u.id}/invite`, { cookie });
+  assert.equal(r.status, 303);
+  assert.equal(r.location, `/admin/suppliers/${s.id}`);
+  const pg = await req(base, 'GET', r.location, { cookie: [cookie, ...r.cookies.map((c) => c.split(';')[0])].join('; ') });
+  assert.match(pg.text, /NOT sent: The lulyboo\.space domain is not verified \(email service 403\)/);
+  assert.match(pg.text, /\/s\/[A-Za-z0-9_-]{20,}/);
+  assert.ok((await db.get('supplier_users', u.id)).invite_expires_at > new Date().toISOString());
+});
