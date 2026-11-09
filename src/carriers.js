@@ -19,6 +19,8 @@ const CARRIERS = {
   other: { name: 'Other', short: 'Other', url: () => null },
 };
 
+// Railway values sometimes get pasted with spaces, line breaks or quotes around them.
+const env = (k) => String(process.env[k] || '').trim().replace(/^['"]|['"]$/g, '');
 const clean = (n) => String(n || '').toUpperCase().replace(/[\s-]/g, '');
 
 /** Guess the carrier from the number format. Returns 'dhl' | 'fedex' | 'ups' | null. */
@@ -35,8 +37,8 @@ function detect(no) {
 
 const configured = (c) => ({
   dhl: !!process.env.DHL_API_KEY,
-  fedex: !!(process.env.FEDEX_CLIENT_ID && process.env.FEDEX_CLIENT_SECRET),
-  ups: !!(process.env.UPS_CLIENT_ID && process.env.UPS_CLIENT_SECRET),
+  fedex: !!(env('FEDEX_CLIENT_ID') && env('FEDEX_CLIENT_SECRET')),
+  ups: !!(env('UPS_CLIENT_ID') && env('UPS_CLIENT_SECRET')),
 }[c] || false);
 
 async function http(url, opts = {}) {
@@ -75,7 +77,7 @@ const dhlCode = (e) => {
 };
 const dhlLoc = (l) => [l?.address?.addressLocality, l?.address?.countryCode].filter(Boolean).join(', ');
 async function trackDhl(no) {
-  const r = await http(`https://api-eu.dhl.com/track/shipments?trackingNumber=${encodeURIComponent(no)}&service=express`, { headers: { 'DHL-API-Key': process.env.DHL_API_KEY, accept: 'application/json' } });
+  const r = await http(`https://api-eu.dhl.com/track/shipments?trackingNumber=${encodeURIComponent(no)}&service=express`, { headers: { 'DHL-API-Key': env('DHL_API_KEY'), accept: 'application/json' } });
   if (r.status === 404) return { found: false };
   if (!r.ok) throw apiError('DHL', r);
   const s = r.json?.shipments?.[0]; if (!s) return { found: false };
@@ -103,7 +105,7 @@ const fedexCode = (code, desc) => {
 };
 const fedexLoc = (l) => [l?.city, l?.stateOrProvinceCode, l?.countryCode].filter(Boolean).join(', ');
 async function trackFedex(no) {
-  const token = await oauth('FedEx', `${fedexBase()}/oauth/token`, { body: new URLSearchParams({ grant_type: 'client_credentials', client_id: process.env.FEDEX_CLIENT_ID, client_secret: process.env.FEDEX_CLIENT_SECRET }) });
+  const token = await oauth('FedEx', `${fedexBase()}/oauth/token`, { body: new URLSearchParams({ grant_type: 'client_credentials', client_id: env('FEDEX_CLIENT_ID'), client_secret: env('FEDEX_CLIENT_SECRET') }) });
   const r = await http(`${fedexBase()}/track/v1/trackingnumbers`, {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-locale': 'en_US' },
     body: JSON.stringify({ includeDetailedScans: true, trackingInfo: [{ trackingNumberInfo: { trackingNumber: no } }] }),
@@ -137,7 +139,7 @@ const upsCode = (s) => {
 const upsLoc = (l) => { const a = l?.address || {}; return [a.city || a.City, a.stateProvince || a.StateProvinceCode, a.countryCode || a.CountryCode || a.country].filter(Boolean).join(', '); };
 const upsTime = (d, t) => (d && /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${(t || '000000').padEnd(6, '0').replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3')}` : null);
 async function trackUps(no) {
-  const basic = Buffer.from(`${process.env.UPS_CLIENT_ID}:${process.env.UPS_CLIENT_SECRET}`).toString('base64');
+  const basic = Buffer.from(`${env('UPS_CLIENT_ID')}:${env('UPS_CLIENT_SECRET')}`).toString('base64');
   const token = await oauth('UPS', process.env.UPS_TOKEN_URL || `${upsBase()}/security/v1/oauth/token`, { headers: { authorization: `Basic ${basic}` }, body: new URLSearchParams({ grant_type: 'client_credentials' }) });
   const r = await http(`${upsBase()}/api/track/v1/details/${encodeURIComponent(no)}?locale=en_US&returnSignature=false`, {
     headers: { authorization: `Bearer ${token}`, transId: `lb${Date.now()}`, transactionSrc: 'lulyboo', accept: 'application/json' },
@@ -176,9 +178,9 @@ async function track(carrier, no) {
 async function testConnection(carrier) {
   if (!configured(carrier)) return { ok: false, message: 'Not configured' };
   try {
-    if (carrier === 'dhl') { const r = await http('https://api-eu.dhl.com/track/shipments?trackingNumber=0000000000&service=express', { headers: { 'DHL-API-Key': process.env.DHL_API_KEY } }); return r.status === 401 || r.status === 403 ? { ok: false, message: 'Key rejected' } : { ok: true, message: 'Connected' }; }
-    if (carrier === 'fedex') { tokens.delete('FedEx'); await oauth('FedEx', `${fedexBase()}/oauth/token`, { body: new URLSearchParams({ grant_type: 'client_credentials', client_id: process.env.FEDEX_CLIENT_ID, client_secret: process.env.FEDEX_CLIENT_SECRET }) }); return { ok: true, message: 'Connected' }; }
-    if (carrier === 'ups') { tokens.delete('UPS'); const basic = Buffer.from(`${process.env.UPS_CLIENT_ID}:${process.env.UPS_CLIENT_SECRET}`).toString('base64'); await oauth('UPS', process.env.UPS_TOKEN_URL || `${upsBase()}/security/v1/oauth/token`, { headers: { authorization: `Basic ${basic}` }, body: new URLSearchParams({ grant_type: 'client_credentials' }) }); return { ok: true, message: 'Connected' }; }
+    if (carrier === 'dhl') { const r = await http('https://api-eu.dhl.com/track/shipments?trackingNumber=0000000000&service=express', { headers: { 'DHL-API-Key': env('DHL_API_KEY') } }); return r.status === 401 || r.status === 403 ? { ok: false, message: 'Key rejected' } : { ok: true, message: 'Connected' }; }
+    if (carrier === 'fedex') { tokens.delete('FedEx'); await oauth('FedEx', `${fedexBase()}/oauth/token`, { body: new URLSearchParams({ grant_type: 'client_credentials', client_id: env('FEDEX_CLIENT_ID'), client_secret: env('FEDEX_CLIENT_SECRET') }) }); return { ok: true, message: 'Connected' }; }
+    if (carrier === 'ups') { tokens.delete('UPS'); const basic = Buffer.from(`${env('UPS_CLIENT_ID')}:${env('UPS_CLIENT_SECRET')}`).toString('base64'); await oauth('UPS', process.env.UPS_TOKEN_URL || `${upsBase()}/security/v1/oauth/token`, { headers: { authorization: `Basic ${basic}` }, body: new URLSearchParams({ grant_type: 'client_credentials' }) }); return { ok: true, message: 'Connected' }; }
   } catch (e) { return { ok: false, message: e.message }; }
   return { ok: false, message: 'Unknown carrier' };
 }
