@@ -1276,3 +1276,8 @@ form.card h2.sec.mt{margin-top:26px}
 .mode-seg input:checked+span{border-color:var(--brand);background:var(--brand-soft)}.mode-seg input:focus-visible+span{box-shadow:0 0 0 3px var(--brand-soft)}
 [data-for][hidden]{display:none!important}
 @media(max-width:640px){.mode-seg{grid-template-columns:1fr}}
+
+img.ph{object-fit:cover;padding:0}
+.smp-thumb{flex:none;width:72px;height:72px;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff;cursor:zoom-in}
+.smp-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.smp-head .smp-title{flex:1;min-width:0}.smp-head:has(.smp-thumb){align-items:center}

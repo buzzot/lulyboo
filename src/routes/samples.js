@@ -34,9 +34,9 @@ const serve = (res, buf, name, type, inline) => {
   res.end(buf);
 };
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.zip';
-const drop = (name, en, zh, { multiple = true, accept = ACCEPT } = {}) => html`<div class="mdrop small" data-filebox${multiple ? '' : raw(' data-max="1"')}>
+const drop = (name, en, zh, { multiple = true, accept = ACCEPT, hint = 'PDF, JPG, PNG' } = {}) => html`<div class="mdrop small" data-filebox${multiple ? '' : raw(' data-max="1"')}>
   <div class="mdrop-box"><input type="file" name="${name}" ${multiple ? raw('multiple') : ''} accept="${accept}" aria-label="Choose files">
-    <span class="dz-main" data-main>${t(en, zh)}</span><span class="dz-hint">PDF, JPG, PNG · ${t('up to 20 MB', '最大 20 MB')}</span></div>
+    <span class="dz-main" data-main>${t(en, zh)}</span><span class="dz-hint">${hint} · ${t('up to 20 MB', '最大 20 MB')}</span></div>
   <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`;
 const carrierBadge = (c) => (c && c !== 'other' ? html`<span class="cl ${c}">${CR.CARRIERS[c]?.short || c}</span>` : '');
 const statusPill = (s, zh = false) => html`<span class="stp ${S.pillCls(s)}"><i></i>${zh ? t(s, S.STATUS_ZH[s] || s) : s}</span>`;
@@ -123,6 +123,8 @@ module.exports = function sampleRoutes(router, { db, config }) {
   router.get('/admin/samples', G(async (req, res) => {
     const [samples, suppliers] = await Promise.all([db.list('samples', { order: 'created_at.desc' }), db.list('suppliers', { select: 'id,name' })]);
     const names = Object.fromEntries(suppliers.map((x) => [x.id, x.name]));
+    const thumbs = {};
+    for (const f of await db.list('sample_files', { filters: { kind: 'photo' }, order: 'created_at.asc' }).catch(() => [])) if (THUMB.test(f.name) && !thumbs[f.sample_id]) thumbs[f.sample_id] = f.id;
     const d = today(); const f = FILTERS.find(([k]) => k === req.query.f) || FILTERS[0];
     const q = String(req.query.q || '').trim().toLowerCase();
     const open = samples.filter((s) => f[0] === 'closed' || f[0] === 'all' ? true : !S.CLOSED.includes(s.status));
@@ -151,7 +153,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
           <input type="hidden" name="f" value="${f[0]}"><input type="search" name="q" value="${req.query.q || ''}" placeholder="Search sample, supplier, tracking…"></form>
         ${shown.length ? html`<section class="card flush"><div class="table-wrap"><table class="stbl"><thead><tr><th>Sample</th><th>Status</th><th>Shipped · ETA</th><th>Tracking</th><th>Cost</th><th>Next action</th></tr></thead><tbody>
           ${shown.map((s) => { const na = nextAction(s, d); return html`<tr data-href="/admin/samples/${s.id}">
-            <td><a class="sm" href="/admin/samples/${s.id}"><span class="ph">${s.stage ? s.stage.slice(0, 3).toUpperCase() : 'SMP'}</span><span><b>${s.title}</b><small>${names[s.supplier_id] || ''} · ${s.ref}${s.qty ? ` · ${s.qty} pcs` : ''}</small></span></a></td>
+            <td><a class="sm" href="/admin/samples/${s.id}">${thumbs[s.id] ? html`<img class="ph" src="/admin/sample-files/${thumbs[s.id]}?inline=1" alt="" loading="lazy">` : html`<span class="ph">${s.stage ? s.stage.slice(0, 3).toUpperCase() : 'SMP'}</span>`}<span><b>${s.title}</b><small>${names[s.supplier_id] || ''} · ${s.ref}${s.qty ? ` · ${s.qty} pcs` : ''}</small></span></a></td>
             <td>${statusPill(s.status)}</td>
             <td>${s.shipped_at ? shortDate(s.shipped_at) : '—'}<div class="eta">${s.delivered_at ? `Delivered ${shortDate(s.delivered_at)}` : s.eta ? `ETA ${shortDate(s.eta)}` : s.due_ship_date ? `Ship by ${shortDate(s.due_ship_date)}` : ''}</div></td>
             <td>${s.tracking_no ? html`<div class="carrier">${carrierBadge(s.carrier)}<code>${s.tracking_no}</code></div><div class="eta">${s.tracking_error ? html`<span class="neg">${s.tracking_error}</span>` : [s.tracking_summary, s.tracking_location].filter(Boolean).join(' · ')}</div>` : html`<span class="muted">No tracking yet</span>`}</td>
@@ -175,7 +177,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
     res.html(page({
       title: 'New sample', nav: adminNav('samples'), flash: takeFlash(req, res), req,
       body: html`<p class="sub crumbs"><a href="/admin/samples">Samples</a> › New</p><h1>New sample</h1>
-        <form method="post" action="/admin/samples" class="card fields smp-form" data-sample-mode="${shipped ? 'shipped' : 'request'}">
+        <form method="post" action="/admin/samples" enctype="multipart/form-data" class="card fields smp-form" data-sample-mode="${shipped ? 'shipped' : 'request'}">
           <input type="hidden" name="invitation_id" value="${pre.invitation_id}">
           <div class="mode-seg" role="radiogroup" aria-label="Type">
             <label><input type="radio" name="mode" value="request" ${shipped ? '' : raw('checked')}><span><b>Request a sample</b><small>Ask the supplier to send one</small></span></label>
@@ -206,6 +208,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
             <label data-for="shipped" class="chk"><input type="checkbox" name="fee_paid" value="1"> Sample fee already paid</label>
             <label><span class="lbl">Freight</span><select name="freight_by">${Object.entries(S.FREIGHT_BY).map(([k, v]) => html`<option value="${k}" ${k === 'supplier' ? raw('selected') : ''}>${v[0]}</option>`)}</select></label>
             <label class="full" data-for="request"><span class="lbl">Instructions for the supplier <span class="muted">(shared)</span></span><textarea name="request_note" rows="3" placeholder="Colour, material, packaging, what to include, ship-to address…">${pre.note || ''}</textarea></label>
+            <div class="full"><span class="lbl">Photos of the item <span class="muted">(optional)</span></span>${drop('photos', 'Drop photos of the sample, or paste a screenshot', '拖入样品照片', { accept: '.jpg,.jpeg,.png,.webp', hint: 'JPG, PNG, WEBP' })}</div>
             <label class="full"><span class="lbl">Internal notes <span class="muted">(only you)</span></span><textarea name="internal_notes" rows="2"></textarea></label>
           </div>
           <label class="chk" data-for="request"><input type="checkbox" name="send_email" value="1" checked> Email the request to the supplier now (English + 中文)</label>
@@ -216,11 +219,16 @@ module.exports = function sampleRoutes(router, { db, config }) {
   }));
 
   router.post('/admin/samples', G(async (req, res) => {
-    const { fields: f } = await parseForm(req);
+    const { fields: f, files } = await parseForm(req, { limitBytes: 60 * 1024 * 1024 });
     const supplier = await db.get('suppliers', f.supplier_id);
     if (!supplier || !str(f.title)) { flash(res, 'error', 'Choose a supplier and describe the sample'); return res.redirect('/admin/samples/new'); }
     const inv = f.invitation_id ? await db.get('dev_invitations', f.invitation_id) : null;
     const isShipped = f.mode === 'shipped';
+    const savePhotos = async (sampleId) => {
+      const r = await S.storeFiles(db, sampleId, [].concat(files?.photos || []).filter((x) => THUMB.test(x.name || '')));
+      for (const a of r.saved) await db.insert('sample_files', { sample_id: sampleId, kind: 'photo', name: a.name, path: a.path, mime: a.mime, bytes: a.bytes, uploaded_by: 'admin', created_at: now() });
+      return r;
+    };
     if (isShipped && !CR.clean(f.tracking_no)) { flash(res, 'error', 'Enter the tracking number of the shipped sample'); return res.redirect('/admin/samples/new?mode=shipped'); }
     const s = await db.insert('samples', {
       ref: await S.nextRef(db), title: str(f.title, 160), supplier_id: supplier.id, project_id: f.project_id || inv?.project_id || null, invitation_id: inv && inv.supplier_id === supplier.id ? inv.id : null,
@@ -230,6 +238,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
     if (isShipped) {
       await db.update('samples', { id: s.id }, { sample_fee: num(f.sample_fee), freight_cost: num(f.freight_cost), fee_paid_at: f.fee_paid === '1' && num(f.sample_fee) ? now() : null, due_ship_date: null, confirmed_at: now() });
       await log(s.id, 'Shipped sample added', 'admin');
+      await savePhotos(s.id);
       const r = await setTracking({ ...s, status: 'Confirmed' }, f, 'admin');
       if (inv && inv.status !== 'Selected') await db.update('dev_invitations', { id: inv.id }, { status: 'Sample' }).catch(() => {});
       const now2 = await db.get('samples', s.id);
@@ -237,6 +246,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
       return res.redirect(`/admin/samples/${s.id}`);
     }
     await log(s.id, 'Sample requested', 'admin');
+    await savePhotos(s.id);
     if (inv && inv.status !== 'Selected') await db.update('dev_invitations', { id: inv.id }, { status: 'Sample' }).catch(() => {});
     if (f.send_email === '1') await S.notifySupplierSample(db, config, supplier, s, {
       subject: `[Lulyboo ${s.ref}] Sample request · 样品请求: ${s.title}`, title: ['Sample request', '样品请求'], lead: ['Please send us a sample of:', '请寄送以下样品：'],
@@ -263,7 +273,7 @@ module.exports = function sampleRoutes(router, { db, config }) {
     res.html(page({
       title: `${s.ref} ${s.title}`, nav: adminNav('samples'), flash: takeFlash(req, res), wide: true, req,
       body: html`<p class="sub crumbs"><a href="/admin/samples">Samples</a> › ${s.ref}</p>
-      <div class="smp-head"><div><h1>${s.title}${s.stage ? html` <span class="tag">${s.stage}</span>` : ''}</h1>
+      <div class="smp-head">${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)) ? html`<button type="button" class="smp-thumb" data-preview="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}?inline=1" data-type="image" data-dl="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}" aria-label="View photo"><img src="/admin/sample-files/${files.find((f) => f.kind === 'photo' && THUMB.test(f.name)).id}?inline=1" alt=""></button>` : ''}<div class="smp-title"><h1>${s.title}${s.stage ? html` <span class="tag">${s.stage}</span>` : ''}</h1>
         <p><a href="/admin/suppliers/${s.supplier_id}">${supplier?.name || 'Supplier'}</a>${project ? html` · <a href="/admin/projects/${project.id}${s.invitation_id ? `/suppliers/${s.invitation_id}` : ''}">${project.ref}</a>` : ''}${s.qty ? ` · ${s.qty} pcs` : ''} · requested ${shortDate(s.created_at)}</p></div>
         <div class="smp-actions">${statusPill(s.status)}
           ${s.status === 'Revise' ? html`<a class="btn" href="/admin/samples/new?from=${s.id}">Request revised sample</a>` : ''}
