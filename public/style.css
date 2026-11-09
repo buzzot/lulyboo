@@ -992,7 +992,7 @@ a.chip { text-decoration: none; cursor: pointer; } a.chip:hover { filter: bright
 .pw-body .fields .frow.stores .chips{display:flex;flex-wrap:wrap;gap:6px}
 .pw-body .doc-upload .frow{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center}
 @media(max-width:600px){.pw-body .fields .frow,.pw-body .doc-upload .frow{grid-template-columns:minmax(0,1fr);gap:4px}}
-@media(max-width:600px){.pw-head .crumb a:nth-of-type(2),.pw-head .crumb span:nth-of-type(2){display:none}}
+@media(max-width:600px){.pw-head .crumb a{overflow:hidden;text-overflow:ellipsis}}
 
 /* ── Logistics page ───────────────────────────────────── */
 .lg-calc,.lg-rates{max-width:1280px}.lg-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}.lg-h h2{margin:0}

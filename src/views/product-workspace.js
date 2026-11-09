@@ -56,7 +56,7 @@ function renderWorkspace(c) {
 
   // ── Header ────────────────────────────────────────────────
   const header = html`<div class="pw-head" data-pw-head>
-    <nav class="crumb" aria-label="Breadcrumb"><a href="/admin/products">Products</a><span>›</span><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name || 'Supplier'}</a><span>›</span><b>${p.product_name}</b></nav>
+    <nav class="crumb" aria-label="Breadcrumb"><a href="/admin/products">Products</a><span>›</span><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name || 'Supplier'}</a></nav>
     <div class="pw-top">
       <div class="pp-title"><h1>${p.product_name}</h1>${statusPill(p.status)}${stars ? html`<span class="stars" title="Score ${p.score} of 5">${stars}</span>` : ''}${p.archived_at ? html`<span class="pill s-closed">Archived</span>` : ''}</div>
       <div class="pp-actions">

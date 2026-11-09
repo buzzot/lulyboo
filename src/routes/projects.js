@@ -140,7 +140,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const lastMsg = {}; for (const x of msgs) if (invIds.has(x.invitation_id) && !lastMsg[x.invitation_id]) lastMsg[x.invitation_id] = x;
     const canDelete = ST.can(ST.current()?.role, 'delete');
     const tabHref = (k) => `/admin/projects/${p.id}?tab=${k}`;
-    const header = html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><b>${p.name}</b></nav>
+    const header = html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
       <div class="head-row"><div><h1>${p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li><span class="pill s-reviewing">${p.status}</span></li><li>Spec v${p.current_version}</li><li>${invs.length} supplier${invs.length === 1 ? '' : 's'} invited</li></ul></div>
       <div class="actions">${canDelete ? html`<form method="post" action="/admin/projects/${p.id}/delete" data-confirm="Delete this project, its files, threads and quotes? This cannot be undone."><button class="btn small ghost danger">Delete project</button></form>` : ''}</div></div>
       <nav class="dp-tabs" aria-label="Project sections">${TABS.map(([k, l]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'cur' : ''}">${l}${k === 'suppliers' && invs.length ? html` <b>${invs.length}</b>` : ''}${k === 'files' && files.length ? html` <b>${files.length}</b>` : ''}</a>`)}</nav>`;
@@ -343,7 +343,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const [s, msgs, quotes] = await Promise.all([db.get('suppliers', inv.supplier_id), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), db.list('dev_quotes', { filters: { invitation_id: inv.id }, order: 'revision.desc' })]);
     res.html(page({
       title: `${s?.name} · ${p.name}`, nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
-      body: html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><a href="/admin/projects/${p.id}?tab=suppliers">${p.name}</a><span>›</span><b>${s?.name}</b></nav>
+      body: html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><a href="/admin/projects/${p.id}?tab=suppliers">${p.name}</a></nav>
       <div class="head-row"><div><h1>${s?.name}</h1><ul class="pp-meta"><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li><li>${p.ref}</li><li>Confirmed spec v${inv.ack_version} of v${p.current_version}</li>${p.nda_required ? html`<li>${inv.nda_accepted_at ? `NDA accepted ${fmt.date(inv.nda_accepted_at)} by ${inv.nda_accepted_by || ''}` : 'NDA not accepted'}</li>` : ''}<li><a href="/admin/suppliers/${s?.id}">Supplier profile</a></li></ul></div>
         <form method="post" action="/admin/projects/${p.id}/suppliers/${inv.id}/status" class="inline-form"><select name="status" aria-label="Status">${P.INV_STATUSES.map((x) => html`<option ${x === inv.status ? raw('selected') : ''}>${x}</option>`)}</select><button class="btn small ghost">Set status</button></form></div>
       <div class="dp-thread"><section class="card"><h2 class="sec">Conversation</h2>
@@ -428,7 +428,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const needAck = inv.ack_version < p.current_version;
     const val = (k) => (q ? q[k] ?? '' : '');
     res.html(page({ title: p.name, nav: nav(), flash: takeFlash(req, res), req, wide: true,
-      body: html`<nav class="crumb"><a href="/portal/projects">${t('Development projects', '开发项目')}</a><span>›</span><b>${p.name}</b></nav>
+      body: html`<nav class="crumb"><a href="/portal/projects">${t('Development projects', '开发项目')}</a></nav>
       <div class="head-row"><div><h1>${p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li>${t('Spec', '规格')} v${p.current_version}</li><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li></ul></div></div>
       ${needAck ? html`<div class="flash warn"><b>${t(`The specification was updated to v${p.current_version}.`, `规格已更新至 v${p.current_version}。`)}</b> ${versions[0]?.change_note || ''}
         <form method="post" action="/portal/projects/${inv.id}/ack" class="inline"><button class="btn small">${t('I have reviewed it', '我已查看')}</button></form></div>` : ''}
