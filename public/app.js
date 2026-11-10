@@ -480,7 +480,7 @@
     var filter = function () { var w = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean), n = 0;
       rows.forEach(function (r) { var ok = w.every(function (x) { return r.getAttribute('data-q').indexOf(x) >= 0; }); r.parentNode.hidden = !ok; if (ok) n++; });
       count.textContent = n + ' supplier' + (n === 1 ? '' : 's'); empty.hidden = n > 0; };
-    var choose = function (r) { var changed = val.value !== r.getAttribute('data-id'); val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close();
+    var choose = function (r) { var changed = val.value !== r.getAttribute('data-id'); val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close(); var nf = box.closest('form') && box.closest('form').querySelector('[name=new_supplier]'); if (nf && nf.type !== 'hidden') nf.value = '';
       // Opened from the pencil next to the supplier name: save straight away.
       if (box.getAttribute('data-autosave') === '1') { box.removeAttribute('data-autosave'); var fm = box.closest('form'); if (changed && fm) { if (fm.requestSubmit) fm.requestSubmit(); else fm.submit(); } } };
     dlg.addEventListener('close', function () { setTimeout(function () { box.removeAttribute('data-autosave'); }, 0); });
@@ -492,7 +492,12 @@
     q.addEventListener('input', filter);
     q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var v = rows.filter(function (r) { return !r.parentNode.hidden; }); if (v.length) choose(v[0]); } });
     var form = box.closest('form');
-    if (form) form.addEventListener('submit', function (e) { if (!val.value) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
+    // A form may offer "or a new supplier" instead of picking one (name=new_supplier): either is enough.
+    var alt = form && form.querySelector('[name=new_supplier]');
+    if (alt && alt.type !== 'hidden') alt.addEventListener('input', function () {
+      if (alt.value.trim()) { val.value = ''; label.textContent = 'Choose a supplier…'; rows.forEach(function (x) { x.classList.remove('on'); }); box.classList.remove('invalid'); }
+    });
+    if (form) form.addEventListener('submit', function (e) { if (!val.value && !(alt && alt.value.trim())) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
   });
 
   // New sample: switch between "Request a sample" and "Already shipped".
