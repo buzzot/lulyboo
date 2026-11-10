@@ -726,3 +726,20 @@ create table if not exists public.plan_orders (
 create index if not exists plan_orders_supplier_idx on public.plan_orders (supplier_id);
 create index if not exists plan_orders_ready_idx on public.plan_orders (ready_date);
 alter table public.plan_orders enable row level security;
+
+-- Container planning documents (run once): POs, order reports, packing lists… linked to PO numbers
+create table if not exists public.plan_files (
+  id            uuid primary key default gen_random_uuid(),
+  supplier_id   uuid not null references public.suppliers(id) on delete cascade,
+  name          text not null,
+  path          text not null,              -- supplier-documents bucket
+  size          bigint,
+  content_type  text,
+  kind          text,                       -- PO · Order report · Production status · Packing list · Invoice · Other
+  pos           text[] default '{}',        -- PO numbers this file covers
+  batch         text,
+  uploaded_by   text,
+  created_at    timestamptz default now()
+);
+create index if not exists plan_files_supplier_idx on public.plan_files (supplier_id);
+alter table public.plan_files enable row level security;

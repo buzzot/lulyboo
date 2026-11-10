@@ -2178,6 +2178,7 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   const fd2 = new FormData(); fd2.append('new_supplier', 'Status Report Co'); fd2.append('text', 'PO | Production Status | Ready Date | Pending from Lulyboo ...');
   const page2 = await (await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd2, headers: { cookie } })).text();
   assert.match(page2, /New supplier: <b>Status Report Co<\/b>/);
+  assert.ok(db.tables.suppliers.find((s) => s.name === 'Status Report Co'), 'new supplier created at import');
   const form2 = new FormData();
   for (const [k, v] of [...page2.matchAll(/name="([^"]+)"(?: [^>]*?)? value="([^"]*)"/g)].map((m) => [m[1], m[2]])) form2.append(k, v.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
   form2.set('r0_on', '1'); form2.set('r1_on', '1');
@@ -2208,6 +2209,22 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   assert.match(tb.text, /will be apply later/);
   const csv = await fetch(`${base}/admin/logistics/planning.csv`, { headers: { cookie } });
   assert.equal(csv.status, 200); assert.match(await csv.text(), /PO200013/);
+  // the imported Benno sheet was stored and linked to its POs
+  const doc = db.tables.plan_files.find((f) => f.name === 'POs-Ningbo_Benno_20261110.xlsx');
+  assert.ok(doc); assert.deepEqual(doc.pos, ['PO200013', 'PO200014', 'PO200016']); assert.ok(db.files.has('docs/' + doc.path));
+  assert.match(byPort.text, /title="Documents for PO200013">📎1/);
+  // upload a PO by hand, linked to a typed PO number
+  const up = new FormData(); up.append('supplier_id', benno.id); up.append('pos', 'PO200016'); up.append('kind', 'PO');
+  up.append('file', new Blob(['%PDF-1.4 PO']), 'PO200016.pdf');
+  assert.equal((await fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: up, headers: { cookie }, redirect: 'manual' })).status, 303);
+  const pdf = db.tables.plan_files.find((f) => f.name === 'PO200016.pdf');
+  assert.equal(pdf.kind, 'PO'); assert.deepEqual(pdf.pos, ['PO200016']);
+  const docsPage = await req(base, 'GET', '/admin/logistics/planning?view=docs&po=PO200016', { cookie });
+  assert.match(docsPage.text, /Documents for PO200016/); assert.match(docsPage.text, /PO200016\.pdf/); assert.match(docsPage.text, /POs-Ningbo_Benno_20261110\.xlsx/);
+  const dl = await fetch(`${base}/admin/logistics/planning/files/${pdf.id}`, { headers: { cookie } });
+  assert.equal(dl.status, 200); assert.equal(await dl.text(), '%PDF-1.4 PO');
+  await fetch(`${base}/admin/logistics/planning/files/${pdf.id}/delete`, { method: 'POST', headers: { cookie }, redirect: 'manual' });
+  assert.ok(!db.tables.plan_files.find((f) => f.id === pdf.id)); assert.ok(!db.files.has('docs/' + pdf.path));
   // suggestion maths
   const PL = require('../src/planning');
   assert.equal(PL.suggest(131).text, '2 × 40HQ + LCL 1 m³'); assert.equal(PL.suggest(48).text, '1 × 40GP'); assert.equal(PL.suggest(8).boxes[0], 'LCL');

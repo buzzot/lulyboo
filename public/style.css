@@ -1484,3 +1484,17 @@ img.ph{object-fit:cover;padding:0}
 .cp-review .w-po{width:110px}.cp-review .w-prod{min-width:220px}.cp-review .w-num{width:80px;text-align:right}.cp-review .w-st{width:150px}
 .cp-review input.est{color:#b06a00;font-weight:600}.cp-review tr.same td{opacity:.75}
 .cp-review td{vertical-align:top!important}
+/* Container planning: documents */
+.cp-docs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:14px;align-items:start}
+@media(max-width:900px){.cp-docs{grid-template-columns:1fr}}
+.cp-up form{display:flex;flex-direction:column;gap:10px;max-width:none}.cp-up label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+.cp-up .cp-chk{flex-direction:row;align-items:center;color:var(--ink)}
+.cp-filelist{list-style:none;margin:0;padding:0}
+.cp-filelist li{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+.cp-ficon{flex:none;display:inline-grid;place-items:center;width:40px;height:40px;border-radius:8px;font-size:11px;font-weight:700;background:#eef1ef;color:#55605a}
+.cp-ficon.pdf{background:#fdeaea;color:#a3312a}.cp-ficon.xls{background:#e7f4ec;color:#1d6b40}.cp-ficon.img{background:#e8eff8;color:#2c568f}.cp-ficon.doc{background:#e8eff8;color:#2c568f}
+.cp-fmain{flex:1;min-width:0}.cp-fmain a b{word-break:break-word}
+.cp-pos{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.cp-pos a{font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;background:#eef1ef;color:#3d4441;text-decoration:none}
+.cp-pos a:hover{background:#e3e7e5}
+.cp-facts{display:flex;gap:4px;align-items:center}
+.cp-clip{text-decoration:none;font-size:12px;margin-left:2px}

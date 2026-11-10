@@ -187,4 +187,26 @@ async function estimateCbm(db, supplierId, lines) {
   return lines;
 }
 
-module.exports = { BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS };
+// ── documents (POs, order reports, packing lists…) ──────────────────────────
+const DOC_KINDS = ['PO', 'Order report', 'Production status', 'Packing list', 'Invoice', 'Other'];
+const FILE_MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xls: 'application/vnd.ms-excel', csv: 'text/csv', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', eml: 'message/rfc822', msg: 'application/vnd.ms-outlook' };
+const guessKind = (name, pos = []) => (/packing/i.test(name) ? 'Packing list' : /invoice|\bci\b|\bpi\b/i.test(name) ? 'Invoice' : /status/i.test(name) ? 'Production status' : pos.length === 1 && /po/i.test(name) ? 'PO' : 'Order report');
+/** Store files in the documents bucket and record them, linked to the POs they cover. */
+async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch = null, by = null } = {}) {
+  const saved = []; const errors = [];
+  for (const f of files) {
+    if (!f.buffer?.length) continue;
+    if (f.buffer.length > 25 * 1024 * 1024) { errors.push(`${f.name}: larger than 25 MB`); continue; }
+    const ext = (String(f.name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '';
+    const safe = String(f.name || 'file').replace(/[^\w.\-()]+/g, '_').slice(-120) || 'file';
+    const path = `planning/${supplierId}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${safe}`;
+    const type = FILE_MIME[ext] || f.type || 'application/octet-stream';
+    try { await db.docs.upload(path, f.buffer, type); }
+    catch (e) { errors.push(`${f.name}: could not be stored`); continue; }
+    const list = [...new Set((f.pos || pos).map((x) => String(x).trim()).filter(Boolean))].slice(0, 200);
+    saved.push(await db.insert('plan_files', { supplier_id: supplierId, name: String(f.name).slice(0, 200), path, size: f.buffer.length, content_type: type, kind: kind || guessKind(f.name, list), pos: list, batch, uploaded_by: by, created_at: new Date().toISOString() }));
+  }
+  return { saved, errors };
+}
+
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS };

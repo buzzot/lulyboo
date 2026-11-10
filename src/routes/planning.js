@@ -28,17 +28,21 @@ module.exports = function planningRoutes(router, { db, config }) {
     catch (e) { if (/plan_orders|PGRST205|relation/i.test(e.message)) missing = true; else throw e; }
     const ids = [...new Set(orders.map((o) => o.supplier_id))];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
-    const color = Object.fromEntries(ids.map((id, i) => [id, PALETTE[i % PALETTE.length]]));
-    return { orders, sups, color, missing };
+    const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
+    for (const f of files) if (!sups[f.supplier_id]) { const x = await db.get('suppliers', f.supplier_id).catch(() => null); if (x) sups[x.id] = x; }
+    const allIds = [...new Set([...ids, ...files.map((f) => f.supplier_id)])];
+    const color = Object.fromEntries(allIds.map((id, i) => [id, PALETTE[i % PALETTE.length]]));
+    const filesFor = (supplierId, po) => files.filter((f) => f.supplier_id === supplierId && (f.pos || []).some((x) => PL.normPo(x) === PL.normPo(po)));
+    return { orders, sups, color, missing, files, filesFor };
   }
 
-  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['timeline', 'Timeline'], ['table', 'Table']].map(([k, l]) => html`<a href="${BASE}?${new URLSearchParams({ ...q, view: k })}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
+  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${BASE}?${new URLSearchParams({ ...q, view: k })}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
   const tag = (st) => html`<span class="cp-tag ${PL.STATE[st].tag}">${PL.STATE[st].label}</span>`;
 
   router.get(BASE, G(async (req, res) => {
-    const { orders, sups, color, missing } = await load();
+    const { orders, sups, color, missing, files, filesFor } = await load();
     const day = PL.today(); const thisWeek = PL.weekStart(day);
-    const view = ['port', 'timeline', 'table'].includes(req.query.view) ? req.query.view : 'port';
+    const view = ['port', 'timeline', 'table', 'docs'].includes(req.query.view) ? req.query.view : 'port';
     const fSup = sups[req.query.supplier] ? req.query.supplier : '';
     const showShipped = req.query.shipped === '1';
     const q = { ...(fSup ? { supplier: fSup } : {}), ...(showShipped ? { shipped: '1' } : {}) };
@@ -69,7 +73,7 @@ module.exports = function planningRoutes(router, { db, config }) {
 
     const card = (o) => html`<div class="cp-card" style="--c:${o.col}">
       <div class="cp-card-top"><b>${o.sup?.name || 'Supplier'}</b><span>${cbmText(o.cbm)}${o.cbm_estimated ? html`<i title="Estimated from carton size"> est.</i>` : ''}</span></div>
-      <div class="sub">${o.po}${o.product ? ` · ${o.product}` : ''}${o.qty ? ` · ${fmt.int ? fmt.int(o.qty) : o.qty} pcs` : ''}</div>
+      <div class="sub">${o.po}${filesFor(o.supplier_id, o.po).length ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}" title="Documents for ${o.po}">📎${filesFor(o.supplier_id, o.po).length}</a>` : ''}${o.product ? ` · ${o.product}` : ''}${o.qty ? ` · ${fmt.int ? fmt.int(o.qty) : o.qty} pcs` : ''}</div>
       <div class="cp-card-foot"><span>${o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No ready date'}</span>${tag(o.st)}</div>
       ${o.st === 'waiting' ? html`<div class="cp-wait">Waiting on us: ${o.pending_from_us}</div>` : ''}</div>`;
 
@@ -104,10 +108,34 @@ module.exports = function planningRoutes(router, { db, config }) {
               ${ls.map((o) => { const c = col(o.ready_date); return html`<div class="cp-tl-row"><div class="cp-tl-l"><b>${o.po}</b><span class="sub">${o.sup?.name || ''}${o.cbm ? ` · ${n1(o.cbm)} m³` : ''}</span></div><div class="cp-tl-bar" style="grid-column:${c + 2} / ${Math.min(c + 3, 12)};background:${PL.STATE[o.st].color}" title="${[o.product, o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No ready date', o.production_status, o.st === 'waiting' ? `Waiting on us: ${o.pending_from_us}` : null].filter(Boolean).join(' · ')}">${o.st === 'overdue' ? `Since ${PL.short(o.ready_date)}` : o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No date'}${o.st === 'waiting' ? ` · ${o.pending_from_us}` : ''}</div></div>`; })}</div>`;
           })}
         </div></div>`;
+    } else if (view === 'docs') {
+      const fPo = String(req.query.po || '').trim();
+      const shown = files.filter((f) => (!fSup || f.supplier_id === fSup) && (!fPo || (f.pos || []).some((x) => PL.normPo(x) === PL.normPo(fPo))));
+      const allSup = await db.list('suppliers', { select: 'id,name,country,contact_name,email,active', order: 'name.asc' });
+      const icon = (f) => (/pdf/.test(f.content_type) ? 'PDF' : /image/.test(f.content_type) ? 'IMG' : /sheet|excel|csv/.test(f.content_type) ? 'XLS' : /word/.test(f.content_type) ? 'DOC' : 'FILE');
+      body = html`<div class="cp-docs">
+        <section class="card cp-up"><h2 class="sec">Upload POs and documents</h2>
+          <form method="post" action="${BASE}/files" enctype="multipart/form-data" data-busy>
+            ${SAM.supplierPicker(SAM.pickableSuppliers(allSup, fSup), fSup)}
+            <label>PO numbers <input name="pos" value="${fPo}" placeholder="e.g. PO200013, PO200014 (optional)"></label>
+            <label>Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option>${k}</option>`)}</select></label>
+            <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Choose files"><span class="dz-main" data-main>Drag &amp; drop or choose files</span><span class="dz-hint">PDF, Excel, Word, images · up to 25 MB each</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+            <label class="cp-chk"><input type="checkbox" name="read" value="1"> Also read the order lines with AI</label>
+            <button class="btn">Upload</button></form></section>
+        <section class="card cp-files"><div class="head-row"><h2 class="sec">${fPo ? `Documents for ${fPo}` : 'All documents'} <span class="sub">${shown.length}</span></h2>${fPo ? html`<a class="link small" href="${BASE}?view=docs${fSup ? `&supplier=${fSup}` : ''}">Show all</a>` : ''}</div>
+          ${shown.length ? html`<ul class="cp-filelist">${shown.map((f) => html`<li>
+            <span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>
+            <div class="cp-fmain"><a href="${BASE}/files/${f.id}?inline=1" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="${BASE}/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="${BASE}/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}><b>${f.name}</b></a>
+              <div class="sub">${f.kind || 'Document'} · ${sups[f.supplier_id]?.name || ''} · ${fmt.date(f.created_at)}${f.size ? ` · ${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</div>
+              ${(f.pos || []).length ? html`<div class="cp-pos">${f.pos.slice(0, 12).map((x) => html`<a href="${BASE}?view=docs&po=${encodeURIComponent(x)}">${x}</a>`)}${f.pos.length > 12 ? html`<span class="sub">+${f.pos.length - 12}</span>` : ''}</div>` : ''}</div>
+            <div class="cp-facts"><a class="icon-btn" href="${BASE}/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a>
+              <form method="post" action="${BASE}/files/${f.id}/delete" class="inline" onsubmit="return confirm('Delete this document?')"><button class="icon-btn" title="Delete" aria-label="Delete ${f.name}">×</button></form></div></li>`)}</ul>`
+          : html`<p class="muted">No documents yet. Upload POs here, or they are kept automatically when you import orders.</p>`}</section></div>`;
     } else {
-      body = html`<div class="card"><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Supplier</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th></th></tr></thead>
+      body = html`<div class="card"><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Supplier</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Docs</th><th></th></tr></thead>
         <tbody>${list.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td><span class="cp-dot" style="background:${o.col}"></span>${o.sup?.name || '—'}</td><td><b>${o.po}</b></td><td>${o.product || '—'}</td><td class="r">${o.qty ?? '—'}</td><td class="r">${o.cbm ? n1(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub"> est.</i>` : ''}</td>
           <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || o.port_text || '—'}</td><td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
+          <td>${filesFor(o.supplier_id, o.po).length ? html`<a href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}">📎 ${filesFor(o.supplier_id, o.po).length}</a>` : '—'}</td>
           <td class="cp-acts"><form method="post" action="${BASE}/${o.id}/shipped" class="inline"><button class="link small">${o.shipped ? 'Undo shipped' : 'Mark shipped'}</button></form>
             <form method="post" action="${BASE}/${o.id}/delete" class="inline" onsubmit="return confirm('Delete this order line?')"><button class="icon-btn" title="Delete" aria-label="Delete">×</button></form></td></tr>`)}</tbody></table></div>
         ${list.length ? '' : html`<p class="muted">Nothing to show.</p>`}</div>`;
@@ -150,38 +178,47 @@ module.exports = function planningRoutes(router, { db, config }) {
     const { fields, files } = await parseForm(req, { limitBytes: 80 * 1024 * 1024 });
     const back = (m) => { flash(res, 'error', m); res.redirect(`${BASE}/import${fields.supplier_id ? `?supplier=${encodeURIComponent(fields.supplier_id)}` : ''}`); };
     const newName = String(fields.new_supplier || '').trim().slice(0, 200);
-    const supplier = fields.supplier_id ? await db.get('suppliers', fields.supplier_id) : null;
+    let supplier = fields.supplier_id ? await db.get('suppliers', fields.supplier_id) : null;
     if (!supplier && !newName) return back('Choose a supplier or type a new one');
+    let created = false;
+    if (!supplier) {   // a new supplier is created now, so its documents can be stored with it
+      supplier = (await db.list('suppliers', { select: 'id,name' })).find((x) => x.name.trim().toLowerCase() === newName.toLowerCase()) || null;
+      if (!supplier) { supplier = await db.insert('suppliers', { name: newName, crm_status: 'Active', created_via: 'planning' }).catch(() => db.insert('suppliers', { name: newName })); created = true; }
+    }
     const docs = (files.file ? [].concat(files.file) : []).filter((f) => f.buffer?.length);
     const text = String(fields.text || '').trim();
     if (!docs.length && text.length < 10) return back('Add a file or paste the update');
     let lines = []; const notes = []; let aiName = null;
     for (const f of docs) {
-      try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer }); lines = lines.concat(r.orders); aiName = aiName || r.supplierName; notes.push(`${f.name}: ${r.orders.length} lines`); }
+      try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer }); f.pos = r.orders.map((o) => o.po); lines = lines.concat(r.orders); aiName = aiName || r.supplierName; notes.push(`${f.name}: ${r.orders.length} lines`); }
       catch (e) { notes.push(`${f.name}: could not be read (${String(e.message).slice(0, 120)})`); }
     }
     if (text.length >= 10) { try { const r = await PL.readOrders({ name: 'Pasted text', text }); lines = lines.concat(r.orders); aiName = aiName || r.supplierName; notes.push(`Pasted text: ${r.orders.length} lines`); } catch (e) { notes.push(`Pasted text: could not be read (${String(e.message).slice(0, 120)})`); } }
-    if (!lines.length) return back(`Nothing found. ${notes.join(' · ')}`);
+    // keep every uploaded document, linked to the POs found in it
+    const stored = await PL.storeFiles(db, supplier.id, docs, { batch: `imp-${Date.now().toString(36)}`, by: req.staff?.name || 'Owner' }).catch((e) => ({ saved: [], errors: [e.message] }));
+    if (stored.saved.length) notes.push(`${stored.saved.length} file${stored.saved.length === 1 ? '' : 's'} stored`);
+    if (stored.errors.length) notes.push(stored.errors.join(' · '));
+    if (!lines.length) { flash(res, stored.saved.length ? 'warn' : 'error', `No order lines found. ${notes.join(' · ')}`); return res.redirect(stored.saved.length ? `${BASE}?view=docs&supplier=${supplier.id}` : `${BASE}/import`); }
     // default port: from the documents, else the supplier's usual FOB port
     let defPort = null;
-    if (supplier) {
+    {
       const prods = await db.list('products', { filters: { supplier_id: supplier.id }, select: 'fob_port' }).catch(() => []);
       const cnt = {}; for (const p of prods) { const c = SC.portCode(p.fob_port); if (c) cnt[c] = (cnt[c] || 0) + 1; }
       defPort = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     }
     for (const o of lines) if (!o.port && defPort) { o.port = defPort; o.port_from_supplier = true; }
-    if (supplier) await PL.estimateCbm(db, supplier.id, lines);
-    const existing = supplier ? await db.list('plan_orders', { filters: { supplier_id: supplier.id } }).catch(() => []) : [];
+    await PL.estimateCbm(db, supplier.id, lines);
+    const existing = await db.list('plan_orders', { filters: { supplier_id: supplier.id } }).catch(() => []);
     const d = PL.diff(lines, existing);
     const count = (c) => d.filter((x) => x.change === c).length;
     const portOpts = (sel) => html`<option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}" ${p.code === sel ? raw('selected') : ''}>${p.name}</option>`)}`;
     res.html(page({
       title: 'Check orders · Container planning', nav: adminNav('logistics'), wide: true, req,
       body: html`<p><a href="${BASE}/import">‹ Back</a></p><h1>Check what AI read</h1>
-        <p class="muted">${supplier ? supplier.name : html`New supplier: <b>${newName}</b>`}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
+        <p class="muted">${created ? html`New supplier: <b>${supplier.name}</b>` : supplier.name}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
         <div class="cp-chips"><span class="cp-tag ok">${count('new')} new</span><span class="cp-tag plan">${count('updated')} updated</span><span class="cp-tag done">${count('same')} unchanged</span>${d.some((x) => !x.cbm) ? html`<span class="cp-tag wait">${d.filter((x) => !x.cbm).length} without CBM</span>` : ''}</div>
         <form method="post" action="${BASE}/save" data-busy class="card">
-          <input type="hidden" name="supplier_id" value="${supplier?.id || ''}"><input type="hidden" name="new_supplier" value="${newName}"><input type="hidden" name="n" value="${d.length}">
+          <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
           <input type="hidden" name="source" value="${docs.map((f) => f.name).join(', ') || 'Pasted text'}">
           <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
           <tbody>${d.map((o, i) => html`<tr class="${o.change}">
@@ -241,6 +278,39 @@ module.exports = function planningRoutes(router, { db, config }) {
     await db.remove('plan_orders', { id: req.params.id });
     flash(res, 'ok', 'Order line deleted');
     res.redirect(`${BASE}?view=table`);
+  }));
+
+  router.post(`${BASE}/files`, G(async (req, res) => {
+    const { fields, files } = await parseForm(req, { limitBytes: 120 * 1024 * 1024 });
+    const supplier = fields.supplier_id ? await db.get('suppliers', fields.supplier_id) : null;
+    const back = (t, m, q = '') => { flash(res, t, m); res.redirect(`${BASE}?view=docs${q}`); };
+    if (!supplier) return back('error', 'Choose a supplier');
+    const docs = (files.file ? [].concat(files.file) : []).filter((f) => f.buffer?.length);
+    if (!docs.length) return back('error', 'Choose at least one file', `&supplier=${supplier.id}`);
+    const typed = String(fields.pos || '').split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+    let read = null;
+    if (fields.read === '1' && AI.enabled()) {
+      const lines = [];
+      for (const f of docs) { try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer }); f.pos = [...typed, ...r.orders.map((o) => o.po)]; lines.push(...r.orders); } catch { /* keep the file anyway */ } }
+      if (lines.length) { for (const o of lines) if (!o.port) o.port = null; await PL.estimateCbm(db, supplier.id, lines); read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
+    }
+    const kind = PL.DOC_KINDS.includes(fields.kind) ? fields.kind : null;
+    const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' });
+    back(r.errors.length ? 'warn' : 'ok', `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}${read ? ` · orders: ${read.added} new, ${read.updated} updated` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
+  }));
+  router.get(`${BASE}/files/:id`, G(async (req, res) => {
+    const f = await db.get('plan_files', req.params.id); if (!f) throw new HttpError(404, 'Document not found');
+    const buf = await db.docs.download(f.path);
+    const inline = req.query.inline === '1' && /^(image\/|application\/pdf)/.test(f.content_type || '');
+    res.writeHead(200, { 'Content-Type': f.content_type || 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+    res.end(buf);
+  }));
+  router.post(`${BASE}/files/:id/delete`, G(async (req, res) => {
+    await parseForm(req).catch(() => null);
+    const f = await db.get('plan_files', req.params.id);
+    if (f) { await db.docs.remove([f.path]).catch(() => null); await db.remove('plan_files', { id: f.id }); }
+    flash(res, 'ok', 'Document deleted');
+    res.redirect(`${BASE}?view=docs${f ? `&supplier=${f.supplier_id}` : ''}`);
   }));
 
   router.get(`${BASE}.csv`, G(async (req, res) => {
