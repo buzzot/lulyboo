@@ -1333,8 +1333,8 @@ test('dashboard: grouped nav, KPIs, attention counts and filters match the data'
   t.after(() => server.close());
   const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
   const d = (await req(base, 'GET', '/admin', { cookie })).text;
-  for (const g of ['Sourcing', 'Catalog', 'Operations', 'AI Tools']) assert.match(d, new RegExp(`class="nav-btn"[^>]*>${g}`));
-  assert.match(d, /href="\/admin\/settings"/); assert.doesNotMatch(d, />Orders<|>Purchasing<|>Automations</);
+  for (const g of ['Sourcing', 'Catalog', 'Orders', 'Operations', 'AI Tools']) assert.match(d, new RegExp(`class="nav-btn"[^>]*>${g}`));
+  assert.match(d, /href="\/admin\/settings"/); assert.doesNotMatch(d, />Purchasing<|>Automations</);
   assert.match(d, /Product development &amp; sourcing overview/);
   assert.match(d, /<span>Awaiting review<\/span><b>2<\/b>/); // a and b are New
   assert.match(d, /<span>Follow-ups due<\/span><b>1<\/b>/); // one overdue, none today
@@ -2238,4 +2238,39 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   // suggestion maths
   const PL = require('../src/planning');
   assert.equal(PL.suggest(131).text, '2 × 40HQ + LCL 1 m³'); assert.equal(PL.suggest(48).text, '1 × 40GP'); assert.equal(PL.suggest(8).boxes[0], 'LCL');
+});
+
+test('orders menu: PO list, PO page with lines and documents, mark shipped', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const b = await db.insert('suppliers', { name: 'Ningbo Benno' });
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean' });
+  await db.insert('plan_orders', { supplier_id: b.id, po: 'PO200014', product: 'Basic Baby Car Mirror', qty: 8808, cbm: 20.47, ready_date: d(20), port: 'CNNGB' });
+  await db.insert('plan_orders', { supplier_id: b.id, po: 'PO200014', product: 'Mirror strap', qty: 1000, cbm: 1.5, ready_date: d(22), port: 'CNNGB' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900021', production_status: 'Under production', ready_date: d(58), pending_from_us: 'Package artwork' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', production_status: 'Ready for shipping', ready_date: d(-11) });
+  await db.insert('plan_files', { supplier_id: b.id, name: 'PO200014.pdf', path: 'p/x.pdf', content_type: 'application/pdf', kind: 'PO', pos: ['PO200014'] });
+  const home = await req(base, 'GET', '/admin', { cookie });
+  assert.match(home.text, /href="\/admin\/orders"[^>]*>Purchase orders</);
+  const list = await req(base, 'GET', '/admin/orders', { cookie });
+  assert.equal(list.status, 200);
+  assert.equal((list.text.match(/<b>PO200014<\/b>/g) || []).length, 1);                // two lines → one PO row
+  assert.match(list.text, /Basic Baby Car Mirror <span class="sub">\+1 more<\/span>/); assert.match(list.text, /📎 1/);
+  assert.match(list.text, /Needs: Package artwork/); assert.match(list.text, /Ready, not shipped/);
+  const late = await req(base, 'GET', '/admin/orders?status=overdue', { cookie });
+  assert.match(late.text, /PO900018/); assert.doesNotMatch(late.text, /<b>PO200014<\/b>/);
+  const found = await req(base, 'GET', '/admin/orders?q=mirror', { cookie });
+  assert.match(found.text, /PO200014/); assert.doesNotMatch(found.text, /<b>PO900021<\/b>/);
+  const po = await req(base, 'GET', `/admin/orders/view?supplier=${b.id}&po=PO200014`, { cookie });
+  assert.equal(po.status, 200);
+  assert.match(po.text, /Mirror strap/); assert.match(po.text, /PO200014\.pdf/); assert.match(po.text, /21\.97 m³/); assert.match(po.text, /data-edit-dlg/);
+  const fd = new FormData(); fd.append('supplier', b.id); fd.append('po', 'PO200014'); fd.append('value', '1');
+  const r = await fetch(`${base}/admin/orders/shipped`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  assert.equal(r.status, 303);
+  assert.ok(db.tables.plan_orders.filter((o) => o.po === 'PO200014').every((o) => o.shipped));
+  const shipped = await req(base, 'GET', '/admin/orders?status=shipped', { cookie });
+  assert.match(shipped.text, /PO200014/);
 });

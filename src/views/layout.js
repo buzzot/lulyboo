@@ -113,6 +113,7 @@ function adminNav(active) {
     { label: 'Dashboard', href: '/admin', active: on('dashboard') },
     group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers'], ['requests', '/admin/requests', 'RFQs & requests'], ['projects', '/admin/projects', 'Development'], ['samples', '/admin/samples', 'Samples']]),
     group('Catalog', [['products', '/admin/products', 'Products'], ['pricing', '/admin/pricing', 'Pricing'], ['categories', '/admin/categories', 'Categories'], ['archive', '/admin/archive', 'Archive']]),
+    group('Orders', [['orders', '/admin/orders', 'Purchase orders'], ['planning', '/admin/logistics/planning', 'Container planning'], ['orders-import', '/admin/logistics/planning/import', 'Import orders']]),
     group('Operations', [['logistics', '/admin/logistics', 'Logistics'], ['crm', '/admin/crm', 'Follow-ups'], ['calendar', '/admin/crm/calendar', 'Calendar']]),
     group('AI Tools', [['ai', '/admin/ai', 'AI Assistant']]),
   ];

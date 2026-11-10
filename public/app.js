@@ -1051,7 +1051,7 @@
   document.addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('[data-edit-order]'); if (!b) return;
     var o; try { o = JSON.parse(b.getAttribute('data-edit-order')); } catch (x) { return; }
-    form.action = location.pathname.replace(/\/$/, '') + '/' + o.id + '/edit';
+    form.action = '/admin/logistics/planning/' + o.id + '/edit';
     dlg.querySelector('[data-f-title]').textContent = o.po;
     dlg.querySelector('[data-f-sub]').textContent = [o.supplier, o.product].filter(Boolean).join(' · ');
     dlg.querySelectorAll('[data-f]').forEach(function (el) {

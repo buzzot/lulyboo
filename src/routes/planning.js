@@ -19,7 +19,30 @@ const n1 = (v) => (v === null || v === undefined || v === '' ? '—' : Math.roun
 const cbmText = (v) => (v ? `${n1(v)} m³` : 'CBM ?');
 const BASE = '/admin/logistics/planning';
 
-module.exports = function planningRoutes(router, { db, config }) {
+const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
+const editBtn = (o, cls = 'cp-edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="Edit ${o.po}" title="Edit">✎</button>`;
+/** The order-line edit popup (posts to /admin/logistics/planning/:id/edit; app.js fills it). */
+const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labelledby="cp-dlg-t"><form method="post" data-edit-form>
+          <div class="cp-dlg-h"><div><h2 id="cp-dlg-t" data-f-title>Edit order</h2><span class="sub" data-f-sub></span></div><button type="button" class="icon-btn" data-edit-close aria-label="Close">×</button></div>
+          <input type="hidden" name="back" value="${back}">
+          <div class="cp-dlg-grid">
+            <label>Loading port<select name="port" data-f="port"><option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}">${p.name}</option>`)}</select></label>
+            <label>Ready date<input type="date" name="ready_date" data-f="ready_date"></label>
+            <label>CBM<input name="cbm" data-f="cbm" inputmode="decimal" placeholder="m³"></label>
+            <label>Quantity<input name="qty" data-f="qty" inputmode="numeric"></label>
+            <label class="wide">Product<input name="product" data-f="product"></label>
+            <label>Production status<input name="production_status" data-f="production_status"></label>
+            <label>Inspection date<input type="date" name="inspection_date" data-f="inspection_date"></label>
+            <label class="wide">Waiting on Lulyboo<input name="pending_from_us" data-f="pending_from_us" placeholder="e.g. Package artwork (leave empty if nothing)"></label>
+            <label class="wide">Notes<textarea name="notes" rows="2" data-f="notes"></textarea></label>
+          </div>
+          <label class="cp-chk"><input type="checkbox" name="all_po" value="1" checked> Apply port, date and status to every line of this PO</label>
+          <label class="cp-chk"><input type="checkbox" name="all_port" value="1"> Use this port for all open orders of this supplier that have none</label>
+          <label class="cp-chk"><input type="checkbox" name="shipped" value="1" data-f="shipped"> Shipped</label>
+          <div class="cp-dlg-a"><button class="btn">Save</button><button type="button" class="btn ghost" data-edit-close>Cancel</button></div>
+        </form></dialog>`;
+
+function planningRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
 
   async function load() {
@@ -71,8 +94,6 @@ module.exports = function planningRoutes(router, { db, config }) {
       <div class="cp-kpi ${attention.length ? 'warn' : ''}"><span>Needs attention</span><b>${attention.length}</b><small>${[['overdue', 'late'], ['waiting', 'waiting on us']].map(([s, l]) => { const c = open.filter((o) => o.st === s).length; return c ? `${c} ${l}` : null; }).filter(Boolean).concat(open.filter((o) => !o.cbm).length ? [`${open.filter((o) => !o.cbm).length} no CBM`] : []).concat(open.filter((o) => !o.port).length ? [`${open.filter((o) => !o.port).length} no port`] : []).join(' · ') || 'All good'}</small></div>
     </div>`;
 
-    const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
-    const editBtn = (o, cls = 'cp-edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="Edit ${o.po}" title="Edit">✎</button>`;
     const card = (o) => html`<div class="cp-card" style="--c:${o.col}">${editBtn(o)}
       <div class="cp-card-top"><b>${o.sup?.name || 'Supplier'}</b><span>${cbmText(o.cbm)}${o.cbm_estimated ? html`<i title="Estimated from carton size"> est.</i>` : ''}</span></div>
       <div class="sub">${o.po}${filesFor(o.supplier_id, o.po).length ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}" title="Documents for ${o.po}">📎${filesFor(o.supplier_id, o.po).length}</a>` : ''}${o.product ? ` · ${o.product}` : ''}${o.qty ? ` · ${fmt.int ? fmt.int(o.qty) : o.qty} pcs` : ''}</div>
@@ -154,25 +175,7 @@ module.exports = function planningRoutes(router, { db, config }) {
           <label class="cp-chk"><input type="checkbox" name="shipped" value="1" ${showShipped ? raw('checked') : ''} onchange="this.form.submit()"> Show shipped</label>
           <a class="link small" href="${BASE}.csv">Download CSV</a></form>
         ${kpis}${body}
-        <dialog class="cp-dlg" data-edit-dlg aria-labelledby="cp-dlg-t"><form method="post" data-edit-form>
-          <div class="cp-dlg-h"><div><h2 id="cp-dlg-t" data-f-title>Edit order</h2><span class="sub" data-f-sub></span></div><button type="button" class="icon-btn" data-edit-close aria-label="Close">×</button></div>
-          <input type="hidden" name="back" value="${req.url}">
-          <div class="cp-dlg-grid">
-            <label>Loading port<select name="port" data-f="port"><option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}">${p.name}</option>`)}</select></label>
-            <label>Ready date<input type="date" name="ready_date" data-f="ready_date"></label>
-            <label>CBM<input name="cbm" data-f="cbm" inputmode="decimal" placeholder="m³"></label>
-            <label>Quantity<input name="qty" data-f="qty" inputmode="numeric"></label>
-            <label class="wide">Product<input name="product" data-f="product"></label>
-            <label>Production status<input name="production_status" data-f="production_status"></label>
-            <label>Inspection date<input type="date" name="inspection_date" data-f="inspection_date"></label>
-            <label class="wide">Waiting on Lulyboo<input name="pending_from_us" data-f="pending_from_us" placeholder="e.g. Package artwork (leave empty if nothing)"></label>
-            <label class="wide">Notes<textarea name="notes" rows="2" data-f="notes"></textarea></label>
-          </div>
-          <label class="cp-chk"><input type="checkbox" name="all_po" value="1" checked> Apply port, date and status to every line of this PO</label>
-          <label class="cp-chk"><input type="checkbox" name="all_port" value="1"> Use this port for all open orders of this supplier that have none</label>
-          <label class="cp-chk"><input type="checkbox" name="shipped" value="1" data-f="shipped"> Shipped</label>
-          <div class="cp-dlg-a"><button class="btn">Save</button><button type="button" class="btn ghost" data-edit-close>Cancel</button></div>
-        </form></dialog>`,
+        ${editDialog(req.url)}`,
     }));
   }));
 
@@ -313,7 +316,7 @@ module.exports = function planningRoutes(router, { db, config }) {
     }
     flash(res, 'ok', `${o.po} saved${extra ? ` (+${extra} other line${extra === 1 ? '' : 's'})` : ''}`);
     const back = String(f.back || '');
-    res.redirect(back.startsWith(BASE) ? back : BASE);
+    res.redirect(back.startsWith(BASE) || back.startsWith('/admin/orders') ? back : BASE);
   }));
 
   router.post(`${BASE}/:id/shipped`, G(async (req, res) => {
@@ -333,7 +336,7 @@ module.exports = function planningRoutes(router, { db, config }) {
   router.post(`${BASE}/files`, G(async (req, res) => {
     const { fields, files } = await parseForm(req, { limitBytes: 120 * 1024 * 1024 });
     const supplier = fields.supplier_id ? await db.get('suppliers', fields.supplier_id) : null;
-    const back = (t, m, q = '') => { flash(res, t, m); res.redirect(`${BASE}?view=docs${q}`); };
+    const back = (t, m, q = '') => { flash(res, t, m); const b = String(fields.back || ''); res.redirect(b.startsWith('/admin/orders') ? `${b.split('#')[0]}#docs` : `${BASE}?view=docs${q}`); };
     if (!supplier) return back('error', 'Choose a supplier');
     const docs = (files.file ? [].concat(files.file) : []).filter((f) => f.buffer?.length);
     if (!docs.length) return back('error', 'Choose at least one file', `&supplier=${supplier.id}`);
@@ -372,4 +375,8 @@ module.exports = function planningRoutes(router, { db, config }) {
     res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="container-planning-${PL.today()}.csv"` });
     res.end(body);
   }));
-};
+}
+
+module.exports = planningRoutes;
+module.exports.editDialog = editDialog;
+module.exports.editBtn = editBtn;
