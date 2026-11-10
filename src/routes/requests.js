@@ -353,6 +353,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     const toList = String(f.recipient || f.To || '').split(/[,;]\s*/).filter(Boolean);
     const subject = String(f.subject || '');
     const text = String(f['stripped-text'] || f['body-plain'] || '');
+    // Forwarder sailing schedules sent to schedules@… are read by AI into Sailing schedules.
+    if (toList.some((x) => /^schedules@/i.test(x.trim()))) {
+      const out = await require('../schedules').handleScheduleEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
+      return res.json({ ok: true, schedules: true, added: out.added, updated: out.updated });
+    }
     // Carrier alerts sent to samples@… belong to Samples, not to RFQ threads.
     if (toList.some((x) => /^samples@/i.test(x.trim()))) {
       const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });

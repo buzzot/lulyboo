@@ -17,6 +17,7 @@ const csvCell = (v) => { if (v === null || v === undefined) return ''; const s =
 
 module.exports = function toolRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
+  const SCR = require('./schedules');
 
   // AI failures should say why (bad key, wrong model, no credit, busy) instead of a generic 500.
   function friendlyAi(msg) {
@@ -97,9 +98,10 @@ module.exports = function toolRoutes(router, { db, config }) {
       calc = analyzeProduct(p, ctx);
     }
     const modeOpts = Object.entries(MODES);
+    const next = await SCR.nextSailings(db);
     res.html(page({
       title: 'Logistics', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true,
-      body: html`<h1>Logistics</h1>
+      body: html`${SCR.logisticsTabs('costs')}${next}
       <section class="card lg-calc"><div class="lg-h"><h2>Quick calculator</h2><span class="muted small">Estimate container fit and landed cost for any carton, without saving a product.</span></div>
         <form method="get" class="lc-form">
           <fieldset><legend>Carton</legend>

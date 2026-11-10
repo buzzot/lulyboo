@@ -54,6 +54,7 @@ function createApp({ db, config }) {
   require('./routes/requests')(router, { db, config });
   require('./routes/projects')(router, { db, config });
   require('./routes/samples')(router, { db, config });
+  require('./routes/schedules')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/api')(router, { db, config });
   require('./routes/staff')(router, { db, config });
@@ -120,6 +121,12 @@ if (require.main === module) {
     const track = () => SM.runTracking({ db, config }).catch((e) => { if (!/samples|PGRST205/.test(e.message)) console.error('Sample tracking failed:', e.message); });
     const remind = () => SM.runReminders({ db, config }).catch((e) => { if (!/samples|PGRST205/.test(e.message)) console.error('Sample reminders failed:', e.message); });
     setTimeout(track, 45_000); setInterval(track, 10 * 60_000); setTimeout(remind, 90_000); setInterval(remind, 60 * 60_000); }
+  // Sailing schedules: carrier APIs checked daily; each lane is refetched at most once a week.
+  { const SC = require('./schedules');
+    const on = SC.apiSources().filter((x) => x.configured).map((x) => x.name);
+    console.log(on.length ? `Sailing schedule APIs on for: ${on.join(', ')}` : 'Sailing schedules: no carrier API set (DCSA_<SCAC>_URL + _KEY); forwarder schedules only.');
+    const run = () => SC.runRefresh({ db }).catch((e) => { if (!/sailings|PGRST205/.test(e.message)) console.error('Schedule refresh failed:', e.message); });
+    if (on.length) { setTimeout(run, 120_000); setInterval(run, 24 * 60 * 60_000); } }
   server.listen(config.port, () => console.log(`Lulyboo portal on :${config.port} (${config.publicUrl})`));
 }
 

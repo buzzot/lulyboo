@@ -29,7 +29,7 @@ function deny(role, method, path) {
   if (/^\/admin\/(users|settings|api-log)(\/|$)/.test(path) || /^\/admin\/crm\/telegram\//.test(path)) return 'Only an Admin can open this page.';
   if (/^\/admin\/audit(\/|$)/.test(path)) return can(role, 'audit') ? null : 'Only an Admin or Director can view the audit log.';
   if (/^\/admin\/(suppliers|products|requests|documents|projects|samples)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
-  if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
+  if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) && !/^\/admin\/logistics\/schedules(\/|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
   return null;
 }
 

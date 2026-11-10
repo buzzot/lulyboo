@@ -662,3 +662,31 @@ alter table public.dev_messages add column if not exists email jsonb;   -- {from
 
 -- Request log AI summaries (run once)
 alter table public.info_request_messages add column if not exists ai jsonb;
+
+-- Sailing schedules (run once): departures China → Los Angeles / Long Beach, from carrier APIs and forwarder schedules
+create table if not exists public.sailings (
+  id            uuid primary key default gen_random_uuid(),
+  origin        text not null,                 -- UN/LOCODE: CNNGB, CNSHA, CNYTN, CNCAN
+  destination   text not null,                 -- USLGB, USLAX
+  carrier       text not null,                 -- COSCO, OOCL, CMA CGM, Matson …
+  service       text,
+  vessel        text,
+  voyage        text,
+  imo           text,
+  etd           date not null,
+  eta           date,
+  transit_days  int,
+  direct        boolean default true,
+  via           text,                          -- transshipment port(s)
+  cy_cutoff     date,
+  doc_cutoff    date,
+  source        text not null,                 -- api | file | email
+  source_name   text,                          -- "CMA CGM API", forwarder name or file name
+  batch         text,                          -- one upload / email, so it can be undone
+  fetched_at    timestamptz default now(),
+  created_at    timestamptz default now(),
+  updated_at    timestamptz default now()
+);
+create index if not exists sailings_etd_idx on public.sailings (etd);
+create index if not exists sailings_batch_idx on public.sailings (batch);
+alter table public.sailings enable row level security;

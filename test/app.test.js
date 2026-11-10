@@ -1899,3 +1899,84 @@ test('request log: AI summary is made in the background and shown first; origina
   assert.match(pg.text, /Show original email/); assert.match(pg.text, /<dt>To<\/dt><dd>sales@gica\.example<\/dd>/);
   assert.equal(calls, 1);
 });
+
+test('sailing schedules: DCSA carrier API, forwarder file read by AI, email, month page', async (t) => {
+  const SC = require('../src/schedules');
+  const ENV = { DCSA_CMDU_URL: 'https://api.cma.example/v1/point-to-point-routes', DCSA_CMDU_KEY: 'k1', ANTHROPIC_API_KEY: 'sk-test', MAILGUN_SIGNING_KEY: 'mg-key', RESEND_API_KEY: 're_test', REQUEST_CC: 'marsel@lulyboo.com' };
+  Object.assign(process.env, ENV);
+  const realFetch = global.fetch; const calls = [];
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  global.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.startsWith('https://api.cma.example/')) {
+      calls.push({ u, key: opts.headers?.['API-Key'] });
+      const q = new URL(u).searchParams;
+      if (q.get('placeOfReceipt') !== 'CNNGB' || q.get('placeOfDelivery') !== 'USLGB') return new Response('[]', { status: 200 });
+      return new Response(JSON.stringify([{ placeOfReceipt: { facility: { UNLocationCode: 'CNNGB' }, dateTime: `${d(5)}T10:00:00Z` }, placeOfDelivery: { facility: { UNLocationCode: 'USLGB' }, dateTime: `${d(25)}T08:00:00Z` }, transitTime: 20,
+        cutOffTimes: [{ cutOffDateTimeCode: 'FCO', cutOffDateTime: `${d(3)}T12:00:00Z` }, { cutOffDateTimeCode: 'DCO', cutOffDateTime: `${d(2)}T12:00:00Z` }],
+        legs: [{ sequenceNumber: 1, transport: { modeOfTransport: 'VESSEL', vessel: { name: 'CMA CGM T. ROOSEVELT', vesselIMONumber: '9780859' }, servicePartners: [{ carrierCode: 'CMDU', carrierServiceName: 'PRX', carrierExportVoyageNumber: '0PE7XE1MA' }] },
+          departure: { location: { UNLocationCode: 'CNNGB' }, dateTime: `${d(5)}T10:00:00Z` }, arrival: { location: { UNLocationCode: 'USLGB' }, dateTime: `${d(25)}T08:00:00Z` } }] }]), { status: 200 });
+    }
+    if (u.includes('api.anthropic.com')) {
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_sailings', input: { forwarder: 'Sunrise Logistics', sailings: [
+        { carrier: 'COSCO SHIPPING', service: 'AAC', vessel: 'COSCO ITALY', voyage: '123E', origin_port: 'Ningbo', destination_port: 'Los Angeles', etd: d(4), eta: d(20), cy_cutoff: d(2) },
+        { carrier: 'OOCL', vessel: 'OOCL TOKYO', voyage: '045E', origin_port: 'Nansha', destination_port: 'Long Beach', etd: d(6), eta: d(24), via: 'Busan' },
+        { carrier: 'Matson', vessel: 'MANUKAI', voyage: '301', origin_port: 'Shanghai', destination_port: 'Long Beach', etd: d(7), transit_days: 11 },
+        { carrier: 'HMM', origin_port: 'Busan', destination_port: 'Seattle', etd: d(8) },
+      ] } }] }), { status: 200 });
+    }
+    if (u.includes('api.resend.com')) return new Response('{"id":"x"}', { status: 200 });
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; for (const k of Object.keys(ENV)) delete process.env[k]; server.close(); });
+
+  assert.equal(SC.portCode('Nansha'), 'CNCAN'); assert.equal(SC.portCode('CNNBG'), 'CNNGB'); assert.equal(SC.carrierName('COSCO SHIPPING LINES'), 'COSCO');
+  // Carrier API: 4 origins × 2 destinations = 8 requests, one sailing found
+  const r = await SC.runRefresh({ db });
+  assert.equal(calls.length, 8); assert.equal(calls[0].key, 'k1'); assert.equal(r.added, 1);
+  const api = db.tables.sailings[0];
+  assert.equal(api.carrier, 'CMA CGM'); assert.equal(api.vessel, 'CMA CGM T. ROOSEVELT'); assert.equal(api.voyage, '0PE7XE1MA'); assert.equal(api.transit_days, 20);
+  assert.equal(api.cy_cutoff, d(3)); assert.equal(api.direct, true); assert.equal(api.source, 'api');
+  // Weekly: a second run within the week makes no requests for lanes that have fresh data
+  await SC.runRefresh({ db }); assert.equal(calls.length, 8 + 7);
+
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  // Forwarder file uploaded on the page
+  const fd = new FormData();
+  fd.append('file', new Blob(['Carrier,Vessel,Voyage,POL,POD,ETD,ETA\nCOSCO,COSCO ITALY,123E,Ningbo,LA,x,y\n'], { type: 'text/csv' }), 'sunrise-nov.csv');
+  const up = await fetch(`${base}/admin/logistics/schedules/import`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  assert.equal(up.status, 303);
+  assert.equal(db.tables.sailings.length, 4);                           // HMM Busan→Seattle skipped
+  const oocl = db.tables.sailings.find((s) => s.carrier === 'OOCL');
+  assert.equal(oocl.origin, 'CNCAN'); assert.equal(oocl.direct, false); assert.equal(oocl.via, 'Busan'); assert.equal(oocl.source_name, 'Sunrise Logistics');
+  assert.equal(db.tables.sailings.find((s) => s.carrier === 'Matson').eta, null);
+  // Same schedule again: updated, not duplicated
+  const fd2 = new FormData(); fd2.append('text', 'COSCO COSCO ITALY 123E Ningbo → LA ... (same schedule pasted)');
+  await fetch(`${base}/admin/logistics/schedules/import`, { method: 'POST', body: fd2, headers: { cookie }, redirect: 'manual' });
+  assert.equal(db.tables.sailings.length, 4);
+
+  // Month page
+  const month = d(5).slice(0, 7);
+  const pg = await req(base, 'GET', `/admin/logistics/schedules?month=${month}`, { cookie });
+  assert.equal(pg.status, 200);
+  assert.match(pg.text, /CMA CGM T\. ROOSEVELT/); assert.match(pg.text, /Connected/); assert.match(pg.text, /schedules@in\.lulyboo\.space/);
+  const only = await req(base, 'GET', `/admin/logistics/schedules?month=${month}&from=CNCAN&direct=1`, { cookie });
+  assert.doesNotMatch(only.text, /OOCL TOKYO/);
+
+  // Undo the upload batch
+  const b = db.tables.sailings.find((s) => s.carrier === 'Matson').batch;
+  await fetch(`${base}/admin/logistics/schedules/batch/${b}/delete`, { method: 'POST', headers: { cookie }, redirect: 'manual' });
+  assert.equal(db.tables.sailings.length, 1); assert.equal(db.tables.sailings[0].source, 'api');
+
+  // Forwarded email to schedules@
+  const crypto = require('node:crypto');
+  const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok-sch';
+  const ef = new FormData();
+  for (const [k, v] of Object.entries({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), from: 'ops@sunrise.example', recipient: 'schedules@in.lulyboo.space', subject: 'Dec schedule', 'body-plain': 'see attached' })) ef.append(k, v);
+  ef.append('attachment-1', new Blob([Buffer.alloc(5000, 65)], { type: 'application/pdf' }), 'Sunrise-Dec.pdf');
+  const ej = await (await fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: ef })).json();
+  assert.equal(ej.schedules, true); assert.equal(ej.added, 3);
+  assert.equal(db.tables.sailings.filter((s) => s.source === 'email').length, 3);
+});
