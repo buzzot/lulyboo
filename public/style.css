@@ -1646,3 +1646,21 @@ img.ph{object-fit:cover;padding:0}
 .or-up-note{margin:8px 0 0;font-size:12.5px}
 .or-cat{display:inline-block;font-size:12px;margin-top:2px;text-decoration:none}
 .or-cat.no{color:#b7791f}
+/* PO hover card */
+.cp-po-link{color:inherit;text-decoration:none}
+.cp-po-link:hover,.cp-po-link:focus-visible{color:var(--brand-text);text-decoration:underline;text-underline-offset:2px}
+.po-tip{position:fixed;z-index:200;width:300px;background:#fff;border:1px solid var(--line,#e6e4e1);border-radius:12px;box-shadow:0 12px 32px rgba(20,30,25,.18);padding:12px 14px;font-size:13px;pointer-events:none;opacity:0;transform:translateY(3px);transition:opacity .12s,transform .12s}
+.po-tip.on{opacity:1;transform:none}
+.po-tip-h{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.po-tip-h b{font-size:15px}
+.po-tip-s{color:#6b6b6b;font-size:12.5px;margin-top:1px}
+.po-tip-p{font-weight:600;margin-top:8px;line-height:1.35}
+.po-tip-p span{font-weight:400;color:#888;font-size:12px;margin-left:4px}
+.po-tip dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:8px 0 0}
+.po-tip dt{color:#888;font-size:12px}
+.po-tip dd{margin:0;text-align:right;font-weight:500}
+.po-tip dd i{color:#888;font-weight:400}
+.po-tip-miss{color:#b7791f}
+.po-tip-wait{color:#b7791f}
+.po-tip-f{margin-top:8px;padding-top:8px;border-top:1px solid #f0eeeb;font-size:12px}
+.po-tip-f.muted{color:#999;border-top:0;padding-top:0;margin-top:4px}

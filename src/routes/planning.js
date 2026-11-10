@@ -12,6 +12,7 @@ const SC = require('../schedules');
 const AI = require('../ai');
 const SCR = require('./schedules');
 const SAM = require('./samples');
+const LP = require('./loadplan');
 
 const PALETTE = ['#3b6fb6', '#d07a1e', '#2f8a63', '#7a5bb0', '#b4473b', '#1f8a9a', '#a5682a', '#5b6c8f', '#c0507e', '#4e7d2f'];
 const portName = (code) => SC.PORT[code]?.name || null;
@@ -68,6 +69,23 @@ function planningRoutes(router, { db, config }) {
 
   router.get(BASE, G(async (req, res) => {
     const { orders, sups, color, missing, files, filesFor } = await load();
+    const ci = await LP.containerIndex(db).catch(() => ({ labelFor: () => null }));
+    const poUrl = (o) => `/admin/orders/view?supplier=${encodeURIComponent(o.supplier_id)}&po=${encodeURIComponent(o.po)}`;
+    /** Details for the hover card on a PO number. */
+    const tip = (o) => {
+      const same = orders.filter((x) => x.supplier_id === o.supplier_id && PL.normPo(x.po) === PL.normPo(o.po) && !x.shipped);
+      const st = PL.STATE[PL.state(o)] || {};
+      const pack = [o.units_per_carton ? `${Number(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg` : null].filter(Boolean).join(' · ');
+      return JSON.stringify({
+        po: o.po, supplier: sups[o.supplier_id]?.name || '', product: o.product || '', sku: o.sku || '',
+        qty: o.qty != null && o.qty !== '' ? Number(o.qty) : null, cbm: o.cbm ? Number(o.cbm) : null, calc: !!o.cbm_estimated, cartons: o.cartons ? Number(o.cartons) : null, kg: o.gross_kg ? Number(o.gross_kg) : null, pack,
+        ready: o.ready_date ? PL.short(o.ready_date) : '', inspection: o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '', port: portName(o.port) || o.port_text || '',
+        status: st.label || '', tag: st.tag || '', production: o.production_status || '', waiting: PL.state(o) === 'waiting' ? o.pending_from_us : '', container: ci.labelFor(o)?.text || '',
+        docs: filesFor(o.supplier_id, o.po).length,
+        poLines: same.length, poQty: same.reduce((a, x) => a + (Number(x.qty) || 0), 0), poCbm: Math.round(same.reduce((a, x) => a + (Number(x.cbm) || 0), 0) * 100) / 100,
+      });
+    };
+    const poLink = (o, inner) => html`<a class="cp-po-link" href="${poUrl(o)}" data-po-tip="${tip(o)}">${inner}</a>`;
     const day = PL.today(); const thisWeek = PL.weekStart(day);
     const view = ['port', 'timeline', 'table', 'docs'].includes(req.query.view) ? req.query.view : 'port';
     const fSup = sups[req.query.supplier] ? req.query.supplier : '';
@@ -100,7 +118,7 @@ function planningRoutes(router, { db, config }) {
 
     const card = (o) => html`<div class="cp-card" style="--c:${o.col}">${editBtn(o)}
       <div class="cp-card-top"><b>${o.sup?.name || 'Supplier'}</b><span>${cbmText(o.cbm)}${o.cbm_estimated ? html`<i title="Estimated from carton size"> est.</i>` : ''}</span></div>
-      <div class="sub">${o.po}${filesFor(o.supplier_id, o.po).length ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}" title="Documents for ${o.po}">📎${filesFor(o.supplier_id, o.po).length}</a>` : ''}${o.product ? ` · ${o.product}` : ''}${o.qty ? ` · ${fmt.int ? fmt.int(o.qty) : o.qty} pcs` : ''}</div>
+      <div class="sub">${poLink(o, o.po)}${filesFor(o.supplier_id, o.po).length ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}" title="Documents for ${o.po}">📎${filesFor(o.supplier_id, o.po).length}</a>` : ''}${o.product ? ` · ${o.product}` : ''}${o.qty ? ` · ${fmt.int ? fmt.int(o.qty) : o.qty} pcs` : ''}</div>
       <div class="cp-card-foot"><span>${o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No ready date'}</span>${tag(o.st)}</div>
       ${o.st === 'waiting' ? html`<div class="cp-wait">Waiting on us: ${o.pending_from_us}</div>` : ''}</div>`;
 
@@ -132,7 +150,7 @@ function planningRoutes(router, { db, config }) {
             const sp = sail.filter((s) => s.origin === k && s.etd < end);
             return html`<div class="cp-tl-port"><div class="cp-tl-row ph"><div class="cp-tl-l"><b>${k === '?' ? 'Port to confirm' : portName(k) || k}</b><span class="sub">${n1(ls.reduce((a, o) => a + (Number(o.cbm) || 0), 0))} m³</span></div>
               ${weeks.map((w, i) => html`<div class="cp-tl-s">${sp.filter((s) => col(s.etd) === i && s.etd >= w).slice(0, 4).map((s) => html`<span title="${s.carrier}${s.vessel ? ` · ${s.vessel}` : ''} · ${SC.PORT[s.destination]?.name || ''} · ${s.transit_days || '?'} d"><svg width="8" height="8" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1l5 5-5 5-5-5z" fill="#2c568f"></path></svg>${s.carrier} ${Number(s.etd.slice(8))}</span>`)}</div>`)}</div>
-              ${ls.map((o) => { const c = col(o.ready_date); return html`<div class="cp-tl-row"><div class="cp-tl-l"><b>${o.po}</b><span class="sub">${o.sup?.name || ''}${o.cbm ? ` · ${n1(o.cbm)} m³` : ''}</span></div><div class="cp-tl-bar" style="grid-column:${c + 2} / ${Math.min(c + 3, 12)};background:${PL.STATE[o.st].color}" title="${[o.product, o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No ready date', o.production_status, o.st === 'waiting' ? `Waiting on us: ${o.pending_from_us}` : null].filter(Boolean).join(' · ')}">${o.st === 'overdue' ? `Since ${PL.short(o.ready_date)}` : o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No date'}${o.st === 'waiting' ? ` · ${o.pending_from_us}` : ''}</div></div>`; })}</div>`;
+              ${ls.map((o) => { const c = col(o.ready_date); return html`<div class="cp-tl-row"><div class="cp-tl-l">${poLink(o, html`<b>${o.po}</b>`)}<span class="sub" title="${[o.product, o.sup?.name].filter(Boolean).join(' · ')}">${[o.product, o.sup?.name].filter(Boolean).join(' · ')}${o.cbm ? ` · ${n1(o.cbm)} m³` : ''}</span></div><div class="cp-tl-bar" style="grid-column:${c + 2} / ${Math.min(c + 3, 12)};background:${PL.STATE[o.st].color}" title="${[o.product, o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No ready date', o.production_status, o.st === 'waiting' ? `Waiting on us: ${o.pending_from_us}` : null].filter(Boolean).join(' · ')}">${o.st === 'overdue' ? `Since ${PL.short(o.ready_date)}` : o.ready_date ? `Ready ${PL.short(o.ready_date)}` : 'No date'}${o.st === 'waiting' ? ` · ${o.pending_from_us}` : ''}</div></div>`; })}</div>`;
           })}
         </div></div>`;
     } else if (view === 'docs') {
@@ -160,7 +178,7 @@ function planningRoutes(router, { db, config }) {
           : html`<p class="muted">No documents yet. Upload POs here, or they are kept automatically when you import orders.</p>`}</section></div>`;
     } else {
       body = html`<div class="card"><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Supplier</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Docs</th><th></th></tr></thead>
-        <tbody>${list.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td><span class="cp-dot" style="background:${o.col}"></span>${o.sup?.name || '—'}</td><td><b>${o.po}</b></td><td>${o.product || '—'}</td><td class="r">${o.qty ?? '—'}</td><td class="r">${o.cbm ? n1(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub"> est.</i>` : ''}</td>
+        <tbody>${list.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td><span class="cp-dot" style="background:${o.col}"></span>${o.sup?.name || '—'}</td><td>${poLink(o, html`<b>${o.po}</b>`)}</td><td>${o.product || '—'}</td><td class="r">${o.qty ?? '—'}</td><td class="r">${o.cbm ? n1(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub"> est.</i>` : ''}</td>
           <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || o.port_text || '—'}</td><td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
           <td>${filesFor(o.supplier_id, o.po).length ? html`<a href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}">📎 ${filesFor(o.supplier_id, o.po).length}</a>` : '—'}</td>
           <td class="cp-acts">${editBtn(o, 'link small')} <form method="post" action="${BASE}/${o.id}/shipped" class="inline"><button class="link small">${o.shipped ? 'Undo shipped' : 'Mark shipped'}</button></form>

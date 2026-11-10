@@ -1328,3 +1328,44 @@
   var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(render, 150); });
   render();
 })();
+
+// PO hover card: details of a PO line on [data-po-tip] (Container planning views). Fixed-position so scrolling tables don't clip it.
+(function () {
+  var tip = null, cur = null, hideT;
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var int = function (v) { return Number(v).toLocaleString('en-US'); };
+  var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+  function row(k, v) { return v || v === 0 ? '<dt>' + esc(k) + '</dt><dd>' + v + '</dd>' : ''; }
+  function show(el) {
+    var d; try { d = JSON.parse(el.getAttribute('data-po-tip')); } catch (x) { return; }
+    clearTimeout(hideT); cur = el;
+    if (!tip) { tip = document.createElement('div'); tip.className = 'po-tip'; tip.id = 'po-tip'; tip.setAttribute('role', 'tooltip'); document.body.appendChild(tip); }
+    tip.innerHTML = '<div class="po-tip-h"><b>' + esc(d.po) + '</b>' + (d.status ? '<span class="cp-tag ' + esc(d.tag) + '">' + esc(d.status) + '</span>' : '') + '</div>' +
+      '<div class="po-tip-s">' + esc(d.supplier) + '</div>' +
+      (d.product ? '<div class="po-tip-p">' + esc(d.product) + (d.sku ? ' <span>' + esc(d.sku) + '</span>' : '') + '</div>' : '') +
+      '<dl>' +
+        row('Quantity', d.qty != null ? int(d.qty) + ' pcs' : '') +
+        row('Volume', d.cbm != null ? n2(d.cbm) + ' m³' + (d.calc ? ' <i>calc.</i>' : '') : '<span class="po-tip-miss">not known</span>') +
+        row('Cartons', d.cartons != null ? int(d.cartons) + (d.kg ? ' · ' + int(d.kg) + ' kg' : '') : '') +
+        row('Packing', esc(d.pack)) +
+        row('Ready', esc(d.ready)) + row('Inspection', esc(d.inspection)) + row('Port', esc(d.port)) +
+        row('Production', esc(d.production)) + row('Waiting on us', d.waiting ? '<b class="po-tip-wait">' + esc(d.waiting) + '</b>' : '') +
+        row('Container', esc(d.container)) + row('Documents', d.docs ? d.docs + ' file' + (d.docs > 1 ? 's' : '') : '') +
+      '</dl>' +
+      (d.poLines > 1 ? '<div class="po-tip-f">Whole PO: ' + d.poLines + ' lines · ' + int(d.poQty) + ' pcs' + (d.poCbm ? ' · ' + n2(d.poCbm) + ' m³' : '') + '</div>' : '') +
+      '<div class="po-tip-f muted">Click to open the PO</div>';
+    tip.hidden = false; tip.classList.add('on');
+    el.setAttribute('aria-describedby', 'po-tip');
+    var r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    var left = r.right + 10; if (left + w > vw - 8) left = Math.max(8, r.left - w - 10); if (left < 8) left = 8;
+    var top = r.top - 6; if (top + h > vh - 8) top = Math.max(8, vh - h - 8);
+    tip.style.left = left + 'px'; tip.style.top = top + 'px';
+  }
+  function hide() { if (tip) { tip.classList.remove('on'); tip.hidden = true; } if (cur) cur.removeAttribute('aria-describedby'); cur = null; }
+  document.addEventListener('mouseover', function (e) { var el = e.target.closest && e.target.closest('[data-po-tip]'); if (el && el !== cur) show(el); });
+  document.addEventListener('mouseout', function (e) { var el = e.target.closest && e.target.closest('[data-po-tip]'); if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) hideT = setTimeout(hide, 80); });
+  document.addEventListener('focusin', function (e) { var el = e.target.closest && e.target.closest('[data-po-tip]'); if (el) show(el); });
+  document.addEventListener('focusout', function (e) { if (e.target.closest && e.target.closest('[data-po-tip]')) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+  window.addEventListener('scroll', hide, true);
+})();
