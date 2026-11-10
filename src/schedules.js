@@ -8,7 +8,7 @@
 //         DCSA_<CODE>_KEY         API key           (sent in DCSA_<CODE>_KEY_HEADER, default "API-Key")
 //      or OAuth client credentials:
 //         DCSA_<CODE>_TOKEN_URL, DCSA_<CODE>_CLIENT_ID, DCSA_<CODE>_CLIENT_SECRET
-//      <CODE> is the carrier's SCAC: CMDU (CMA CGM), MAEU (Maersk), MSCU (MSC), HLCU (Hapag-Lloyd), ONEY (ONE), ZIMU (ZIM).
+//      <CODE> is the carrier's SCAC: CMDU (CMA CGM), EGLV (Evergreen), MAEU (Maersk), MSCU (MSC), HLCU (Hapag-Lloyd), ONEY (ONE), ZIMU (ZIM).
 //      Each lane is fetched at most once a week, so a whole month costs a few dozen requests.
 //   2. Forwarder schedules (Excel / CSV / PDF / photo / email text), read by AI. Upload on the page, or forward the
 //      email to schedules@<inbound domain>. This covers COSCO, OOCL, Matson, SM Line and the others without an API.
@@ -49,14 +49,16 @@ function carrierName(s) {
   return v.slice(0, 40);
 }
 
-const API_CARRIERS = [['CMDU', 'CMA CGM'], ['MAEU', 'Maersk'], ['MSCU', 'MSC'], ['HLCU', 'Hapag-Lloyd'], ['ONEY', 'ONE'], ['ZIMU', 'ZIM']];
+const API_CARRIERS = [['CMDU', 'CMA CGM'], ['EGLV', 'Evergreen'], ['MAEU', 'Maersk'], ['MSCU', 'MSC'], ['HLCU', 'Hapag-Lloyd'], ['ONEY', 'ONE'], ['ZIMU', 'ZIM']];
 const env = (k) => String(process.env[k] || '').trim();
 function apiSources() {
   return API_CARRIERS.map(([code, name]) => {
     const p = `DCSA_${code}_`;
+    // Maersk has its own Point-to-Point Schedules API (api.maersk.com/products/ocean-products, header Consumer-Key).
+    if (code === 'MAEU' && env('MAERSK_CONSUMER_KEY') && !env(`${p}URL`)) return { code, name, kind: 'maersk', url: env('MAERSK_PRODUCTS_URL') || 'https://api.maersk.com/products/ocean-products', configured: true };
     const url = env(`${p}URL`);
     const oauth = env(`${p}TOKEN_URL`) && env(`${p}CLIENT_ID`) && env(`${p}CLIENT_SECRET`);
-    return { code, name, url, configured: !!(url && (env(`${p}KEY`) || oauth)), oauth: !!oauth };
+    return { code, name, kind: 'dcsa', url, configured: !!(url && (env(`${p}KEY`) || oauth)), oauth: !!oauth };
   });
 }
 
@@ -113,7 +115,54 @@ function parseDcsa(json, carrier) {
   return out;
 }
 
+// ── Maersk Point-to-Point Schedules ────────────────────────────────────────
+// Query by city + country; the answer lists products, each with transportSchedules (departure, arrival, legs).
+const CITY = { CNNGB: ['CN', 'Ningbo'], CNSHA: ['CN', 'Shanghai'], CNYTN: ['CN', 'Yantian'], CNCAN: ['CN', 'Guangzhou'], USLGB: ['US', 'Long Beach'], USLAX: ['US', 'Los Angeles'] };
+function parseMaersk(json, { origin, destination }) {
+  const products = Array.isArray(json) ? json : json?.oceanProducts || json?.products || [];
+  const out = [];
+  for (const p of products) {
+    for (const t of p.transportSchedules || []) {
+      const legs = (t.transportLegs || []).slice();
+      const vesselLegs = legs.filter((l) => !l.transport?.transportMode || /mvs|vessel|ves|bar|fea/i.test(l.transport.transportMode));
+      const main = vesselLegs.find((l) => /^US/.test(l.facilities?.endLocation?.UNLocationCode || '')) || vesselLegs[0] || legs[0] || {};
+      const tr = main.transport || {};
+      const v = tr.vessel || t.firstDepartureVessel || {};
+      const etd = isoDay(t.departureDateTime || legs[0]?.departureDateTime);
+      const eta = isoDay(t.arrivalDateTime || legs[legs.length - 1]?.arrivalDateTime);
+      if (!etd) continue;
+      const o = portCode(t.facilities?.collectionOrigin?.UNLocationCode || t.facilities?.collectionOrigin?.cityName) || origin;
+      const d = portCode(t.facilities?.deliveryDestination?.UNLocationCode || t.facilities?.deliveryDestination?.cityName) || destination;
+      // transitTime is given in minutes
+      const tt = Number(t.transitTime);
+      const via = vesselLegs.slice(0, -1).map((l) => l.facilities?.endLocation?.cityName || l.facilities?.endLocation?.UNLocationCode).filter(Boolean);
+      out.push({
+        carrier: 'Maersk', origin: o, destination: d, etd, eta,
+        transit_days: Number.isFinite(tt) && tt > 0 ? Math.round(tt / 1440) : eta ? Math.round((Date.parse(eta) - Date.parse(etd)) / 864e5) : null,
+        vessel: v.vesselName || null, imo: v.vesselIMONumber || null,
+        voyage: tr.carrierDepartureVoyageNumber || tr.carrierVoyageNumber || null,
+        service: tr.carrierServiceName || tr.carrierServiceCode || null,
+        direct: vesselLegs.length <= 1, via: via.join(', ') || null, cy_cutoff: null, doc_cutoff: null,
+      });
+    }
+  }
+  return out;
+}
+async function fetchMaersk(src, origin, destination, { from, to }) {
+  const [oc, ocity] = CITY[origin]; const [dc, dcity] = CITY[destination];
+  const weeks = Math.min(8, Math.max(1, Math.ceil((Date.parse(to) - Date.parse(from)) / (7 * 864e5))));
+  const u = new URL(src.url);
+  for (const [k, v] of Object.entries({ collectionOriginCountryCode: oc, collectionOriginCityName: ocity, deliveryDestinationCountryCode: dc, deliveryDestinationCityName: dcity, vesselOperatorCarrierCode: 'MAEU', startDate: from, startDateType: 'D', dateRange: `P${weeks}W` })) u.searchParams.set(k, v);
+  const res = await fetch(u, { headers: { Accept: 'application/json', 'Consumer-Key': env('MAERSK_CONSUMER_KEY') }, signal: AbortSignal.timeout(30000) });
+  const txt = await res.text();
+  if (res.status === 404 || res.status === 204) return [];
+  if (!res.ok) throw new Error(`Maersk ${res.status}: ${txt.slice(0, 200)}`);
+  let j; try { j = JSON.parse(txt || '[]'); } catch { throw new Error('Maersk: answer was not JSON'); }
+  return parseMaersk(j, { origin, destination });
+}
+
 async function fetchLane(src, origin, destination, { from, to }) {
+  if (src.kind === 'maersk') return fetchMaersk(src, origin, destination, { from, to });
   const u = new URL(src.url);
   u.searchParams.set('placeOfReceipt', origin); u.searchParams.set('placeOfDelivery', destination);
   u.searchParams.set('departureStartDate', from); u.searchParams.set('departureEndDate', to);
@@ -272,4 +321,4 @@ async function handleScheduleEmail({ db, config, from, subject = '', text = '', 
   return { ok: true, batch, added, updated, results };
 }
 
-module.exports = { ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };
+module.exports = { parseMaersk, ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };

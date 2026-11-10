@@ -122,7 +122,7 @@ function schedulesRoutes(router, { db, config }) {
         </section>
         <section class="card"><div class="head-row"><h2>Carrier APIs</h2><form method="post" action="/admin/logistics/schedules/refresh" class="inline" data-busy><button class="btn small ghost" ${srcs.some((s) => s.configured) ? '' : raw('disabled')}>Refresh now</button></form></div>
           <p class="sub">Free DCSA schedule APIs. Each lane is checked once a week.${lastApi ? ` Last update ${fmt.date(lastApi)}.` : ''}</p>
-          <ul class="sl-api">${srcs.map((s) => html`<li><span class="sl-dot" style="--c:${color(s.name)}"></span><b>${s.name}</b><span class="${s.configured ? 'ok' : 'muted'}">${s.configured ? 'Connected' : 'Not connected'}</span>${s.configured ? '' : html`<code>DCSA_${s.code}_URL + DCSA_${s.code}_KEY</code>`}</li>`)}</ul>
+          <ul class="sl-api">${srcs.map((s) => html`<li><span class="sl-dot" style="--c:${color(s.name)}"></span><b>${s.name}</b><span class="${s.configured ? 'ok' : 'muted'}">${s.configured ? 'Connected' : 'Not connected'}</span>${s.configured ? '' : html`<code>${s.code === 'MAEU' ? 'MAERSK_CONSUMER_KEY' : `DCSA_${s.code}_URL + DCSA_${s.code}_KEY`}</code>`}</li>`)}</ul>
           <p class="sub">Register on the carrier's developer portal, then add its schedule URL and key in Railway → Variables. COSCO, OOCL, Matson, SM Line and the other lines without a public API come from forwarder schedules.</p>
         </section>
       </div>`,

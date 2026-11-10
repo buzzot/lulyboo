@@ -25,6 +25,33 @@ const STATUSES = ['Sent', 'Replied', 'Complete', 'Closed'];
 const ccList = () => (process.env.REQUEST_CC || 'marsel@lulyboo.com').split(/[,;\s]+/).filter((e) => EMAIL_RE.test(e));
 const uniq = (arr) => [...new Set(arr.map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
 const refOf = (text) => (String(text || '').match(/\bLB-(\d{3,7})\b/i) || [])[0]?.toUpperCase() || null;
+// Which request does an incoming email belong to? 1) an LB-#### reference anywhere; 2) otherwise the sender:
+// an open request to that address (or, for a company domain, to that supplier), preferring a matching subject.
+const FREE_MAIL = /@(gmail|qq|163|126|outlook|hotmail|yahoo|foxmail|sina|aliyun|icloud)\./i;
+const normSubj = (x) => String(x || '').replace(/\[[^\]]*\]/g, ' ').replace(/^\s*((re|fw|fwd|aw|回复|答复|转发)\s*[:：]\s*)+/gi, '').replace(/\s+/g, ' ').trim().toLowerCase();
+async function findRequest(db, { subject = '', toList = [], text = '', from = '' }) {
+  const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(text) || null;
+  if (ref) { const r = (await db.list('info_requests', { filters: { ref } }))[0]; if (r) return { r, how: 'ref' }; }
+  const email = (String(from).match(/[^\s<>"]+@[^\s<>"]+/) || [''])[0].toLowerCase();
+  if (!email) return null;
+  const dom = FREE_MAIL.test(email) ? null : email.split('@')[1];
+  const open = (await db.list('info_requests', { order: 'created_at.desc' })).filter((x) => !['Complete', 'Closed'].includes(x.status));
+  const suppliers = new Map();
+  const supplierOf = async (id) => { if (!id) return null; if (!suppliers.has(id)) suppliers.set(id, await db.get('suppliers', id).catch(() => null)); return suppliers.get(id); };
+  const hits = [];
+  for (const x of open) {
+    const sent = (x.to_emails || []).map((e) => String(e).toLowerCase());
+    const s = await supplierOf(x.supplier_id);
+    const known = [...sent, String(s?.email || '').toLowerCase(), String(x.contact || '').toLowerCase()];
+    if (known.some((k) => k.includes(email)) || (dom && known.some((k) => k.endsWith(`@${dom}`) || k.includes(`@${dom}`)))) hits.push(x);
+  }
+  if (!hits.length) return null;
+  const ns = normSubj(subject);
+  const bySubject = ns ? hits.filter((x) => { const t = normSubj(x.subject); return t && (t === ns || t.includes(ns) || ns.includes(t)); }) : [];
+  if (bySubject.length) return { r: bySubject[0], how: 'sender+subject' };
+  return hits.length === 1 ? { r: hits[0], how: 'sender' } : { r: hits[0], how: 'sender-latest' };
+}
+
 const canSend = () => emailConfigured() || process.env.EMAIL_DEV_LOG === 'true';
 const pill = (st) => html`<span class="pill ${st === 'Complete' ? 's-selected' : st === 'Replied' ? 's-reviewing' : st === 'Closed' ? '' : 's-new'}">${st}</span>`;
 
@@ -321,8 +348,7 @@ module.exports = function requestRoutes(router, { db, config }) {
     const from = typeof d.from === 'string' ? d.from : d.from?.email || d.from?.address || '';
     const toList = [].concat(d.to || []).map((x) => (typeof x === 'string' ? x : x?.email || x?.address || ''));
     const subject = String(d.subject || '');
-    const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(d.text) || null;
-    const r = ref ? (await db.list('info_requests', { filters: { ref } }))[0] : null;
+    const r = (await findRequest(db, { subject, toList, text: d.text, from }))?.r || null;
     if (!r) return res.json({ ok: true, matched: false }, 202);
     let text = d.text || ''; let htmlBody = d.html || '';
     if (!text && !htmlBody && d.email_id && process.env.RESEND_API_KEY) {
@@ -333,7 +359,7 @@ module.exports = function requestRoutes(router, { db, config }) {
     }
     const attachments = await fetchInboundAttachments(r.ref, d.email_id || d.id, d.attachments);
     await logReply(r, { from, toList, subject, text, htmlBody, attachments });
-    res.json({ ok: true, matched: true, ref });
+    res.json({ ok: true, matched: true, ref: r.ref });
   });
 
   // ── Mailgun inbound route. In Mailgun: Receiving → Create route → expression `match_recipient(".*@<your-inbound-domain>")`,
@@ -369,14 +395,14 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await DE.handleDevEmail({ db, config, from, toList, cc: [f.To, f.to, f.Cc, f.cc].filter(Boolean).join(', '), subject, text, bodyPlain: String(f['body-plain'] || ''), files: Object.values(parsed.files).flat(), messageId: String(f['Message-Id'] || f['message-id'] || ''), date: f.Date || f.date });
       if (out.matched) return res.json({ ok: true, dev: true, ...out });
     }
-    const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(f['body-plain']) || null;
-    const r = ref ? (await db.list('info_requests', { filters: { ref } }))[0] : null;
-    if (!r) return res.json({ ok: true, matched: false }); // 200 so Mailgun does not retry
+    const found = await findRequest(db, { subject, toList, text: f['body-plain'], from });
+    const r = found?.r || null;
+    if (!r) { console.log(`Inbound email not matched to a request: from ${from}, subject "${subject.slice(0, 120)}"`); return res.json({ ok: true, matched: false }); } // 200 so Mailgun does not retry
     const attachments = [];
     for (const file of Object.values(parsed.files).flat()) attachments.push(await saveAttachment(r.ref, file));
     const full = String(f['body-plain'] || '');
     const original = full ? `From: ${from}\nTo: ${toList.join(', ')}\nSubject: ${subject}${f.Date ? `\nDate: ${f.Date}` : ''}\n\n${full}` : '';
     const out = await logReply(r, { from, toList, subject, text, htmlBody: f['body-html'], attachments, original });
-    res.json({ ok: true, matched: true, ref, ...out });
+    res.json({ ok: true, matched: true, ref: r.ref, ...out });
   });
 };

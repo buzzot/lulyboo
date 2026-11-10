@@ -1980,3 +1980,48 @@ test('sailing schedules: DCSA carrier API, forwarder file read by AI, email, mon
   assert.equal(ej.schedules, true); assert.equal(ej.added, 3);
   assert.equal(db.tables.sailings.filter((s) => s.source === 'email').length, 3);
 });
+
+test('sailing schedules: Maersk Point-to-Point Schedules adapter', async (t) => {
+  process.env.MAERSK_CONSUMER_KEY = 'mk-1';
+  const realFetch = global.fetch; const seen = [];
+  global.fetch = async (url, opts = {}) => {
+    const u = new URL(String(url));
+    if (u.host !== 'api.maersk.com') return realFetch(url, opts);
+    seen.push({ path: u.pathname, q: Object.fromEntries(u.searchParams), key: opts.headers['Consumer-Key'] });
+    if (u.searchParams.get('collectionOriginCityName') !== 'Ningbo' || u.searchParams.get('deliveryDestinationCityName') !== 'Los Angeles') return new Response('{"oceanProducts":[]}', { status: 200 });
+    const dep = new Date(Date.now() + 6 * 864e5).toISOString(); const arr = new Date(Date.now() + 26 * 864e5).toISOString();
+    return new Response(JSON.stringify({ oceanProducts: [{ vesselOperatorCarrierCode: 'MAEU', transportSchedules: [{ departureDateTime: dep, arrivalDateTime: arr, transitTime: 28800,
+      facilities: { collectionOrigin: { cityName: 'Ningbo', UNLocationCode: 'CNNGB' }, deliveryDestination: { cityName: 'Los Angeles', UNLocationCode: 'USLAX' } },
+      firstDepartureVessel: { vesselName: 'MAERSK EMDEN', vesselIMONumber: '9456771' },
+      transportLegs: [{ departureDateTime: dep, arrivalDateTime: arr, facilities: { startLocation: { UNLocationCode: 'CNNGB' }, endLocation: { UNLocationCode: 'USLAX', cityName: 'Los Angeles' } }, transport: { transportMode: 'MVS', vessel: { vesselName: 'MAERSK EMDEN', vesselIMONumber: '9456771' }, carrierServiceName: 'TP6', carrierDepartureVoyageNumber: '446E' } }] }] }] }), { status: 200 });
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.MAERSK_CONSUMER_KEY; });
+  const SC = require('../src/schedules');
+  const db = seedDb();
+  assert.equal(SC.apiSources().find((x) => x.code === 'MAEU').configured, true);
+  const r = await SC.runRefresh({ db });
+  assert.equal(seen.length, 8); assert.equal(seen[0].path, '/products/ocean-products'); assert.equal(seen[0].key, 'mk-1');
+  assert.equal(seen[0].q.vesselOperatorCarrierCode, 'MAEU'); assert.match(seen[0].q.dateRange, /^P\dW$/);
+  assert.equal(r.added, 1);
+  const s = db.tables.sailings[0];
+  assert.equal(s.carrier, 'Maersk'); assert.equal(s.vessel, 'MAERSK EMDEN'); assert.equal(s.voyage, '446E'); assert.equal(s.service, 'TP6'); assert.equal(s.transit_days, 20); assert.equal(s.destination, 'USLAX');
+});
+
+test('RFQ reply without an LB number is matched by sender and subject', async (t) => {
+  process.env.MAILGUN_SIGNING_KEY = 'mg-key';
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { delete process.env.MAILGUN_SIGNING_KEY; server.close(); });
+  const s = await db.insert('suppliers', { name: 'Taizhou Xinhaosheng', email: 'elina@wlhaosheng.example' });
+  const other = await db.insert('info_requests', { ref: 'LB-1030', supplier_id: s.id, kind: 'rfq', subject: 'RFQ: Bath seat', status: 'Sent', to_emails: ['elina@wlhaosheng.example'], created_at: '2026-11-09T01:00:00Z' });
+  const r = await db.insert('info_requests', { ref: 'LB-1031', supplier_id: s.id, kind: 'rfq', subject: 'RFQ: Padded potty training seat with handles, splash guard and hanging clip (photo attached)', status: 'Sent', to_emails: ['elina@wlhaosheng.example'], created_at: '2026-11-08T01:00:00Z' });
+  const crypto = require('node:crypto');
+  const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok-rfq';
+  const fd = new FormData();
+  for (const [k, v] of Object.entries({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), from: 'elina <sales@wlhaosheng.example>', recipient: 'rfq@in.lulyboo.space', subject: 'Re: RFQ: Padded potty training seat with handles, splash guard and hanging clip (photo attached)', 'body-plain': 'Please see the attached quotation. MOQ 2000pcs.' })) fd.append(k, v);
+  const j = await (await fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: fd })).json();
+  assert.equal(j.matched, true);
+  const msgs = db.tables.info_request_messages.filter((m) => m.direction === 'in');
+  assert.equal(msgs.length, 1); assert.equal(msgs[0].request_id, r.id);   // same domain, subject picks LB-1031 over the newer LB-1030
+  assert.notEqual(msgs[0].request_id, other.id);
+});
