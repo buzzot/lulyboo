@@ -1647,7 +1647,7 @@ img.ph{object-fit:cover;padding:0}
 .or-cat{display:inline-block;font-size:12px;margin-top:2px;text-decoration:none}
 .or-cat.no{color:#b7791f}
 /* PO hover card */
-.cp-po-link{color:inherit;text-decoration:none}
+.cp-po-link{color:inherit;text-decoration:none;align-self:flex-start;display:inline-block;max-width:100%}
 .cp-po-link:hover,.cp-po-link:focus-visible{color:var(--brand-text);text-decoration:underline;text-underline-offset:2px}
 .po-tip{position:fixed;z-index:200;width:300px;background:#fff;border:1px solid var(--line,#e6e4e1);border-radius:12px;box-shadow:0 12px 32px rgba(20,30,25,.18);padding:12px 14px;font-size:13px;pointer-events:none;opacity:0;transform:translateY(3px);transition:opacity .12s,transform .12s}
 .po-tip.on{opacity:1;transform:none}

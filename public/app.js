@@ -1356,9 +1356,11 @@
       '<div class="po-tip-f muted">Click to open the PO</div>';
     tip.hidden = false; tip.classList.add('on');
     el.setAttribute('aria-describedby', 'po-tip');
-    var r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
-    var left = r.right + 10; if (left + w > vw - 8) left = Math.max(8, r.left - w - 10); if (left < 8) left = 8;
-    var top = r.top - 6; if (top + h > vh - 8) top = Math.max(8, vh - h - 8);
+    // measure the text itself (not a stretched box), and open just to its right, top-aligned
+    var rects = el.getClientRects(), r = rects.length ? rects[rects.length - 1] : el.getBoundingClientRect();
+    var w = tip.offsetWidth, h = tip.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    var left = r.right + 8; if (left + w > vw - 8) left = Math.max(8, r.left - w - 8);
+    var top = r.top - 10; if (top + h > vh - 8) top = Math.max(8, vh - h - 8); if (top < 8) top = 8;
     tip.style.left = left + 'px'; tip.style.top = top + 'px';
   }
   function hide() { if (tip) { tip.classList.remove('on'); tip.hidden = true; } if (cur) cur.removeAttribute('aria-describedby'); cur = null; }
