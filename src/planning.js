@@ -77,17 +77,20 @@ const TOOL = {
           type: 'object',
           properties: {
             po: { type: 'string', description: 'PO number exactly as written, e.g. PO200013' },
-            product: { type: 'string', description: 'Product description; empty when the document lists only PO numbers' },
+            product: { type: 'string', description: 'Product name without the item number (put that in sku); empty when the document lists only PO numbers' },
             sku: { type: 'string', description: 'Item / model number if shown' },
             qty: { type: 'number', description: 'Order quantity in pieces' },
             cartons: { type: 'number' },
             cbm: { type: 'number', description: 'Total goods volume in m³ for this line' },
             gross_kg: { type: 'number', description: 'Total gross weight in kg' },
+            unit_price: { type: 'number', description: 'Unit price / unit cost per piece, if shown' },
+            currency: { type: 'string', description: 'Currency of the unit price, e.g. USD' },
             units_per_carton: { type: 'number', description: 'Packing: pieces per export carton (master carton), from a packing list or PO packing spec' },
             carton_l_cm: { type: 'number', description: 'Export carton length in cm (convert mm/inches to cm)' },
             carton_w_cm: { type: 'number', description: 'Export carton width in cm' },
             carton_h_cm: { type: 'number', description: 'Export carton height in cm' },
             carton_gw_kg: { type: 'number', description: 'Gross weight of ONE carton in kg' },
+            carton_nw_kg: { type: 'number', description: 'Net weight of ONE carton in kg' },
             ready_date: { type: 'string', description: 'Cargo ready date YYYY-MM-DD; resolve dates without a year (e.g. "25th Nov") to the next such date from today' },
             inspection_date: { type: 'string', description: 'YYYY-MM-DD, or a short note like "to be booked"' },
             production_status: { type: 'string', description: 'e.g. Under production, Ready for shipping' },
@@ -133,9 +136,10 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
       ready_date: isoDay(o.ready_date), inspection_date: insp, inspection_note: insp ? null : txt(o.inspection_date, 80),
       production_status: txt(o.production_status, 120), pending_from_us: txt(o.pending_from_lulyboo, 200), order_type: txt(o.order_type, 60), approved_by: txt(o.approved_by, 60),
       port_text: port, port: SC.portCode(port), notes: txt(o.notes, 500),
-      units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg),
+      unit_price: num(o.unit_price), currency: txt(o.currency, 8),
+      units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg),
     };
-  }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po);
+  }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po).map((o) => ({ ...o, product: cleanName(o.product, o.sku) }));
   return { orders, supplierName: txt(result?.supplier_name, 120) };
 }
 
@@ -191,8 +195,9 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
   const pos = [...new Set(lines.map((o) => normPo(o.po)))];
   await mergePlaceholders(db, supplierId, pos);
   const vol = await fillVolumes(db, supplierId);
+  const created = await addToCatalog(db, supplierId, lines.filter((o) => o.product && d.find((x) => x === o || (x.po === o.po && x.product === o.product))?.keepName !== true));
   const catalog = await packingToCatalog(db, supplierId, lines);
-  return { added, updated, same: d.filter((x) => x.change === 'same').length, volumes: vol, catalog };
+  return { added, updated, same: d.filter((x) => x.change === 'same').length, volumes: vol, catalog, products: created.added, productNames: created.names };
 }
 
 /** Fill CBM from the supplier's products (carton size × cartons) when the document gave none. */
@@ -264,18 +269,73 @@ async function mergePlaceholders(db, supplierId, pos) {
   return n;
 }
 
-/** Packing read from a document becomes the catalog product's standard packing when the product has none yet. */
+/** "BSTS 001 - Silicone straps set of three" with SKU "BSTS 001" → "Silicone straps set of three". */
+function cleanName(name, sku) {
+  const n = String(name || '').trim(); if (!n || !sku) return n || null;
+  const k = String(sku).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[\s\-_]+/g, '[\\s\\-_]*');
+  const out = n.replace(new RegExp(`^\\s*${k}\\s*[-–:|/,.]?\\s*`, 'i'), '').trim();
+  return out.length >= 3 ? out : n;
+}
+
+/** Catalog product for a PO line: same supplier SKU, else same name, else the one product whose name contains the other. */
+function catalogMatch(o, prods) {
+  return prods.find((p) => o.sku && p.supplier_sku && normSku(o.sku) === normSku(p.supplier_sku))
+    || prods.find((p) => normProd(p.product_name) === normProd(o.product))
+    || prods.filter((p) => looseItem(o, p)).reduce((a, x, i, all) => (all.length === 1 ? x : null), null);
+}
+
+/**
+ * Products read from a PO / PI / packing list / order report that the supplier's product list does not have yet
+ * are added to it (status "Selected" — we ordered them), with SKU, unit price and packing. Returns { added, names }.
+ */
+async function addToCatalog(db, supplierId, lines, { source = 'po' } = {}) {
+  const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => null);
+  if (!prods) return { added: 0, names: [] };
+  const names = [];
+  const stored = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
+  for (const line of lines) {
+    if (!line.product || catalogMatch(line, prods)) continue;
+    const saved = stored.find((x) => normPo(x.po) === normPo(line.po) && normProd(x.product) === normProd(line.product));
+    const o = { ...(saved || {}), ...Object.fromEntries(Object.entries(line).filter(([, v]) => v !== null && v !== undefined && v !== '')) };
+    const port = o.port && SC.PORT[o.port] ? SC.PORT[o.port].name : o.port_text || null;
+    const row = {
+      supplier_id: supplierId, product_name: String(o.product).slice(0, 300), supplier_sku: o.sku || null,
+      unit_price: num(o.unit_price), currency: (o.currency || 'USD').toUpperCase().slice(0, 8), fob_port: port,
+      units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg),
+      status: 'Selected', source, is_draft: false, factory_notes: `Added from ${o.po}`,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    try { const p = await db.insert('products', row); prods.push(p); names.push(p.product_name); } catch { /* catalog is optional for planning */ }
+  }
+  return { added: names.length, names };
+}
+
+/**
+ * Packing read from a document goes to the catalog product: single-carton size, pcs per carton, gross and net weight.
+ * From a packing list (o.fromPackingList) it replaces what the product had, with a note of the old values;
+ * from other documents it only fills a product that has no packing yet.
+ */
 async function packingToCatalog(db, supplierId, lines) {
   const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
-  let n = 0;
-  for (const o of lines.filter(hasPack)) {
-    const p = prods.find((x) => sameItem(o, x)) || prods.filter((x) => looseItem(o, x)).reduce((a, x, i, all) => (all.length === 1 ? x : null), null);
-    if (!p || hasPack(p)) continue;
-    const patch = { carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm) };
-    if (num(o.units_per_carton) && !num(p.units_per_carton)) patch.units_per_carton = num(o.units_per_carton);
-    if (num(o.carton_gw_kg) && !num(p.carton_gw_kg)) patch.carton_gw_kg = num(o.carton_gw_kg);
+  let n = 0; const done = new Set();
+  for (const o of lines.filter((x) => hasPack(x) || (x.fromPackingList && (num(x.units_per_carton) || num(x.carton_gw_kg))))) {
+    const p = catalogMatch(o, prods);
+    if (!p || done.has(p.id)) continue;
+    const incoming = { units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg) };
+    const patch = {};
+    for (const [k, v] of Object.entries(incoming)) {
+      if (v == null) continue;
+      if (num(p[k]) == null || (o.fromPackingList && num(p[k]) !== v)) patch[k] = v;
+    }
+    if (!Object.keys(patch).length) continue;
+    const old = Object.keys(patch).filter((k) => num(p[k]) != null);
+    if (old.length) {
+      const was = (k) => num(p[k]);
+      const desc = [old.includes('carton_l_cm') || old.includes('carton_w_cm') || old.includes('carton_h_cm') ? `${was('carton_l_cm')}×${was('carton_w_cm')}×${was('carton_h_cm')} cm` : null, old.includes('units_per_carton') ? `${was('units_per_carton')} pcs/ctn` : null, old.includes('carton_gw_kg') ? `GW ${was('carton_gw_kg')} kg` : null, old.includes('carton_nw_kg') ? `NW ${was('carton_nw_kg')} kg` : null].filter(Boolean).join(', ');
+      patch.factory_notes = [p.factory_notes, `${today()}: packing updated from the packing list of ${o.po} (was ${desc}).`].filter(Boolean).join('\n').slice(-4000);
+    }
     await db.update('products', { id: p.id }, { ...patch, updated_at: new Date().toISOString() }).catch(() => null);
-    p.carton_l_cm = patch.carton_l_cm; p.carton_w_cm = patch.carton_w_cm; p.carton_h_cm = patch.carton_h_cm; n++;
+    Object.assign(p, patch); done.add(p.id); n++;
   }
   return n;
 }
@@ -301,10 +361,14 @@ const FILE_MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg',
 const guessKind = (name, pos = []) => (/packing/i.test(name) ? 'Packing list' : /invoice|\bci\b|\bpi\b/i.test(name) ? 'Invoice' : /status/i.test(name) ? 'Production status' : pos.length === 1 && /po/i.test(name) ? 'PO' : 'Order report');
 /** Store files in the documents bucket and record them, linked to the POs they cover. */
 async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch = null, by = null } = {}) {
-  const saved = []; const errors = [];
+  const saved = []; const errors = []; const skipped = [];
+  const existing = await db.list('plan_files', { filters: { supplier_id: supplierId } }).catch(() => []);
   for (const f of files) {
     if (!f.buffer?.length) continue;
+    // the same file uploaded again (same name and size): keep the first copy, just link any new PO numbers
+    const dupe = existing.find((x) => x.name === String(f.name).slice(0, 200) && Number(x.size) === f.buffer.length);
     if (f.buffer.length > 25 * 1024 * 1024) { errors.push(`${f.name}: larger than 25 MB`); continue; }
+    if (dupe) { const merged = [...new Set([...(dupe.pos || []), ...(f.pos || pos).map((x) => String(x).trim()).filter(Boolean)])].slice(0, 200); await db.update('plan_files', { id: dupe.id }, { pos: merged }); dupe.pos = merged; skipped.push(f.name); continue; }
     const ext = (String(f.name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '';
     const safe = String(f.name || 'file').replace(/[^\w.\-()]+/g, '_').slice(-120) || 'file';
     const path = `planning/${supplierId}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${safe}`;
@@ -314,7 +378,7 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
     const list = [...new Set((f.pos || pos).map((x) => String(x).trim()).filter(Boolean))].slice(0, 200);
     saved.push(await db.insert('plan_files', { supplier_id: supplierId, name: String(f.name).slice(0, 200), path, size: f.buffer.length, content_type: type, kind: kind || guessKind(f.name, list), pos: list, batch, uploaded_by: by, created_at: new Date().toISOString() }));
   }
-  return { saved, errors };
+  return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, fillVolumes, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, fillVolumes, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

@@ -1644,3 +1644,5 @@ img.ph{object-fit:cover;padding:0}
 .or-pack{font-size:12px}
 .or-up-row{align-items:center;flex-wrap:wrap}
 .or-up-note{margin:8px 0 0;font-size:12.5px}
+.or-cat{display:inline-block;font-size:12px;margin-top:2px;text-decoration:none}
+.or-cat.no{color:#b7791f}

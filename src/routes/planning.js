@@ -364,16 +364,16 @@ function planningRoutes(router, { db, config }) {
         const k = kind || PL.guessKind(f.name, typed);
         const hint = [`This document is a ${/packing/i.test(k) ? 'packing list' : k === 'PO' ? 'purchase order' : k.toLowerCase()} from ${supplier.name}.`,
           typed.length ? `It belongs to PO ${typed.join(', ')}; use that PO number for lines that do not show one.` : '',
-          'Record one line per product with its order quantity, and the export-carton packing (pieces per carton, carton L×W×H in cm, gross kg per carton, number of cartons) when shown.',
+          'Record one line per product with its order quantity, and the export-carton packing when shown: pieces per carton, the size of ONE carton (L×W×H in cm), gross and net kg of ONE carton, and the number of cartons.',
           /packing/i.test(k) ? 'Totals of cartons, m³ and kg per product go in cartons, cbm and gross_kg.' : 'Do not copy a carton or volume total that is not printed.'].filter(Boolean).join(' ');
-        try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer, hint, defaultPo: typed.length === 1 ? typed[0] : '' }); f.pos = [...new Set([...typed, ...r.orders.map((o) => o.po)])]; lines.push(...r.orders); }
+        try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer, hint, defaultPo: typed.length === 1 ? typed[0] : '' }); f.pos = [...new Set([...typed, ...r.orders.map((o) => o.po)])]; lines.push(...r.orders.map((o) => (/packing/i.test(k) ? { ...o, fromPackingList: true } : o))); }
         catch { unread.push(f.name); }
       }
       if (lines.length) { for (const o of lines) if (!o.port) o.port = null; read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
     }
     const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' });
-    const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} catalog product${read.catalog === 1 ? '' : 's'}` : ''}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
-    back(r.errors.length || unread.length ? 'warn' : 'ok', `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
+    const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.products ? ` · added to ${supplier.name}'s products: ${read.productNames.join(', ')}` : ''}${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} product${read.catalog === 1 ? '' : 's'} in the product list` : ''}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
+    back(r.errors.length || unread.length ? 'warn' : 'ok', `${r.saved.length ? `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}` : 'No new documents stored'}${r.skipped?.length ? ` · already stored: ${r.skipped.join(', ')}` : ''}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
   }));
   router.get(`${BASE}/files/:id`, G(async (req, res) => {
     const f = await db.get('plan_files', req.params.id); if (!f) throw new HttpError(404, 'Document not found');

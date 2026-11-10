@@ -115,6 +115,9 @@ module.exports = function orderRoutes(router, { db, config }) {
     if (!p && !docs.length) throw new HttpError(404, 'Purchase order not found');
     const ls = p ? p.lines : [];
     const back = req.url;
+    const prods = await db.list('products', { filters: { supplier_id: supplier.id } }).catch(() => []);
+    const inCat = (o) => (o.product ? PL.catalogMatch(o, prods) : null);
+    const missingCat = ls.filter((o) => o.product && !inCat(o));
     const icon = (f) => (/pdf/.test(f.content_type) ? 'PDF' : /image/.test(f.content_type) ? 'IMG' : /sheet|excel|csv/.test(f.content_type) ? 'XLS' : /word/.test(f.content_type) ? 'DOC' : 'FILE');
     res.html(page({
       title: `${poQ} · Purchase orders`, nav: adminNav('orders'), flash: takeFlash(req, res), wide: true, req,
@@ -127,8 +130,8 @@ module.exports = function orderRoutes(router, { db, config }) {
           <div class="cp-kpi"><span>Quantity</span><b>${p.qty ? int(p.qty) : '—'}</b><small>pieces</small></div>
           <div class="cp-kpi"><span>Volume</span><b>${p.cbm ? `${n2(p.cbm)} m³` : '—'}</b><small>${p.cbm ? `≈ ${PL.suggest(p.cbm).text}` : 'CBM missing'}</small></div>
           <div class="cp-kpi ${p.pending.length ? 'warn' : ''}"><span>Waiting on Lulyboo</span><b>${p.pending.length ? p.pending.length : '—'}</b><small>${p.pending.join(', ') || 'nothing'}</small></div></div>
-        <section class="card"><h2>Lines</h2><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Container</th><th></th></tr></thead>
-          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${o.units_per_carton || o.carton_l_cm ? html`<div class="sub or-pack">📦 ${[o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
+        <section class="card"><div class="head-row"><h2>Lines</h2>${missingCat.length ? html`<form method="post" action="/admin/orders/catalog" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn ghost small">Add ${missingCat.length} product${missingCat.length === 1 ? '' : 's'} to ${supplier.name}'s product list</button></form>` : ''}</div><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Container</th><th></th></tr></thead>
+          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${o.product ? (inCat(o) ? html`<a class="sub or-cat" href="/admin/products/${inCat(o).id}">✓ In ${supplier.name}'s products</a>` : html`<span class="sub or-cat no">Not in product list</span>`) : ''}${o.units_per_carton || o.carton_l_cm ? html`<div class="sub or-pack">📦 ${[o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
             <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
             <td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
@@ -147,6 +150,15 @@ module.exports = function orderRoutes(router, { db, config }) {
             ${AI.enabled() ? html`<p class="sub or-up-note">PO / PI: each product becomes a line of ${poQ}. Packing list: pcs per carton and carton size are saved to the product, and cartons, m³ and kg are calculated from the order quantity.</p>` : ''}</form></section>
         ${PR.editDialog(back)}`,
     }));
+  }));
+
+  router.post('/admin/orders/catalog', G(async (req, res) => {
+    const { fields: f } = await parseForm(req);
+    const ls = (await db.list('plan_orders', { filters: { supplier_id: f.supplier } })).filter((l) => PL.normPo(l.po) === PL.normPo(f.po) && l.product);
+    if (!ls.length) throw new HttpError(404, 'Purchase order not found');
+    const r = await PL.addToCatalog(db, f.supplier, ls);
+    flash(res, 'ok', r.added ? `Added to the product list: ${r.names.join(', ')}` : 'All products are already in the product list');
+    res.redirect(poUrl(f.supplier, f.po));
   }));
 
   router.post('/admin/orders/shipped', G(async (req, res) => {

@@ -2400,7 +2400,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
     return fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
   };
   // 1. signed PO: two products, no PO number on the lines
-  answer = { orders: [{ po: '', product: 'Silicone Bib', sku: 'KS-100', qty: 4000 }, { po: '', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 3600 }] };
+  answer = { orders: [{ po: '', product: 'KS-100 - Silicone Bib', sku: 'KS-100', qty: 4000, unit_price: 0.85, currency: 'USD' }, { po: '', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 3600 }] };
   const r1 = await upload('PO900018_Kean Signed.pdf', 'PO');
   assert.equal(r1.status, 303); assert.match(r1.headers.get('location'), /\/admin\/orders\/view.*#docs/);
   assert.match(prompts[0], /purchase order from Shenzhen Kean/); assert.match(prompts[0], /PO PO900018/);
@@ -2408,8 +2408,15 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   assert.equal(ls.length, 2);                                                                  // placeholder replaced
   assert.ok(!ls.some((o) => o.id === ph.id));
   assert.ok(ls.every((o) => o.ready_date === '2026-12-01' && o.port === 'CNYTN'));            // kept its date and port
+  assert.ok(ls.some((o) => o.product === 'Silicone Bib'));                                     // SKU taken off the name
+  assert.equal(db.tables.products.length, 2);                                                  // new item added, existing one not duplicated
+  const bib = db.tables.products.find((p) => p.supplier_sku === 'KS-100');
+  assert.equal(bib.product_name, 'Silicone Bib'); assert.equal(bib.unit_price, 0.85); assert.equal(bib.status, 'Selected'); assert.equal(bib.fob_port, 'Yantian'); assert.match(bib.factory_notes, /PO900018/);
+  const again = await upload('PO900018_Kean Signed.pdf', 'PO');                               // same file twice → stored once
+  assert.match(decodeURIComponent(again.headers.get('set-cookie') || ''), /already stored/);
+  assert.equal(db.tables.plan_files.filter((f) => f.name === 'PO900018_Kean Signed.pdf').length, 1);
   // 2. packing list, product name written differently, matched by SKU
-  answer = { orders: [{ po: 'PO900018', product: 'Suction plate (silicone) blue', sku: 'KS 200', units_per_carton: 48, carton_l_cm: 52, carton_w_cm: 40, carton_h_cm: 30, carton_gw_kg: 11.5 }] };
+  answer = { orders: [{ po: 'PO900018', product: 'Suction plate (silicone) blue', sku: 'KS 200', units_per_carton: 48, carton_l_cm: 52, carton_w_cm: 40, carton_h_cm: 30, carton_gw_kg: 11.5, carton_nw_kg: 10.2 }] };
   const r2 = await upload('PL PO900018.pdf', 'Packing list');
   assert.equal(r2.status, 303);
   ls = db.tables.plan_orders.filter((o) => o.po === 'PO900018');
@@ -2420,17 +2427,33 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   assert.equal(plate.cbm, 4.68); assert.equal(plate.gross_kg, 862.5); assert.equal(plate.cbm_estimated, true);
   const c = db.tables.products.find((p) => p.id === cat.id);
   assert.equal(c.carton_l_cm, 52); assert.equal(c.units_per_carton, 48);                       // standard packing on the catalog product
+  assert.equal(db.tables.products.length, 2);                                                  // packing-list name variant did not add a product
+  assert.equal(c.carton_nw_kg, 10.2); assert.equal(c.carton_gw_kg, 11.5);
+  // a later packing list with a different carton replaces the product's packing and notes the old one
+  answer = { orders: [{ po: 'PO900018', product: 'Silicone Suction Plate', sku: 'KS-200', units_per_carton: 50, carton_l_cm: 54, carton_w_cm: 40, carton_h_cm: 30, carton_gw_kg: 12 }] };
+  await upload('PL PO900018 rev2.pdf', 'Packing list');
+  const c2 = db.tables.products.find((p) => p.id === cat.id);
+  assert.equal(c2.carton_l_cm, 54); assert.equal(c2.units_per_carton, 50); assert.equal(c2.carton_nw_kg, 10.2);
+  assert.match(c2.factory_notes, /packing updated from the packing list of PO900018 \(was 52×40×30 cm, 48 pcs\/ctn, GW 11\.5 kg\)/);
+  const plate2 = db.tables.plan_orders.find((o) => o.po === 'PO900018' && o.sku === 'KS-200');
+  assert.equal(plate2.cartons, 72); assert.equal(plate2.cbm, 4.67);                              // 3600 / 50 × 0.0648 m³
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
-  assert.match(po.text, /48 pcs\/ctn · 52×40×30 cm · 11\.5 kg · 75 ctns/); assert.match(po.text, /Read products, quantities and packing with AI/);
+  assert.match(po.text, /50 pcs\/ctn · 54×40×30 cm · 12 kg · 72 ctns/); assert.match(po.text, /✓ In Shenzhen Kean(?:'|&#39;)s products/); assert.doesNotMatch(po.text, /Add \d+ products? to/);
+  // lines imported before this existed: button adds them
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', product: 'Flower rattle & teether', sku: 'FRT 001', qty: 5040 });
+  const po2 = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
+  assert.match(po2.text, /Add 1 product to Shenzhen Kean(?:'|&#39;)s product list/);
+  const add = await req(base, 'POST', '/admin/orders/catalog', { cookie, form: { supplier: k.id, po: 'PO900018' } });
+  assert.equal(add.status, 303); assert.ok(db.tables.products.some((p) => p.product_name === 'Flower rattle & teether' && p.supplier_sku === 'FRT 001')); assert.match(po.text, /Read products, quantities and packing with AI/);
   // 3. the next PO for the same item gets its volume from the remembered packing
   answer = { orders: [{ po: 'PO900030', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 960 }] };
   const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('pos', 'PO900030'); fd.append('kind', 'PO'); fd.append('read', '1');
   fd.append('file', new Blob([Buffer.from('%PDF-1.4 x')], { type: 'application/pdf' }), 'PO900030.pdf');
   await fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
   const next = db.tables.plan_orders.find((o) => o.po === 'PO900030');
-  assert.equal(next.cartons, 20); assert.equal(next.cbm, 1.25);
+  assert.equal(next.cartons, 20); assert.equal(next.cbm, 1.3);
   // 4. editing the quantity recalculates the volume
-  const ef = new FormData(); for (const [kk, v] of Object.entries({ product: 'Silicone Suction Plate', qty: '1920', cbm: '1.25', units_per_carton: '48', carton_size: '52 x 40 x 30', carton_gw_kg: '11.5', back: '/admin/logistics/planning' })) ef.append(kk, v);
+  const ef = new FormData(); for (const [kk, v] of Object.entries({ product: 'Silicone Suction Plate', qty: '1920', cbm: '1.3', units_per_carton: '48', carton_size: '52 x 40 x 30', carton_gw_kg: '11.5', back: '/admin/logistics/planning' })) ef.append(kk, v);
   await fetch(`${base}/admin/logistics/planning/${next.id}/edit`, { method: 'POST', body: ef, headers: { cookie }, redirect: 'manual' });
   const after = db.tables.plan_orders.find((o) => o.id === next.id);
   assert.equal(after.cartons, 40); assert.equal(after.cbm, 2.5);
