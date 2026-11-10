@@ -376,6 +376,24 @@
     sync();
   })();
 
+  // Request log: "Show more" on long texts, and reload once background AI summaries are ready.
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-more]'); if (!b) return;
+    var box = b.previousElementSibling; if (!box) return;
+    var open = box.classList.toggle('clamp') === false; b.textContent = open ? 'Show less' : 'Show more';
+  });
+  (function () {
+    var w = document.querySelector('[data-ai-wait]'); if (!w || !window.fetch) return;
+    var tries = 0;
+    var tick = function () {
+      tries++;
+      fetch(w.getAttribute('data-ai-wait'), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.pending) { if (j.missing === 0) location.reload(); else w.textContent = 'Some summaries could not be made'; return; }
+        if (tries < 30) setTimeout(tick, 3000); else w.textContent = 'Summaries are taking long: refresh later';
+      }).catch(function () {});
+    };
+    setTimeout(tick, 2500);
+  })();
   // Message times in the viewer's own time zone; attachment previews in a popup.
   (function () {
     var lang = document.documentElement.lang === 'zh-CN' ? 'zh-CN' : 'en-US';

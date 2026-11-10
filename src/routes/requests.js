@@ -16,6 +16,9 @@ const { sendEmail, requestEmail, REQUEST_ITEMS, emailConfigured } = require('../
 const { guard } = require('./admin');
 const tg = require('../telegram');
 const C = require('../crm');
+const AI = require('../ai');
+const RS = require('../req-summary');
+const when = (iso) => { if (!iso) return ''; let txt = iso; try { txt = new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: process.env.BUSINESS_TZ || 'America/Los_Angeles' }); } catch {} return html`<time class="sub" datetime="${iso}" data-local>${txt}</time>`; };
 
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const STATUSES = ['Sent', 'Replied', 'Complete', 'Closed'];
@@ -170,6 +173,27 @@ module.exports = function requestRoutes(router, { db, config }) {
       (r.product_ids || []).length ? db.list('products', { filters: { id: ['in', r.product_ids] } }) : [],
     ]);
     const urls = await db.storage.signedUrls(msgs.flatMap((m) => (m.attachments || []).map((a) => a.path)), 3600);
+    const aiPending = RS.ensureSummaries(db, msgs, { request: r, supplierName: supplier?.name });
+    const KIND = { out: ['Sent to supplier', 'out'], in: ['Reply from supplier', 'in'], note: ['Internal note', 'note'] };
+    const files = (m) => (m.attachments || []).length ? html`<div class="clog-files">${m.attachments.map((a) => (a.path && urls[a.path] ? html`<a class="att-chip" href="${urls[a.path]}" download="${a.filename}">📎 ${a.filename}</a>` : html`<span class="att-chip off">📎 ${a.filename}${a.error ? ` (${a.error})` : ''}</span>`))}</div>` : '';
+    const fallback = (t) => { const paras = String(t || '').trim().split(/\n{2,}/).filter(Boolean); return html`<div class="clog-text ${String(t || '').length > 480 ? 'clamp' : ''}">${paras.map((x) => html`<p>${x}</p>`)}</div>${String(t || '').length > 480 ? html`<button type="button" class="link small" data-more>Show more</button>` : ''}`; };
+    const logEntry = (m) => {
+      const [label, cls] = KIND[m.direction] || KIND.note; const a = m.ai;
+      const from = m.direction === 'out' ? (m.from_email || process.env.EMAIL_FROM || 'Lulyboo') : m.from_email || (m.direction === 'note' ? m.author || 'Lulyboo' : supplier?.name || 'Supplier');
+      const to = ((m.to_emails || []).length ? m.to_emails : m.direction === 'out' ? [...new Set([...(r.to_emails || []), ...(r.contact && /@/.test(r.contact) ? [r.contact] : [])])] : m.direction === 'in' ? ['Lulyboo'] : []).join(', ');
+      const original = m.original || m.body || '';
+      return html`<li class="clog-item ${cls}"><div class="clog-head"><span class="clog-kind ${cls}">${label}</span>${when(m.created_at)}${m.author && m.direction === 'note' ? html`<span class="sub">by ${m.author}</span>` : ''}${a ? html`<span class="ai-badge" title="Summarised by AI from the original">✨ AI summary</span>` : ''}</div>
+        <h3 class="clog-title">${a?.headline || m.subject || label}</h3>
+        ${a ? html`${a.summary ? html`<p class="clog-sum">${a.summary}</p>` : ''}
+          ${(a.facts || []).length ? html`<dl class="clog-facts">${a.facts.map((f) => html`<div><dt>${f.label}</dt><dd>${f.value}</dd></div>`)}</dl>` : ''}
+          ${(a.sections || []).length ? html`<div class="clog-secs">${a.sections.filter((x) => (x.items || []).length).map((x) => html`<section><h4>${x.title}</h4><ul>${x.items.map((v) => html`<li>${v}</li>`)}</ul></section>`)}</div>` : ''}
+          ${(a.open_questions || []).length || (a.commitments || []).length ? html`<ul class="em-points">${(a.open_questions || []).map((v) => html`<li><span class="em-tag q">Open question</span>${v}</li>`)}${(a.commitments || []).map((v) => html`<li><span class="em-tag c">Commitment</span>${v}</li>`)}</ul>` : ''}` : fallback(m.body)}
+        ${files(m)}
+        ${original ? html`<details class="clog-orig"><summary>${m.direction === 'note' ? 'Show full note' : 'Show original email'}${a?.language && a.language !== 'English' ? ` (${a.language})` : ''}</summary>
+          <dl class="mail-head">${m.direction !== 'note' ? html`<div><dt>From</dt><dd>${from}</dd></div><div><dt>To</dt><dd>${to || '—'}</dd></div>` : ''}${m.subject ? html`<div><dt>Subject</dt><dd>${m.subject}</dd></div>` : ''}<div><dt>Date</dt><dd>${when(m.created_at)}</dd></div></dl>
+          <pre>${original}</pre>
+          ${AI.enabled() && original.length >= 60 ? html`<form method="post" action="/admin/requests/${r.id}/messages/${m.id}/summarize" class="inline"><button class="link small">${a ? 'Summarise again' : 'Summarise with AI'}</button></form>` : ''}</details>` : ''}</li>`;
+    };
     const attLinks = (m) => (m.attachments || []).length ? html`<div class="sub">Attachments: ${m.attachments.map((a) => (a.path && urls[a.path] ? html`<a href="${urls[a.path]}" download="${a.filename}">${a.filename}</a> ` : html`${a.filename}${a.error ? ` (${a.error})` : ''} `))}</div>` : '';
     res.html(page({
       title: r.ref, nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
@@ -205,16 +229,24 @@ module.exports = function requestRoutes(router, { db, config }) {
               <ul class="dz-list" data-multilist></ul><p class="dz-note" data-multinote></p></div>
             <div class="span2"><button class="btn small">Save to log</button></div></form></section>
       </div>
-      <section class="card"><h2>Communication log</h2>
-        ${msgs.length ? html`<ul class="feed req-log">${msgs.map((m) => html`<li class="${m.direction}"><span class="date">${fmt.date(m.created_at)}</span> <b>${m.direction === 'out' ? 'Sent to supplier' : m.direction === 'in' ? `Reply${m.from_email ? ` from ${m.from_email}` : ''}` : 'Note'}</b>${m.author ? html` <span class="sub">by ${m.author}</span>` : ''}
-          ${m.subject ? html`<div class="sub">${m.subject}</div>` : ''}
-          <div class="req-body">${m.body || ''}</div>
-          ${m.original && m.original !== m.body ? html`<details class="orig"><summary>Show original message</summary><pre>${m.original}</pre></details>` : ''}
-          ${attLinks(m)}</li>`)}</ul>` : html`<p class="muted">Nothing logged yet.</p>`}
+      <section class="card"><div class="head-row"><h2>Communication log</h2>${aiPending ? html`<span class="ai-wait" data-ai-wait="/admin/requests/${r.id}/ai-status">✨ Preparing AI summaries…</span>` : ''}</div>
+        ${RS.isColumnMissing() ? html`<p class="flash warn">AI summaries can't be saved yet: run the request-log SQL in Supabase (<code>alter table public.info_request_messages add column if not exists ai jsonb;</code>).</p>` : ''}
+        ${msgs.length ? html`<ol class="clog">${msgs.map((m) => logEntry(m)).reverse()}</ol>` : html`<p class="muted">Nothing logged yet.</p>`}
       </section>`,
     }));
   }));
 
+  router.get('/admin/requests/:id/ai-status', G(async (req, res) => {
+    const msgs = await db.list('info_request_messages', { filters: { request_id: req.params.id } });
+    res.json({ pending: RS.pendingCount(msgs), missing: msgs.filter(RS.eligible).length });
+  }));
+  router.post('/admin/requests/:id/messages/:mid/summarize', G(async (req, res) => {
+    const r = await db.get('info_requests', req.params.id); const m = await db.get('info_request_messages', req.params.mid);
+    if (!r || !m || m.request_id !== r.id) throw new HttpError(404, 'Message not found');
+    try { const s = r.supplier_id ? await db.get('suppliers', r.supplier_id) : null; await RS.summarizeMessage(db, m, { request: r, supplierName: s?.name }); flash(res, 'ok', 'AI summary updated'); }
+    catch (e) { flash(res, 'error', `AI summary failed: ${String(e.message).slice(0, 200)}`); }
+    res.redirect(`/admin/requests/${r.id}`);
+  }));
   router.post('/admin/requests/:id/status', G(async (req, res) => {
     const { fields } = await parseForm(req);
     if (!STATUSES.includes(fields.status)) throw new HttpError(400, 'Invalid status');

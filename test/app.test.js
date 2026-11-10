@@ -983,12 +983,12 @@ test('integration API: Hermes records RFQs (write-only), creates new suppliers, 
   const detail2 = await req(base, 'GET', `/admin/requests/${j1.request_id}`, { cookie });
   assert.match(detail2.text, /as RFQ via telegram to a@b\.example/i);
   assert.doesNotMatch(detail2.text, /to a@b\.example to a@b\.example/i);
-  // Original message: stored, shown behind "Show original message", escaped; summary-only entries show no toggle
-  assert.doesNotMatch(detail2.text, /Show original message/);
+  // Original email: always available behind a toggle, with the addresses; stored originals are shown verbatim and escaped
+  assert.match(detail2.text, /Show original email/); assert.match(detail2.text, /<dt>To<\/dt><dd>[^<]+@[^<]+<\/dd>/);
   const j3 = await (await call({ supplier: { name: 'Orig Co' }, title: 'RFQ orig', message: 'Short summary', original_message: 'From: a\nSubject: Hi <b>x</b>\n\nFull verbatim text', external_id: 'o-1' })).json();
   assert.equal(db.tables.info_request_messages.find((m) => m.request_id === j3.request_id).original.includes('Full verbatim text'), true);
   const d3 = await req(base, 'GET', `/admin/requests/${j3.request_id}`, { cookie });
-  assert.match(d3.text, /Show original message/); assert.match(d3.text, /Full verbatim text/); assert.match(d3.text, /Hi &lt;b&gt;x&lt;\/b&gt;/);
+  assert.match(d3.text, /Show original email/); assert.match(d3.text, /Full verbatim text/); assert.match(d3.text, /Hi &lt;b&gt;x&lt;\/b&gt;/);
 });
 
 test('integration API safeguards: audit log, key rotation, rate limits, bad-key throttle, supplier review flag', async (t) => {
@@ -1869,4 +1869,33 @@ test('development threads by email: supplier reply is summarised, posted with na
   assert.match(pg.text, /What is the target price\?/);
   assert.match(pg.text, /Original email \(Chinese\)/);
   assert.ok(pg.text.includes(addr)); assert.ok(pg.text.includes(`[${code}]`));
+});
+
+test('request log: AI summary is made in the background and shown first; original email with addresses on demand', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; let calls = 0;
+  global.fetch = async (url, opts) => String(url).includes('api.anthropic.com')
+    ? (calls++, new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_message_summary', input: { headline: 'RFQ for padded potty seat, target $1.50-2.50 FOB', summary: 'Asks for real prices.', facts: [{ label: 'Target price', value: 'USD 1.50-2.50 FOB' }], sections: [{ title: 'Asked to quote', items: ['FOB at 1,000 / 3,000 / 5,000 / 10,000 pcs'] }], open_questions: ['Existing tooling or new moulds?'] } }] }), { status: 200 }))
+    : realFetch(url, opts);
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Gica Baby' });
+  const r = await db.insert('info_requests', { supplier_id: s.id, ref: 'LB-1100', kind: 'rfq', subject: 'RFQ: Padded potty seat', status: 'Sent' });
+  const long = 'RFQ with product photo for a padded potty training seat: soft padded cushion inside a hard PP shell, two large curved side handles, raised front splash guard. Stated target up to USD 2.50 per piece FOB.';
+  await db.insert('info_request_messages', { request_id: r.id, direction: 'out', to_emails: ['sales@gica.example'], subject: 'RFQ: Padded potty seat', body: long });
+  const first = await req(base, 'GET', `/admin/requests/${r.id}`, { cookie });
+  assert.match(first.text, /Preparing AI summaries/);
+  assert.match(first.text, /soft padded cushion/);              // readable text meanwhile
+  for (let i = 0; i < 50 && !db.tables.info_request_messages[0].ai; i++) await new Promise((x) => setTimeout(x, 20));
+  const st = await (await fetch(`${base}/admin/requests/${r.id}/ai-status`, { headers: { cookie } })).json();
+  assert.deepEqual(st, { pending: 0, missing: 0 });
+  const pg = await req(base, 'GET', `/admin/requests/${r.id}`, { cookie });
+  assert.doesNotMatch(pg.text, /Preparing AI summaries/);
+  assert.match(pg.text, /RFQ for padded potty seat, target \$1\.50-2\.50 FOB/);
+  assert.match(pg.text, /<dt>Target price<\/dt><dd>USD 1\.50-2\.50 FOB<\/dd>/);
+  assert.match(pg.text, /Existing tooling or new moulds\?/);
+  assert.match(pg.text, /Show original email/); assert.match(pg.text, /<dt>To<\/dt><dd>sales@gica\.example<\/dd>/);
+  assert.equal(calls, 1);
 });

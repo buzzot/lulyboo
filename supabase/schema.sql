@@ -659,3 +659,6 @@ notify pgrst, 'reload schema';
 -- Development threads by email (run once): where a message came from and the original email
 alter table public.dev_messages add column if not exists source text;   -- null = portal, 'email'
 alter table public.dev_messages add column if not exists email jsonb;   -- {from, subject, message_id, text, original, summarized, language, questions, commitments}
+
+-- Request log AI summaries (run once)
+alter table public.info_request_messages add column if not exists ai jsonb;
