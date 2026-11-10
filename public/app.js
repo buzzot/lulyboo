@@ -1005,3 +1005,36 @@
     }
   })();
 })();
+
+// Request log: "Draft reply with AI" → popup with To / CC / Subject / editable AI message.
+(function () {
+  var dlg = document.querySelector('[data-reply-modal]'); if (!dlg) return;
+  var url = null;
+  var $ = function (s) { return dlg.querySelector(s); };
+  var load = function () {
+    $('[data-reply-loading]').hidden = false; $('[data-reply-fields]').hidden = true; $('[data-reply-error]').hidden = true;
+    fetch(url, { method: 'POST', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      $('[data-reply-loading]').hidden = true;
+      if (j.error) { var e = $('[data-reply-error]'); e.textContent = j.error; e.hidden = false; return; }
+      ['to', 'cc', 'subject', 'body'].forEach(function (k) { $('[data-f="' + k + '"]').value = j[k] || ''; });
+      $('[data-reply-ctx]').textContent = j.replying_to ? 'Answering ' + (j.replying_to.from || 'the supplier') + ' · ' + new Date(j.replying_to.at).toLocaleString() : '';
+      var pts = j.open_points || []; var list = $('[data-reply-list]'); list.innerHTML = '';
+      pts.forEach(function (p) { var li = document.createElement('li'); li.textContent = p; list.appendChild(li); });
+      $('[data-reply-points]').hidden = !pts.length;
+      $('[data-reply-fields]').hidden = false;
+    }).catch(function () { $('[data-reply-loading]').hidden = true; var e = $('[data-reply-error]'); e.textContent = 'Could not reach the server. Try again.'; e.hidden = false; });
+  };
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-draft-reply]'); if (!b) return;
+    url = b.getAttribute('data-draft-reply'); if (dlg.showModal) dlg.showModal(); load();
+  });
+  dlg.addEventListener('click', function (e) {
+    if (e.target.closest('[data-reply-close]')) dlg.close();
+    else if (e.target.closest('[data-reply-again]')) load();
+    else if (e.target.closest('[data-reply-copy]')) {
+      var t = 'To: ' + $('[data-f="to"]').value + '\nSubject: ' + $('[data-f="subject"]').value + '\n\n' + $('[data-f="body"]').value;
+      var btn = e.target.closest('[data-reply-copy]');
+      (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy text'; }, 1500); }).catch(function () {});
+    }
+  });
+})();

@@ -13,6 +13,7 @@
 //   2. Forwarder schedules (Excel / CSV / PDF / photo / email text), read by AI. Upload on the page, or forward the
 //      email to schedules@<inbound domain>. This covers COSCO, OOCL, Matson, SM Line and the others without an API.
 
+const crypto = require('node:crypto');
 const AI = require('./ai');
 const { parseXlsx, parseCsv, decodeText } = require('./importer');
 
@@ -49,12 +50,14 @@ function carrierName(s) {
   return v.slice(0, 40);
 }
 
-const API_CARRIERS = [['CMDU', 'CMA CGM'], ['EGLV', 'Evergreen'], ['MAEU', 'Maersk'], ['MSCU', 'MSC'], ['HLCU', 'Hapag-Lloyd'], ['ONEY', 'ONE'], ['ZIMU', 'ZIM']];
+const API_CARRIERS = [['COSU', 'COSCO'], ['CMDU', 'CMA CGM'], ['EGLV', 'Evergreen'], ['MAEU', 'Maersk'], ['MSCU', 'MSC'], ['HLCU', 'Hapag-Lloyd'], ['ONEY', 'ONE'], ['ZIMU', 'ZIM']];
 const env = (k) => String(process.env[k] || '').trim();
 function apiSources() {
   return API_CARRIERS.map(([code, name]) => {
     const p = `DCSA_${code}_`;
     // Maersk has its own Point-to-Point Schedules API (api.maersk.com/products/ocean-products, header Consumer-Key).
+    // COSCO open platform (cop.lines.coscoshipping.com): HMAC-signed, its own schedule format.
+    if (code === 'COSU') return { code, name, kind: 'cosco', url: env('COSCO_API_URL') || 'https://api.lines.coscoshipping.com/service/info/schedule', configured: !!(env('COSCO_API_KEY') && env('COSCO_SECRET_KEY')), envHint: 'COSCO_API_KEY + COSCO_SECRET_KEY' };
     if (code === 'MAEU' && env('MAERSK_CONSUMER_KEY') && !env(`${p}URL`)) return { code, name, kind: 'maersk', url: env('MAERSK_PRODUCTS_URL') || 'https://api.maersk.com/products/ocean-products', configured: true };
     const url = env(`${p}URL`);
     const oauth = env(`${p}TOKEN_URL`) && env(`${p}CLIENT_ID`) && env(`${p}CLIENT_SECRET`);
@@ -161,8 +164,72 @@ async function fetchMaersk(src, origin, destination, { from, to }) {
   return parseMaersk(j, { origin, destination });
 }
 
+// ── COSCO open platform: /service/info/schedule ────────────────────────────
+// Cities are given as "City,City,Province,Country,UNLOCODE" plus COSCO's city id (uuid). The ids come from
+// COSCO_CITY_IDS (JSON, e.g. {"CNNGB":"7388…"}) or the defaults below.
+const COSCO_CITY = {
+  CNNGB: 'Ningbo,Ningbo,Zhejiang,China,CNNGB', CNSHA: 'Shanghai,Shanghai,Shanghai,China,CNSHA', CNYTN: 'Yantian,Shenzhen,Guangdong,China,CNYTN',
+  CNCAN: 'Guangzhou,Guangzhou,Guangdong,China,CNCAN', USLGB: 'Long Beach,Long Beach,CA,United States,USLGB', USLAX: 'Los Angeles,Los Angeles,CA,United States,USLAX',
+};
+const COSCO_CITY_ID = { CNSHA: '738872886232873' };   // from COSCO's own documentation
+function coscoCityIds() { let x = {}; try { x = JSON.parse(env('COSCO_CITY_IDS') || '{}'); } catch { /* ignore */ } return { ...COSCO_CITY_ID, ...x }; }
+let coscoLineMode = null;   // 'path' | 'url': what the gateway signs as the request line (learned on first success)
+function coscoHeaders(body, requestLine) {
+  const date = new Date().toUTCString();   // "Tue, 23 Oct 2018 12:58:39 GMT"
+  const md5 = crypto.createHash('md5').update(crypto.randomUUID()).digest('hex');
+  const digest = `SHA-256=${crypto.createHash('sha256').update(body).digest('base64')}`;
+  const sig = crypto.createHmac('sha1', env('COSCO_SECRET_KEY')).update(`X-Coscon-Date: ${date}\nX-Coscon-Digest: ${digest}\nX-Coscon-Content-Md5: ${md5}\n${requestLine}`).digest('base64');
+  return {
+    'Content-Type': 'application/json', Accept: 'application/json',
+    'X-Coscon-Date': date, 'X-Coscon-Digest': digest, 'X-Coscon-Content-Md5': md5, 'X-Coscon-Hmac': md5,
+    'X-Coscon-Authorization': `hmac username="${env('COSCO_API_KEY')}",algorithm="hmac-sha1",headers="X-Coscon-Date X-Coscon-Digest X-Coscon-Content-Md5 request-line",signature="${sig}"`,
+  };
+}
+function parseCosco(json, { origin, destination }) {
+  const routes = json?.data?.content?.data || [];
+  const out = [];
+  for (const r of routes) {
+    const legs = r.schedules || [];
+    if (!legs.length) continue;
+    const first = legs[0]; const last = legs[legs.length - 1];
+    const main = legs.find((l) => DESTS.some((d) => d.alias.test(l.pod || ''))) || last;
+    const etd = isoDay(first.etd); const eta = isoDay(last.eta);
+    if (!etd) continue;
+    const tt = Number(r.transitTime || last.transitTime);
+    out.push({
+      carrier: 'COSCO', origin: portCode(r.firstPol || first.pol) || origin, destination: portCode(r.lastPod || last.pod) || destination, etd, eta,
+      transit_days: Number.isFinite(tt) && tt > 0 ? Math.round(tt) : eta ? Math.round((Date.parse(eta) - Date.parse(etd)) / 864e5) : null,
+      vessel: main.vessel || null, voyage: main.extVoyage || main.newExtVoyage || (main.voyage ? `${main.voyage}${main.dir || ''}` : null), service: main.service || null,
+      direct: legs.length <= 1, via: legs.slice(0, -1).map((l) => l.pod).filter(Boolean).join(', ') || null,
+      cy_cutoff: isoDay(String(first.cutOff || '').replace(' ', 'T')), doc_cutoff: isoDay(String(first.siCutoff || '').replace(' ', 'T')),
+    });
+  }
+  return out;
+}
+async function fetchCosco(src, origin, destination, { from }) {
+  const ids = coscoCityIds();
+  const miss = [origin, destination].filter((c) => !ids[c]);
+  if (miss.length) throw new Error(`COSCO city id missing for ${miss.map((c) => PORT[c]?.name || c).join(', ')}: add it to COSCO_CITY_IDS`);
+  const body = Buffer.from(JSON.stringify({ pickup: 'B', delivery: 'B', estimateDate: 'D', fromDate: from, dateLength: 8,
+    originCity: COSCO_CITY[origin], originCityUuid: ids[origin], destinationCity: COSCO_CITY[destination], destinationCityUuid: ids[destination] }));
+  const u = new URL(src.url);
+  const tryMode = async (mode) => {
+    const line = `POST ${mode === 'url' ? u.href : u.pathname + u.search} HTTP/1.1`;
+    return fetch(u, { method: 'POST', headers: coscoHeaders(body, line), body, signal: AbortSignal.timeout(30000) });
+  };
+  let res = await tryMode(coscoLineMode || 'path');
+  if (res.status === 401 && !coscoLineMode) { const alt = await tryMode('url'); if (alt.ok) { coscoLineMode = 'url'; res = alt; } }
+  else if (res.ok && !coscoLineMode) coscoLineMode = 'path';
+  const txt = await res.text();
+  if (!res.ok) throw new Error(`COSCO ${res.status}: ${txt.slice(0, 200)}`);
+  let j; try { j = JSON.parse(txt); } catch { throw new Error('COSCO: answer was not JSON'); }
+  if (j.code && Number(j.code) !== 0) throw new Error(`COSCO error ${j.code}: ${String(j.message || '').slice(0, 160)}`);
+  return parseCosco(j, { origin, destination });
+}
+
 async function fetchLane(src, origin, destination, { from, to }) {
   if (src.kind === 'maersk') return fetchMaersk(src, origin, destination, { from, to });
+  if (src.kind === 'cosco') return fetchCosco(src, origin, destination, { from, to });
   const u = new URL(src.url);
   u.searchParams.set('placeOfReceipt', origin); u.searchParams.set('placeOfDelivery', destination);
   u.searchParams.set('departureStartDate', from); u.searchParams.set('departureEndDate', to);
@@ -321,4 +388,4 @@ async function handleScheduleEmail({ db, config, from, subject = '', text = '', 
   return { ok: true, batch, added, updated, results };
 }
 
-module.exports = { parseMaersk, ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };
+module.exports = { parseCosco, coscoHeaders, parseMaersk, ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };

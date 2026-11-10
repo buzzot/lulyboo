@@ -2052,3 +2052,80 @@ test('RFQ API: reserve a reference first so the email subject carries it', async
   const plain = await call('/api/v1/rfq', { supplier: sup, title: 'RFQ: Bath seat' });
   assert.equal(plain.status, 201); assert.notEqual(plain.j.ref, r1.j.ref);
 });
+
+test('sailing schedules: COSCO open platform (HMAC-signed) adapter', async (t) => {
+  const SC = require('../src/schedules');
+  const crypto = require('node:crypto');
+  process.env.COSCO_API_KEY = 'ak'; process.env.COSCO_SECRET_KEY = 'sk';
+  process.env.COSCO_CITY_IDS = JSON.stringify({ CNNGB: '111', CNYTN: '222', CNCAN: '333', USLGB: '444', USLAX: '555' });
+  const realFetch = global.fetch; const seen = [];
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  global.fetch = async (url, opts = {}) => {
+    if (!String(url).startsWith('https://api.lines.coscoshipping.com/')) return realFetch(url, opts);
+    const h = opts.headers; const body = JSON.parse(opts.body.toString());
+    // verify the signature like the gateway would (path request-line)
+    const expect = crypto.createHmac('sha1', 'sk').update(`X-Coscon-Date: ${h['X-Coscon-Date']}\nX-Coscon-Digest: ${h['X-Coscon-Digest']}\nX-Coscon-Content-Md5: ${h['X-Coscon-Content-Md5']}\nPOST /service/info/schedule HTTP/1.1`).digest('base64');
+    if (!h['X-Coscon-Authorization'].includes(`signature="${expect}"`)) return new Response('{"message":"bad sig"}', { status: 401 });
+    assert.equal(h['X-Coscon-Digest'], `SHA-256=${crypto.createHash('sha256').update(opts.body).digest('base64')}`);
+    seen.push(body);
+    if (body.originCityUuid !== '111' || body.destinationCityUuid !== '444') return new Response(JSON.stringify({ code: 0, message: 'success', data: { content: { conditions: {} } } }), { status: 200 });
+    return new Response(JSON.stringify({ code: 0, message: 'success', data: { content: { shortestTransitTime: '16', data: [
+      { id: '1', firstPol: 'Ningbo', lastPod: 'Long Beach', transitTime: '16', schedules: [{ service: 'AAC', vessel: 'COSCO ITALY', voyage: '123', dir: 'E', extVoyage: '123E', cutOff: `${d(3)} 12:00`, pol: 'Ningbo', etd: d(5), pod: 'Long Beach', eta: d(21), transitTime: '16', siCutoff: `${d(2)} 17:00` }] },
+      { id: '2', firstPol: 'Ningbo', lastPod: 'Long Beach', transitTime: '24', schedules: [{ service: 'X1', vessel: 'FEEDER A', extVoyage: '01N', pol: 'Ningbo', etd: d(6), pod: 'Busan', eta: d(8) }, { service: 'PSW', vessel: 'COSCO SPAIN', extVoyage: '77E', pol: 'Busan', etd: d(9), pod: 'Long Beach', eta: d(30) }] },
+    ] } } }), { status: 200 });
+  };
+  t.after(() => { global.fetch = realFetch; for (const k of ['COSCO_API_KEY', 'COSCO_SECRET_KEY', 'COSCO_CITY_IDS']) delete process.env[k]; });
+  const db = seedDb();
+  assert.equal(SC.apiSources().find((x) => x.code === 'COSU').configured, true);
+  const r = await SC.runRefresh({ db });
+  assert.equal(r.errors.length, 0, r.errors.join(' | '));
+  assert.equal(seen.length, 8); assert.equal(seen[0].originCity, 'Ningbo,Ningbo,Zhejiang,China,CNNGB'); assert.equal(seen[0].dateLength, 8);
+  const rows = db.tables.sailings.sort((a, b) => a.etd.localeCompare(b.etd));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].carrier, 'COSCO'); assert.equal(rows[0].vessel, 'COSCO ITALY'); assert.equal(rows[0].voyage, '123E'); assert.equal(rows[0].service, 'AAC');
+  assert.equal(rows[0].transit_days, 16); assert.equal(rows[0].cy_cutoff, d(3)); assert.equal(rows[0].doc_cutoff, d(2)); assert.equal(rows[0].direct, true);
+  assert.equal(rows[1].direct, false); assert.equal(rows[1].via, 'Busan'); assert.equal(rows[1].vessel, 'COSCO SPAIN'); assert.equal(rows[1].eta, d(30));
+});
+
+test('request: AI draft reply popup → send logs our reply with the reference in the subject', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test'; process.env.RESEND_API_KEY = 're_test'; process.env.REQUEST_CC = 'marsel@lulyboo.com';
+  const realFetch = global.fetch; let prompt = ''; const sent = [];
+  global.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.includes('api.anthropic.com')) {
+      prompt = JSON.stringify(JSON.parse(opts.body).messages);
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'draft_reply', input: { subject_topic: 'Padded potty seat quotation', body: 'Hi Elina,\n\nThank you. Packaging: [polybag or printed box?]\n\n1. Price at 1,000 / 3,000 pcs\n\nBest regards,\n[Your name]', open_points: ['Packaging choice', 'Your name'] } }] }), { status: 200 });
+    }
+    if (u.includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response('{"id":"em_9"}', { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; for (const k of ['ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'REQUEST_CC']) delete process.env[k]; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Taizhou Xinhaosheng', contact_name: 'Elina' });
+  const r = await db.insert('info_requests', { ref: 'LB-1031', supplier_id: s.id, kind: 'rfq', subject: 'RFQ: Padded potty seat', status: 'Replied', to_emails: ['elina@wlhaosheng.example'] });
+  await db.insert('info_request_messages', { request_id: r.id, direction: 'out', subject: 'RFQ: Padded potty seat', body: 'Please quote FOB at 1,000 / 3,000 pcs.', created_at: '2026-11-08T10:00:00Z' });
+  await db.insert('info_request_messages', { request_id: r.id, direction: 'in', from_email: 'elina <elina@wlhaosheng.example>', subject: 'Re: RFQ: Padded potty seat', body: 'We need your packaging requirement.', original: 'Hello, we need your packaging requirement. MOQ 2000pcs.', created_at: '2026-11-10T06:07:00Z',
+    ai: { headline: 'Factory asks packaging', summary: 'Asks packaging.', open_questions: ['Packaging?'], sections: [] } });
+  const pg = await req(base, 'GET', `/admin/requests/${r.id}`, { cookie });
+  assert.match(pg.text, /data-draft-reply="\/admin\/requests\/[^"]+\/draft-reply"/); assert.match(pg.text, /data-reply-modal/);
+  const j = await (await fetch(`${base}/admin/requests/${r.id}/draft-reply`, { method: 'POST', headers: { cookie } })).json();
+  assert.equal(j.to, 'elina@wlhaosheng.example'); assert.equal(j.cc, 'marsel@lulyboo.com');
+  assert.equal(j.subject, 'Re: [LB-1031] RFQ: Padded potty seat');
+  assert.match(j.body, /Hi Elina/); assert.deepEqual(j.open_points, ['Packaging choice', 'Your name']);
+  assert.match(prompt, /MOQ 2000pcs/); assert.match(prompt, /LATEST, reply to this/); assert.match(prompt, /Packaging\?/);   // original + AI summary both used
+  // Placeholders left → refused
+  const post = (body) => { const fd = new FormData(); for (const [k, v] of Object.entries(body)) fd.append(k, v); return fetch(`${base}/admin/requests/${r.id}/reply`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
+  await post({ to: j.to, cc: j.cc, subject: j.subject, body: j.body });
+  assert.equal(sent.length, 0);
+  const fd = new FormData();
+  for (const [k, v] of Object.entries({ to: j.to, cc: j.cc, subject: j.subject, body: 'Hi Elina,\n\nPackaging: printed box.\n\nBest regards,\nMarsel' })) fd.append(k, v);
+  fd.append('files', new Blob(['%PDF-1.4 spec'], { type: 'application/pdf' }), 'packaging-spec.pdf');
+  const ok = await fetch(`${base}/admin/requests/${r.id}/reply`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  assert.equal(ok.status, 303);
+  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, ['elina@wlhaosheng.example']); assert.deepEqual(sent[0].cc, ['marsel@lulyboo.com']);
+  assert.equal(sent[0].subject, 'Re: [LB-1031] RFQ: Padded potty seat'); assert.equal(sent[0].attachments[0].filename, 'packaging-spec.pdf');
+  const out = db.tables.info_request_messages.filter((m) => m.direction === 'out');
+  assert.equal(out.length, 2); assert.match(out[1].body, /printed box/); assert.equal(out[1].attachments.length, 1);
+});

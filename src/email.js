@@ -8,7 +8,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 const emailConfigured = () => !!process.env.RESEND_API_KEY;
 
-async function sendEmail(config, { to, subject, text, html, cc, replyTo }) {
+async function sendEmail(config, { to, subject, text, html, cc, replyTo, attachments }) {
   const key = process.env.RESEND_API_KEY;
   if (!key) {
     if (process.env.EMAIL_DEV_LOG === 'true') {
@@ -22,7 +22,7 @@ async function sendEmail(config, { to, subject, text, html, cc, replyTo }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM || 'Lulyboo <onboarding@resend.dev>', to: [].concat(to), cc: cc && [].concat(cc).length ? [].concat(cc) : undefined, subject, text, html, reply_to: replyTo || process.env.EMAIL_REPLY_TO || undefined }),
+    body: JSON.stringify({ from: process.env.EMAIL_FROM || 'Lulyboo <onboarding@resend.dev>', to: [].concat(to), cc: cc && [].concat(cc).length ? [].concat(cc) : undefined, subject, text, html, reply_to: replyTo || process.env.EMAIL_REPLY_TO || undefined, attachments: attachments && attachments.length ? attachments.map((a) => ({ filename: a.filename, content: Buffer.from(a.content).toString('base64') })) : undefined }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');

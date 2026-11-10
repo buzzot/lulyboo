@@ -208,6 +208,7 @@ module.exports = function requestRoutes(router, { db, config }) {
     const fallback = (t) => { const paras = String(t || '').trim().split(/\n{2,}/).filter(Boolean); return html`<div class="clog-text ${String(t || '').length > 480 ? 'clamp' : ''}">${paras.map((x) => html`<p>${x}</p>`)}</div>${String(t || '').length > 480 ? html`<button type="button" class="link small" data-more>Show more</button>` : ''}`; };
     // One odd message must never break the whole page: fall back to its plain text.
     const safeEntry = (m) => { try { return logEntry(m); } catch (e) { console.error('Log entry render failed', m.id, e.message); return html`<li class="clog-item"><div class="clog-head"><span class="clog-kind">${m.direction || 'note'}</span>${when(m.created_at)}</div>${fallback(m.original || m.body)}</li>`; } };
+    const latestIn = [...msgs].reverse().find((m) => m.direction === 'in');
     const logEntry = (m) => {
       const [label, cls] = KIND[m.direction] || KIND.note; const a = RS.normalize(m.ai);
       const from = m.direction === 'out' ? (m.from_email || process.env.EMAIL_FROM || 'Lulyboo') : m.from_email || (m.direction === 'note' ? m.author || 'Lulyboo' : supplier?.name || 'Supplier');
@@ -216,6 +217,7 @@ module.exports = function requestRoutes(router, { db, config }) {
       const original = m.original || m.body || '';
       return html`<li class="clog-item ${cls}"><div class="clog-head"><span class="clog-kind ${cls}">${label}</span>${when(m.created_at)}${m.author && m.direction === 'note' ? html`<span class="sub">by ${m.author}</span>` : ''}${a ? html`<span class="ai-badge" title="Summarised by AI from the original">✨ AI summary</span>` : ''}</div>
         <h3 class="clog-title">${a?.headline || m.subject || label}</h3>
+        ${latestIn && m.id === latestIn.id ? html`<button type="button" class="btn small rp-open" data-draft-reply="/admin/requests/${r.id}/draft-reply" ${AI.enabled() ? '' : raw('disabled title="Set ANTHROPIC_API_KEY to draft replies"')}>✉ Draft reply with AI</button>` : ''}
         ${a ? html`${a.summary ? html`<p class="clog-sum">${a.summary}</p>` : ''}
           ${(a.facts || []).length ? html`<dl class="clog-facts">${a.facts.map((f) => html`<div><dt>${f.label}</dt><dd>${f.value}</dd></div>`)}</dl>` : ''}
           ${(a.sections || []).length ? html`<div class="clog-secs">${a.sections.filter((x) => (x.items || []).length).map((x) => html`<section><h4>${x.title}</h4><ul>${x.items.map((v) => html`<li>${v}</li>`)}</ul></section>`)}</div>` : ''}
@@ -264,7 +266,24 @@ module.exports = function requestRoutes(router, { db, config }) {
       <section class="card"><div class="head-row"><h2>Communication log</h2>${aiPending ? html`<span class="ai-wait" data-ai-wait="/admin/requests/${r.id}/ai-status">✨ Preparing AI summaries…</span>` : ''}</div>
         ${RS.isColumnMissing() ? html`<p class="flash warn">AI summaries can't be saved yet: run the request-log SQL in Supabase (<code>alter table public.info_request_messages add column if not exists ai jsonb;</code>).</p>` : ''}
         ${msgs.length ? html`<ol class="clog">${msgs.map((m) => safeEntry(m)).reverse()}</ol>` : html`<p class="muted">Nothing logged yet.</p>`}
-      </section>`,
+      </section>
+      <dialog class="rp-modal" data-reply-modal aria-labelledby="rp-title">
+        <form method="post" action="/admin/requests/${r.id}/reply" enctype="multipart/form-data" data-busy>
+          <div class="rp-top"><h2 id="rp-title">Reply to supplier</h2><button type="button" class="icon-btn" data-reply-close aria-label="Close">×</button></div>
+          <p class="sub rp-ctx" data-reply-ctx></p>
+          <div class="rp-loading" data-reply-loading>✨ Reading the thread and drafting a reply…</div>
+          <p class="flash error" data-reply-error hidden></p>
+          <div class="rp-fields" data-reply-fields hidden>
+            <label>To<input name="to" data-f="to" required></label>
+            <label>CC<input name="cc" data-f="cc"></label>
+            <label>Subject<input name="subject" data-f="subject" required></label>
+            <label>Message<textarea name="body" rows="14" data-f="body" required></textarea></label>
+            <div class="rp-points" data-reply-points hidden><b>Fill in before sending</b><ul data-reply-list></ul></div>
+            <label class="rp-files">Attach files (optional)<input type="file" name="files" multiple></label>
+            <div class="rp-actions"><button class="btn">Send email</button><button type="button" class="btn ghost" data-reply-copy>Copy text</button><button type="button" class="btn ghost" data-reply-again>Draft again</button><button type="button" class="link" data-reply-close>Cancel</button></div>
+          </div>
+        </form>
+      </dialog>`,
     }));
   }));
 
@@ -278,6 +297,48 @@ module.exports = function requestRoutes(router, { db, config }) {
     res.writeHead(200, { 'Content-Type': a.content_type || 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(buf);
   }));
+  // AI draft of our next email, answering the supplier's latest reply (JSON for the popup).
+  router.post('/admin/requests/:id/draft-reply', G(async (req, res) => {
+    await parseForm(req).catch(() => null);
+    const r = await db.get('info_requests', req.params.id);
+    if (!r) return res.json({ error: 'Request not found' }, 404);
+    const [supplier, msgs] = await Promise.all([r.supplier_id ? db.get('suppliers', r.supplier_id) : null, db.list('info_request_messages', { filters: { request_id: r.id }, order: 'created_at.asc' })]);
+    const latest = [...msgs].reverse().find((m) => m.direction === 'in');
+    if (!latest) return res.json({ error: 'No reply from the supplier yet' }, 400);
+    const sender = (String(latest.from_email || '').match(/[^\s<>"]+@[^\s<>"]+/) || [''])[0].toLowerCase();
+    const to = [...new Set([sender, ...(r.to_emails || [])].filter((e) => EMAIL_RE.test(e)))].slice(0, sender ? 1 : 5);
+    const cc = [...new Set([...(r.cc_emails || []), ...ccList()])].filter((e) => !to.includes(e));
+    try {
+      const d = await require('../req-reply').draftReply({ r, supplier, msgs, latest });
+      const base = String(latest.subject || r.subject || d.topic || '').replace(/^\s*((re|fw|fwd|回复|答复)\s*[:：]\s*)+/i, '').replace(/\[[^\]]*LB-\d+[^\]]*\]\s*/gi, '').trim();
+      res.json({ ok: true, to: to.join(', '), cc: cc.join(', '), subject: `Re: [${r.ref}] ${base || d.topic}`.slice(0, 250), body: d.body, open_points: d.open_points, asked: d.asked, replying_to: { at: latest.created_at, from: latest.from_email || supplier?.name || '' } });
+    } catch (e) { res.json({ error: `AI draft failed: ${String(e.message).slice(0, 200)}` }, 502); }
+  }));
+
+  // Send our reply from the popup and log it.
+  router.post('/admin/requests/:id/reply', G(async (req, res) => {
+    const { fields, files } = await parseForm(req, { limitBytes: 60 * 1024 * 1024 });
+    const r = await db.get('info_requests', req.params.id);
+    if (!r) throw new HttpError(404, 'Request not found');
+    const split = (v) => String(v || '').split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+    const to = split(fields.to); const cc = split(fields.cc).filter((e) => !to.includes(e));
+    const subject = String(fields.subject || '').trim().slice(0, 250); const body = String(fields.body || '').trim().slice(0, 20000);
+    const back = (type, msg) => { flash(res, type, msg); res.redirect(`/admin/requests/${r.id}`); };
+    if (!to.length || to.some((e) => !EMAIL_RE.test(e)) || cc.some((e) => !EMAIL_RE.test(e))) return back('error', 'Check the email addresses');
+    if (!subject || !body) return back('error', 'Subject and message are needed');
+    if (/\[[^\]]{2,80}\]/.test(body.replace(/\[(LB-\d+)\]/g, ''))) return back('error', 'The message still has [placeholders] to fill in');
+    const uploads = (files.files || []).filter((f) => f.buffer?.length).slice(0, 10);
+    const subj = subject.includes(r.ref) ? subject : `[${r.ref}] ${subject}`;
+    let sent;
+    try { sent = await sendEmail(config, { to, cc, subject: subj, text: body, attachments: uploads.map((f) => ({ filename: f.name, content: f.buffer })) }); }
+    catch (e) { return back('error', `Email not sent: ${String(e.provider?.reason || e.message).replace(/⟪|⟫|⟦.*?⟧/g, '').slice(0, 200)}`); }
+    const attachments = [];
+    for (const f of uploads) attachments.push(await saveAttachment(r.ref, f));
+    await db.insert('info_request_messages', { request_id: r.id, direction: 'out', from_email: process.env.EMAIL_FROM || null, to_emails: [...to, ...cc], subject: subj, body, attachments });
+    await db.update('info_requests', { id: r.id }, { updated_at: new Date().toISOString(), ...(sent?.id ? { email_id: sent.id } : {}) });
+    back('ok', `Reply sent to ${to.join(', ')}`);
+  }));
+
   router.get('/admin/requests/:id/ai-status', G(async (req, res) => {
     const msgs = await db.list('info_request_messages', { filters: { request_id: req.params.id } });
     res.json({ pending: RS.pendingCount(msgs), missing: msgs.filter(RS.eligible).length });
