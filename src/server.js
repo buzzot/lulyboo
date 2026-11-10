@@ -55,6 +55,7 @@ function createApp({ db, config }) {
   require('./routes/projects')(router, { db, config });
   require('./routes/samples')(router, { db, config });
   require('./routes/schedules')(router, { db, config });
+  require('./routes/planning')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/api')(router, { db, config });
   require('./routes/staff')(router, { db, config });

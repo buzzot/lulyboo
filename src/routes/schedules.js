@@ -16,6 +16,7 @@ const short = (iso) => { if (!iso) return '—'; const d = new Date(`${iso}T12:0
 const todayIso = () => new Date().toLocaleDateString('en-CA', { timeZone: process.env.BUSINESS_TZ || 'America/Los_Angeles' });
 /** Tabs shared by the Logistics pages. */
 const logisticsTabs = (active) => html`<div class="lg-top"><h1>Logistics</h1><nav class="lg-tabs" aria-label="Logistics">
+  <a href="/admin/logistics/planning" class="lg-tab${active === 'planning' ? ' is-on' : ''}" ${active === 'planning' ? raw('aria-current="page"') : ''}>Container planning</a>
   <a href="/admin/logistics/schedules" class="lg-tab${active === 'schedules' ? ' is-on' : ''}" ${active === 'schedules' ? raw('aria-current="page"') : ''}>Sailing schedules</a>
   <a href="/admin/logistics" class="lg-tab${active === 'costs' ? ' is-on' : ''}" ${active === 'costs' ? raw('aria-current="page"') : ''}>Costs &amp; freight rates</a></nav></div>`;
 

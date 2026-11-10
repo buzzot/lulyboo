@@ -2129,3 +2129,86 @@ test('request: AI draft reply popup → send logs our reply with the reference i
   const out = db.tables.info_request_messages.filter((m) => m.direction === 'out');
   assert.equal(out.length, 2); assert.match(out[1].body, /printed box/); assert.equal(out[1].attachments.length, 1);
 });
+
+test('container planning: AI import (Benno sheet + status table), review, save, update, views', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const fs = require('node:fs');
+  const realFetch = global.fetch; let calls = 0; let lastPrompt = '';
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  let answer;
+  global.fetch = async (url, opts = {}) => {
+    if (!String(url).includes('api.anthropic.com')) return realFetch(url, opts);
+    calls++; lastPrompt = JSON.stringify(JSON.parse(opts.body).messages);
+    return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_orders', input: answer }] }), { status: 200 });
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const benno = await db.insert('suppliers', { name: 'Ningbo Benno' });
+  await db.insert('products', { supplier_id: benno.id, product_name: 'Roll Sun Shade', fob_port: 'Ningbo', status: 'New' });
+
+  // 1) Benno open-order sheet
+  answer = { supplier_name: 'Ningbo Benno', orders: [
+    { po: 'PO200013', product: 'Roll Sun Shade Protection - Set of 2', qty: 5016, ready_date: d(10), inspection_date: d(11), order_type: 'Repeat order', approved_by: 'Yam', cbm: 12.3 },
+    { po: 'PO200014', product: 'Basic Baby Car Mirror', qty: 8808, ready_date: d(24), inspection_date: 'will be apply later', cbm: 20.47 },
+    { po: 'PO200016', product: 'Basic Baby Car Mirror', qty: 6504, ready_date: d(26), cbm: 12.12 } ] };
+  const fd = new FormData(); fd.append('supplier_id', benno.id);
+  fd.append('file', new Blob([fs.readFileSync(__dirname + '/fixtures/benno-pos.xlsx')]), 'POs-Ningbo_Benno_20261110.xlsx');
+  const rv = await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd, headers: { cookie } });
+  const page = await rv.text();
+  assert.equal(rv.status, 200, page.slice(0, 300));
+  assert.match(lastPrompt, /PO200013/); assert.match(lastPrompt, /Goods Volume/);          // the sheet was sent as a table
+  assert.match(page, /3 new/); assert.match(page, /value="PO200014"/);
+  assert.match(page, /<option value="CNNGB" selected>/);                                  // port from the supplier's products
+  // save all three (form as the page posts it)
+  const form = new FormData();
+  for (const [k, v] of [...page.matchAll(/name="([^"]+)"(?: [^>]*?)? value="([^"]*)"/g)].map((m) => [m[1], m[2]])) form.append(k, v.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  for (let i = 0; i < 3; i++) { form.set(`r${i}_on`, '1'); form.set(`r${i}_port`, 'CNNGB'); }
+  const sv = await fetch(`${base}/admin/logistics/planning/save`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' });
+  assert.equal(sv.status, 303);
+  assert.equal(db.tables.plan_orders.length, 3);
+  const o14 = db.tables.plan_orders.find((o) => o.po === 'PO200014');
+  assert.equal(o14.inspection_note, 'will be apply later'); assert.equal(o14.port, 'CNNGB'); assert.equal(Number(o14.cbm), 20.47);
+
+  // 2) Status table for another supplier (new supplier, PO numbers only)
+  answer = { orders: [
+    { po: 'PO900018', production_status: 'Ready for shipping', ready_date: d(-11), pending_from_lulyboo: 'NA' },
+    { po: 'PO900021', production_status: 'Under production', ready_date: d(58), pending_from_lulyboo: 'Package artwork' } ] };
+  const fd2 = new FormData(); fd2.append('new_supplier', 'Status Report Co'); fd2.append('text', 'PO | Production Status | Ready Date | Pending from Lulyboo ...');
+  const page2 = await (await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd2, headers: { cookie } })).text();
+  assert.match(page2, /New supplier: <b>Status Report Co<\/b>/);
+  const form2 = new FormData();
+  for (const [k, v] of [...page2.matchAll(/name="([^"]+)"(?: [^>]*?)? value="([^"]*)"/g)].map((m) => [m[1], m[2]])) form2.append(k, v.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  form2.set('r0_on', '1'); form2.set('r1_on', '1');
+  await fetch(`${base}/admin/logistics/planning/save`, { method: 'POST', body: form2, headers: { cookie }, redirect: 'manual' });
+  assert.equal(db.tables.plan_orders.length, 5);
+  assert.ok(db.tables.suppliers.find((s) => s.name === 'Status Report Co'));
+
+  // 3) Benno again with a later ready date → updated, not duplicated
+  answer = { orders: [{ po: 'PO200014', product: 'Basic Baby Car Mirror', qty: 8808, ready_date: d(31), cbm: 20.47 }] };
+  const fd3 = new FormData(); fd3.append('supplier_id', benno.id); fd3.append('text', 'PO200014 ready later');
+  const page3 = await (await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd3, headers: { cookie } })).text();
+  assert.match(page3, /1 updated/); assert.match(page3, /Ready: /);
+  const form3 = new FormData();
+  for (const [k, v] of [...page3.matchAll(/name="([^"]+)"(?: [^>]*?)? value="([^"]*)"/g)].map((m) => [m[1], m[2]])) form3.append(k, v.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  form3.set('r0_on', '1'); form3.set('r0_port', 'CNNGB');
+  await fetch(`${base}/admin/logistics/planning/save`, { method: 'POST', body: form3, headers: { cookie }, redirect: 'manual' });
+  assert.equal(db.tables.plan_orders.length, 5);
+  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO200014').ready_date, d(31));
+
+  // views
+  const byPort = await req(base, 'GET', '/admin/logistics/planning', { cookie });
+  assert.equal(byPort.status, 200);
+  assert.match(byPort.text, /Ningbo/); assert.match(byPort.text, /Port to confirm/); assert.match(byPort.text, /Waiting on us: Package artwork/);
+  assert.match(byPort.text, /Ready, not shipped/);                                  // PO900018 overdue
+  const tl = await req(base, 'GET', '/admin/logistics/planning?view=timeline', { cookie });
+  assert.equal(tl.status, 200); assert.match(tl.text, />Since /);
+  const tb = await req(base, 'GET', '/admin/logistics/planning?view=table', { cookie });
+  assert.match(tb.text, /will be apply later/);
+  const csv = await fetch(`${base}/admin/logistics/planning.csv`, { headers: { cookie } });
+  assert.equal(csv.status, 200); assert.match(await csv.text(), /PO200013/);
+  // suggestion maths
+  const PL = require('../src/planning');
+  assert.equal(PL.suggest(131).text, '2 × 40HQ + LCL 1 m³'); assert.equal(PL.suggest(48).text, '1 × 40GP'); assert.equal(PL.suggest(8).boxes[0], 'LCL');
+});

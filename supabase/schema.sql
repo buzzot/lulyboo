@@ -694,3 +694,35 @@ alter table public.sailings enable row level security;
 -- RFQ API: reserve a reference before the email is sent (run once)
 alter table public.info_requests drop constraint if exists info_requests_status_check;
 alter table public.info_requests add constraint info_requests_status_check check (status in ('Draft','Sent','Replied','Complete','Closed'));
+
+-- Container planning (run once): open PO lines from supplier reports, grouped by port and week
+create table if not exists public.plan_orders (
+  id                uuid primary key default gen_random_uuid(),
+  supplier_id       uuid not null references public.suppliers(id) on delete cascade,
+  po                text not null,
+  product           text,
+  sku               text,
+  qty               numeric,
+  cartons           numeric,
+  cbm               numeric,
+  cbm_estimated     boolean default false,   -- from catalog carton size × cartons
+  gross_kg          numeric,
+  ready_date        date,
+  inspection_date   date,
+  inspection_note   text,                    -- e.g. "to be booked"
+  production_status text,                    -- as the supplier wrote it
+  pending_from_us   text,                    -- what the supplier waits for from Lulyboo
+  order_type        text,                    -- New item / Repeat order
+  approved_by       text,
+  port              text,                    -- UN/LOCODE: CNNGB, CNSHA, CNYTN, CNCAN (null = to confirm)
+  port_text         text,                    -- port as written
+  notes             text,
+  shipped           boolean not null default false,
+  batch             text,
+  source_name       text,
+  created_at        timestamptz default now(),
+  updated_at        timestamptz default now()
+);
+create index if not exists plan_orders_supplier_idx on public.plan_orders (supplier_id);
+create index if not exists plan_orders_ready_idx on public.plan_orders (ready_date);
+alter table public.plan_orders enable row level security;

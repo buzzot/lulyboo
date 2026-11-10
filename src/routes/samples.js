@@ -627,3 +627,5 @@ module.exports = function sampleRoutes(router, { db, config }) {
   }));
 };
 module.exports.nextAction = nextAction;
+module.exports.supplierPicker = supplierPicker;
+module.exports.pickableSuppliers = pickableSuppliers;
