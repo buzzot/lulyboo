@@ -2274,3 +2274,67 @@ test('orders menu: PO list, PO page with lines and documents, mark shipped', asy
   const shipped = await req(base, 'GET', '/admin/orders?status=shipped', { cookie });
   assert.match(shipped.text, /PO200014/);
 });
+
+test('load containers: drag lines into a container, fill + volume, booking request email, Orders shows the container', async (t) => {
+  process.env.RESEND_API_KEY = 're_test';
+  const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response('{"id":"em_1"}', { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const B = '/admin/logistics/planning';
+  const j = async (p, form) => JSON.parse((await req(base, form ? 'POST' : 'GET', p, { cookie, form })).text);
+  const b = await db.insert('suppliers', { name: 'Ningbo Benno', contact_name: 'Amy Li', email: 'amy@benno.cn', phone: '+86 574 1234' });
+  const o1 = await db.insert('plan_orders', { supplier_id: b.id, po: 'PO200013', product: 'Roll Sun Shade', qty: 5016, cartons: 209, cbm: 12.3, gross_kg: 1450, ready_date: d(13), port: 'CNNGB' });
+  const o2 = await db.insert('plan_orders', { supplier_id: b.id, po: 'PO200014', product: 'Car Mirror', qty: 8808, ready_date: d(27), port: 'CNNGB' });
+  const o3 = await db.insert('plan_orders', { supplier_id: b.id, po: 'PO900020', qty: 100, cbm: 2, ready_date: d(15), port: 'CNYTN' });
+  const s = await db.insert('sailings', { origin: 'CNNGB', destination: 'USLGB', carrier: 'COSCO', vessel: 'COSCO PRIDE', voyage: '045E', etd: d(18), transit_days: 15, source: 'file' });
+
+  const page = await req(base, 'GET', `${B}/load?port=CNNGB`, { cookie });
+  assert.equal(page.status, 200);
+  assert.match(page.text, /data-loadplan=/); assert.match(page.text, /Load containers/); assert.match(page.text, /data-lp-req/);
+  assert.match((await req(base, 'GET', B, { cookie })).text, /href="\/admin\/logistics\/planning\/load"/);
+
+  const c = (await j(`${B}/containers`, { port: 'CNNGB', box: '40GP' })).container;
+  assert.equal(c.no, 1);
+  assert.equal((await j(`${B}/assign`, { order: o2.id, container: c.id })).ok, false);           // no CBM yet
+  assert.equal((await j(`${B}/assign`, { order: o3.id, container: c.id })).ok, false);           // other port
+  assert.equal((await j(`${B}/${o2.id}/cbm`, { cbm: '20,47' })).cbm, 20.47);
+  for (const o of [o1, o2]) assert.ok((await j(`${B}/assign`, { order: o.id, container: c.id })).ok);
+  assert.ok((await j(`${B}/containers/${c.id}`, { sailing: s.id })).ok);
+  const data = JSON.parse((await req(base, 'GET', `${B}/load?port=CNNGB`, { cookie })).text.match(/data-loadplan="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  assert.equal(data.orders.filter((o) => o.container === c.id).length, 2);
+  assert.equal(data.containers[0].sailing, s.id); assert.match(data.sailings[0].label, /COSCO · ETD/);
+
+  const draft = (await j(`${B}/containers/${c.id}/request`)).draft;
+  assert.match(draft.subject, /Booking request: 1 × 40' GP, Ningbo → Long Beach/);
+  assert.match(draft.body, /Port of loading: Ningbo \(CNNGB\)/); assert.match(draft.body, /COSCO · COSCO PRIDE 045E/);
+  assert.match(draft.body, /PO200013 — Ningbo Benno — Roll Sun Shade/); assert.match(draft.body, /209 ctns · 12\.30 m³ · 1,450 kg/);
+  assert.match(draft.body, /Total: 13,824 pcs · 209 ctns · 32\.77 m³ · 1,450 kg/);
+  assert.doesNotMatch(draft.body, /amy@benno\.cn/);
+  assert.match((await j(`${B}/containers/${c.id}/request?contacts=1`)).draft.body, /Contact: Amy Li[\s\S]*Email: amy@benno\.cn/);
+  assert.equal((await j(`${B}/containers/${c.id}/request`, { to: 'nope', subject: 'x', body: 'y' })).ok, false);
+  const r = await j(`${B}/containers/${c.id}/request`, { to: 'booking@forwarder.com', cc: 'me@lulyboo.com', subject: draft.subject, body: draft.body });
+  assert.ok(r.ok, r.error); assert.equal(r.status, 'requested');
+  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, ['booking@forwarder.com']); assert.match(sent[0].text, /Packing list/);
+  assert.equal(db.tables.plan_containers[0].request_to, 'booking@forwarder.com');
+  const c2 = (await j(`${B}/containers`, { port: 'CNNGB' })).container;                          // next request remembers the forwarder
+  assert.equal(c2.no, 2);
+  await j(`${B}/assign`, { order: o1.id, container: c2.id });
+  assert.equal((await j(`${B}/containers/${c2.id}/request`)).draft.to, 'booking@forwarder.com');
+
+  const po = await req(base, 'GET', `/admin/orders/view?supplier=${b.id}&po=PO200014`, { cookie });
+  assert.match(po.text, /📦 Ningbo · Container 1 · 40&#39; GP · ETD/);
+  assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /Booking requested/);
+
+  assert.ok((await j(`${B}/containers/${c.id}/shipped`, {})).ok);
+  assert.ok(db.tables.plan_orders.find((o) => o.id === o2.id).shipped);
+  assert.ok(!db.tables.plan_orders.find((o) => o.id === o1.id).shipped);                       // o1 moved to container 2
+  assert.ok((await j(`${B}/containers/${c2.id}/delete`, {})).ok);
+  assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
+});

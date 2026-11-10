@@ -9,6 +9,7 @@ const { guard } = require('./admin');
 const PL = require('../planning');
 const SC = require('../schedules');
 const PR = require('./planning');
+const LP = require('./loadplan');
 
 const RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 };
 const n2 = (v) => Math.round(Number(v || 0) * 100) / 100;
@@ -50,11 +51,13 @@ module.exports = function orderRoutes(router, { db, config }) {
     const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
     const ids = [...new Set([...lines.map((l) => l.supplier_id), ...files.map((f) => f.supplier_id)])];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
-    return { lines, files, sups, missing };
+    const ci = await LP.containerIndex(db).catch(() => ({ labelFor: () => null }));
+    return { lines, files, sups, missing, ci };
   }
+  const ctn = (ci, ls) => { const seen = new Set(); return ls.map((l) => ci.labelFor(l)).filter((x) => x && !seen.has(x.c.id) && seen.add(x.c.id)); };
 
   router.get('/admin/orders', G(async (req, res) => {
-    const { lines, files, sups, missing } = await load();
+    const { lines, files, sups, missing, ci } = await load();
     const day = PL.today();
     const all = groupPos(lines, sups, files, day);
     const q = String(req.query.q || '').trim().toLowerCase();
@@ -95,14 +98,14 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td class="r">${p.cbm ? n2(p.cbm) : '—'}${p.cbmMissing && p.cbm ? html`<span class="sub"> +?</span>` : ''}</td>
             <td>${p.first ? (p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`) : '—'}</td>
             <td>${p.ports.map(portName).filter(Boolean).join(', ') || html`<span class="sub">To confirm</span>`}</td>
-            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub">Needs: ${p.pending.join(', ')}</div>` : ''}</td>
+            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? ctn(ci, p.lines).map((x) => html`<div><a class="or-ctn" href="${x.url}">📦 ${x.text}</a></div>`) : ''}</td>
             <td>${p.docs.length ? html`<a href="${poUrl(p.supplier_id, p.po)}#docs">📎 ${p.docs.length}</a>` : '—'}</td></tr>`)}</tbody></table></div>
           ${list.length ? '' : html`<p class="muted or-empty">${all.length ? 'No purchase orders match.' : 'No purchase orders yet. Import a supplier report or upload a PO to start.'}</p>`}</div>`,
     }));
   }));
 
   router.get('/admin/orders/view', G(async (req, res) => {
-    const { lines, files, sups } = await load();
+    const { lines, files, sups, ci } = await load();
     const supplier = sups[req.query.supplier] || await db.get('suppliers', String(req.query.supplier || '')).catch(() => null);
     const poQ = String(req.query.po || '');
     if (!supplier || !poQ) throw new HttpError(404, 'Purchase order not found');
@@ -123,10 +126,11 @@ module.exports = function orderRoutes(router, { db, config }) {
           <div class="cp-kpi"><span>Quantity</span><b>${p.qty ? int(p.qty) : '—'}</b><small>pieces</small></div>
           <div class="cp-kpi"><span>Volume</span><b>${p.cbm ? `${n2(p.cbm)} m³` : '—'}</b><small>${p.cbm ? `≈ ${PL.suggest(p.cbm).text}` : 'CBM missing'}</small></div>
           <div class="cp-kpi ${p.pending.length ? 'warn' : ''}"><span>Waiting on Lulyboo</span><b>${p.pending.length ? p.pending.length : '—'}</b><small>${p.pending.join(', ') || 'nothing'}</small></div></div>
-        <section class="card"><h2>Lines</h2><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th></th></tr></thead>
+        <section class="card"><h2>Lines</h2><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Container</th><th></th></tr></thead>
           <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub"> est.</i>` : ''}</td>
             <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
             <td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
+            <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
             <td>${PR.editBtn({ ...o, sup: supplier }, 'link small')}</td></tr>`)}</tbody></table></div>
           ${ls.some((o) => o.notes) ? html`<div class="or-notes">${ls.filter((o) => o.notes).map((o) => html`<p><b>${o.product || 'Note'}:</b> ${o.notes}</p>`)}</div>` : ''}</section>` : ''}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>

@@ -59,7 +59,7 @@ function planningRoutes(router, { db, config }) {
     return { orders, sups, color, missing, files, filesFor };
   }
 
-  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${BASE}?${new URLSearchParams({ ...q, view: k })}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
+  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['load', 'Load containers'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${k === 'load' ? `${BASE}/load` : `${BASE}?${new URLSearchParams({ ...q, view: k })}`}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
   const tag = (st) => html`<span class="cp-tag ${PL.STATE[st].tag}">${PL.STATE[st].label}</span>`;
 
   router.get(BASE, G(async (req, res) => {

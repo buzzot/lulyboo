@@ -743,3 +743,24 @@ create table if not exists public.plan_files (
 );
 create index if not exists plan_files_supplier_idx on public.plan_files (supplier_id);
 alter table public.plan_files enable row level security;
+
+-- Container load plans (run once): containers you build by dragging PO lines into them
+create table if not exists public.plan_containers (
+  id          uuid primary key default gen_random_uuid(),
+  port        text not null,                    -- loading port UN/LOCODE (CNNGB …)
+  box         text not null default '40GP',     -- 20GP · 40GP · 40HQ
+  sailing_id  uuid references public.sailings(id) on delete set null,
+  status      text not null default 'planned',  -- planned · requested · booked · shipped
+  notes       text,
+  created_by  text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+create index if not exists plan_containers_port_idx on public.plan_containers (port, status);
+alter table public.plan_containers enable row level security;
+alter table public.plan_orders add column if not exists container_id uuid references public.plan_containers(id) on delete set null;
+create index if not exists plan_orders_container_idx on public.plan_orders (container_id);
+alter table public.plan_containers add column if not exists request_to   text;          -- logistics company emailed
+alter table public.plan_containers add column if not exists request_cc   text;
+alter table public.plan_containers add column if not exists requested_at timestamptz;
+alter table public.plan_containers add column if not exists request_body text;

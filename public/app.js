@@ -1063,3 +1063,186 @@
   });
   dlg.addEventListener('click', function (e) { if (e.target.closest('[data-edit-close]') || e.target === dlg) dlg.close(); });
 })();
+
+// Container planning → Load containers: drag PO lines into containers, cartons animate in, fill bar.
+(function () {
+  var root = document.querySelector('[data-loadplan]'); if (!root) return;
+  var D; try { D = JSON.parse(root.getAttribute('data-loadplan')); } catch (x) { return; }
+  var poolEl = root.querySelector('[data-lp-pool]'), metaEl = root.querySelector('[data-lp-poolmeta]'), boxesEl = root.querySelector('[data-lp-containers]');
+  var toastEl = document.querySelector('[data-lp-toast]');
+  var fresh = {}; // order id → animate its cartons on next render
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var n2 = function (v) { return (Math.round(v * 100) / 100).toFixed(2); };
+  var int = function (v) { return Number(v || 0).toLocaleString('en-US'); };
+  var byId = function (id) { for (var i = 0; i < D.orders.length; i++) if (D.orders[i].id === id) return D.orders[i]; return null; };
+  var cById = function (id) { for (var i = 0; i < D.containers.length; i++) if (D.containers[i].id === id) return D.containers[i]; return null; };
+  var sById = function (id) { for (var i = 0; i < D.sailings.length; i++) if (D.sailings[i].id === id) return D.sailings[i]; return null; };
+  var itemsOf = function (c) { return D.orders.filter(function (o) { return o.container === c.id; }); };
+  var usedOf = function (c) { return itemsOf(c).reduce(function (a, o) { return a + (o.cbm || 0); }, 0); };
+  function toast(t) { if (!toastEl) return; toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastEl._t); toastEl._t = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
+  function post(url, data) {
+    var body = new URLSearchParams(); Object.keys(data || {}).forEach(function (k) { body.append(k, data[k] == null ? '' : data[k]); });
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body, credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Something went wrong (' + r.status + ')' }; }); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error || 'Could not save'); return j; });
+  }
+  function fail(e) { toast(e.message || 'Could not save'); setTimeout(function () { location.reload(); }, 1400); }
+
+  function poolCard(o) {
+    var st = D.states[o.st] || { label: o.st, tag: 'plan' }, no = !o.cbm;
+    return '<div class="lp-po' + (no ? ' nocbm' : '') + '" style="--c:' + o.color + '" draggable="' + (!no) + '" data-id="' + o.id + '">' +
+      '<div class="lp-r1"><b>' + esc(o.po) + '</b><span>' + (no ? '<em>CBM ?</em>' : n2(o.cbm) + ' m³' + (o.est ? ' <i class="sub">est.</i>' : '')) + '</span></div>' +
+      '<div class="sub">' + esc([o.supplier, o.product, o.qty ? int(o.qty) + ' pcs' : ''].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="lp-r3"><span>' + (o.ready ? 'Ready ' + esc(o.readyText) : 'No ready date') + '</span><span class="cp-tag ' + st.tag + '">' + esc(st.label) + '</span></div>' +
+      (no ? '<div class="lp-vol"><input type="number" step="0.01" min="0" inputmode="decimal" placeholder="m³" aria-label="Volume of ' + esc(o.po) + ' in m³" data-lp-v="' + o.id + '"><button type="button" class="btn small" data-lp-savecbm="' + o.id + '">Save</button><small>volume required</small></div>' : '') +
+      (D.containers.length && !no ? '<select class="lp-quick" data-lp-quick="' + o.id + '" aria-label="Load ' + esc(o.po) + ' into"><option value="">Load into…</option>' + D.containers.map(function (c, i) { return '<option value="' + c.id + '">Container ' + c.no + ' · ' + esc(D.box[c.box].name) + '</option>'; }).join('') + '</select>' : '') +
+      '</div>';
+  }
+  function renderPool() {
+    var list = D.orders.filter(function (o) { return !o.container; });
+    var tot = list.reduce(function (a, o) { return a + (o.cbm || 0); }, 0), miss = list.filter(function (o) { return !o.cbm; }).length;
+    metaEl.textContent = list.length + ' line' + (list.length === 1 ? '' : 's') + ' · ' + n2(tot) + ' m³' + (miss ? ' · ' + miss + ' without volume' : '');
+    poolEl.innerHTML = list.length ? list.map(poolCard).join('') : '<div class="lp-empty">' + (D.orders.length ? 'Everything at this port is loaded.<br>Drag a PO back here to unload it.' : 'No open orders at this port.') + '</div>';
+  }
+
+  function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
+  function containerHTML(c, idx) {
+    var t = D.box[c.box], items = itemsOf(c), u = usedOf(c), pct = u / t.cap * 100, over = u > t.cap;
+    var W = c.box === '20GP' ? Math.round(stageWidth() * 0.55) : stageWidth();
+    var cutW = W - 48, rowH = Math.max(18, Math.min(30, Math.round(cutW / t.cols * 0.5))), cutH = t.rows * rowH, H = cutH + 26;
+    var cw = cutW / t.cols, ch = rowH, cell = t.cap / (t.cols * t.rows), slots = [], k = 0;
+    items.forEach(function (o) {
+      var n = (o.cbm || 0) / cell, whole = Math.floor(n), part = n - whole;
+      for (var i = 0; i < whole; i++) slots.push({ o: o, k: k++, part: 1 });
+      if (part > 0.15 || (!whole && n > 0)) slots.push({ o: o, k: k++, part: Math.max(part, 0.35) });
+    });
+    var inside = '', spill = '', cap = t.cols * t.rows;
+    slots.forEach(function (s) {
+      var ov = s.k >= cap, oi = s.k - cap;
+      var x = ov ? cutW + 44 + (oi % 3) * cw : Math.floor(s.k / t.rows) * cw;
+      var y = ov ? cutH - (Math.floor(oi / 3) + 1) * ch : cutH - ((s.k % t.rows) + 1) * ch;
+      var h = ch * s.part, anim = fresh[s.o.id];
+      var b = '<div class="lp-ctn' + (s.part < 1 ? ' part' : '') + (ov ? ' over' : '') + (anim ? ' anim' : '') + '" title="' + esc(s.o.po + ' · ' + n2(s.o.cbm) + ' m³') + '" style="--c:' + s.o.color + ';--dx:' + Math.round(cutW - x + 40) + 'px;left:' + (x + 1.5) + 'px;top:' + (y + (ch - h) + 1.5) + 'px;width:' + (cw - 3) + 'px;height:' + (h - 3) + 'px;animation-delay:' + (anim ? Math.min(s.k % 60, 40) * 28 : 0) + 'ms"></div>';
+      if (ov) spill += b; else inside += b;
+    });
+    var lvl = pct > 100 ? 'full' : pct > 85 ? 'mid' : '';
+    var sail = sById(c.sailing), warns = [];
+    if (over) warns.push('<div class="lp-warn bad">Over by ' + n2(u - t.cap) + ' m³ — move a PO out' + (c.box === '40GP' ? " or switch to 40' HQ" : c.box === '20GP' ? " or switch to 40' GP" : '') + '.</div>');
+    if (sail) { var late = items.filter(function (o) { return o.ready && o.ready > sail.etd; }); if (late.length) warns.push('<div class="lp-warn">' + esc(late.map(function (o) { return o.po; }).join(', ')) + (late.length > 1 ? ' are' : ' is') + " ready after this sailing's ETD.</div>"); }
+    var noCbm = items.filter(function (o) { return o.est; }); if (noCbm.length) warns.push('<div class="lp-warn soft">' + esc(noCbm.map(function (o) { return o.po; }).join(', ')) + ' volume is estimated from carton size — confirm with the packing list.</div>');
+    if (!over && items.length && c.box !== '20GP' && u <= D.box['20GP'].cap) warns.push("<div class=\"lp-warn soft\">Only " + n2(u) + " m³ — a 20' GP or LCL may be cheaper.</div>");
+    var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
+    return '<section class="card lp-c" data-c="' + c.id + '">' +
+      '<div class="lp-ch"><h2>Container ' + c.no + (c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' : c.status === 'requested' ? ' <span class="cp-tag wait">Booking requested</span>' : '') + '</h2><div class="lp-ctl">' +
+        '<select data-lp-box="' + c.id + '" aria-label="Container type">' + Object.keys(D.box).map(function (b) { return '<option value="' + b + '"' + (b === c.box ? ' selected' : '') + '>' + esc(D.box[b].name) + '</option>'; }).join('') + '</select>' +
+        '<select data-lp-sail="' + c.id + '" aria-label="Sailing"><option value="">' + (D.sailings.length ? 'Choose sailing…' : 'No sailings loaded') + '</option>' + D.sailings.map(function (s) { return '<option value="' + s.id + '"' + (s.id === c.sailing ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('') + '</select>' +
+        '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Booking requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+        '<button type="button" class="icon-btn" title="Remove container" aria-label="Remove container ' + c.no + '" data-lp-del="' + c.id + '">×</button></div></div>' +
+      '<div class="lp-stage" data-lp-drop="' + c.id + '"><div class="lp-box" style="width:' + W + 'px;height:' + H + 'px">' +
+        '<div class="lp-lbl">' + esc(t.name) + ' · ' + t.cap + ' m³ practical load</div><div class="lp-lbl2" style="left:' + (W - 70) + 'px">door →</div>' +
+        '<div class="lp-shell"></div><div class="lp-door"></div>' +
+        (spill ? '<div class="lp-spill" style="width:' + cutW + 'px;height:' + cutH + 'px">' + spill + '</div><div class="lp-spilllbl" style="left:' + (W + 20) + 'px">doesn\'t fit</div>' : '') +
+        '<div class="lp-cut"><div class="lp-grid" style="background-size:' + cw + 'px ' + ch + 'px"></div>' + inside + (items.length ? '' : '<div class="lp-dropmsg">Drop POs here</div>') + '</div>' +
+      '</div></div>' +
+      '<div class="lp-fill"><div class="lp-track"><i class="' + lvl + '" style="width:' + Math.min(pct, 100) + '%"></i></div><div class="lp-fnum">' + n2(u) + ' / ' + t.cap + ' m³<small>' + Math.round(pct) + '% full · ' + n2(Math.max(0, t.cap - u)) + ' m³ left</small></div></div>' +
+      (items.length ? '<div class="lp-chips">' + items.map(function (o) { return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-id="' + o.id + '"><i></i><b>' + esc(o.po) + '</b>' + esc((o.product ? ' ' + o.product + ' · ' : ' ') + n2(o.cbm) + ' m³') + '<button type="button" class="lp-x" data-lp-out="' + o.id + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>'; }).join('') + '</div>' : '') +
+      warns.join('') +
+      '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
+        '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
+        '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (items.length && !over ? '' : ' disabled title="' + (over ? 'Container is over capacity' : 'Load POs first') + '"') + '>' + (c.requestedAt ? 'Send again' : 'Request booking') + '</button></div></div>' +
+      (c.requestedAt ? '<p class="sub lp-reqd">Booking request sent ' + esc(c.requestedAt) + ' to ' + esc(c.requestTo) + '</p>' : '') +
+      '</section>';
+  }
+  function render() {
+    renderPool();
+    boxesEl.innerHTML = D.containers.length ? D.containers.map(containerHTML).join('') : '<div class="card lp-none"><p>No containers yet at this port.</p></div>';
+    fresh = {};
+  }
+
+  function load(id, cid) {
+    var o = byId(id), c = cById(cid); if (!o || !c || o.container === cid) return;
+    if (!o.cbm) { toast('Add the volume first'); return; }
+    o.container = cid; fresh[id] = 1; render();
+    var t = D.box[c.box]; if (usedOf(c) > t.cap) toast(o.po + " doesn't fit — " + n2(usedOf(c) - t.cap) + ' m³ over');
+    post(D.base + '/assign', { order: id, container: cid }).catch(fail);
+  }
+  function unload(id) { var o = byId(id); if (!o || !o.container) return; o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).catch(fail); }
+
+  root.addEventListener('dragstart', function (e) { var el = e.target.closest && e.target.closest('[draggable="true"][data-id]'); if (!el) return; e.dataTransfer.setData('text/plain', el.getAttribute('data-id')); e.dataTransfer.effectAllowed = 'move'; el.classList.add('dragging'); });
+  root.addEventListener('dragend', function (e) { var el = e.target.closest && e.target.closest('[data-id]'); if (el) el.classList.remove('dragging'); });
+  root.addEventListener('dragover', function (e) { var z = e.target.closest('[data-lp-drop],[data-lp-pool]'); if (!z) return; e.preventDefault(); z.classList.add('over'); });
+  root.addEventListener('dragleave', function (e) { var z = e.target.closest('[data-lp-drop],[data-lp-pool]'); if (z && !z.contains(e.relatedTarget)) z.classList.remove('over'); });
+  root.addEventListener('drop', function (e) {
+    var z = e.target.closest('[data-lp-drop],[data-lp-pool]'); if (!z) return; e.preventDefault(); z.classList.remove('over');
+    var id = e.dataTransfer.getData('text/plain'); if (!id) return;
+    if (z.hasAttribute('data-lp-drop')) load(id, z.getAttribute('data-lp-drop')); else unload(id);
+  });
+  root.addEventListener('change', function (e) {
+    var el = e.target, id;
+    if ((id = el.getAttribute('data-lp-quick'))) { if (el.value) load(id, el.value); return; }
+    if ((id = el.getAttribute('data-lp-box'))) { var c = cById(id); c.box = el.value; itemsOf(c).forEach(function (o) { fresh[o.id] = 1; }); render(); post(D.base + '/containers/' + id, { box: el.value }).catch(fail); return; }
+    if ((id = el.getAttribute('data-lp-sail'))) { cById(id).sailing = el.value; render(); post(D.base + '/containers/' + id, { sailing: el.value }).catch(fail); return; }
+    if ((id = el.getAttribute('data-lp-status'))) { cById(id).status = el.value; render(); post(D.base + '/containers/' + id, { status: el.value }).catch(fail); }
+  });
+  root.addEventListener('keydown', function (e) { var id = e.target.getAttribute && e.target.getAttribute('data-lp-v'); if (id && e.key === 'Enter') { e.preventDefault(); var b = root.querySelector('[data-lp-savecbm="' + id + '"]'); if (b) b.click(); } });
+  root.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return; var id;
+    if ((id = b.getAttribute('data-lp-out'))) { unload(id); return; }
+    if ((id = b.getAttribute('data-lp-savecbm'))) {
+      var inp = root.querySelector('[data-lp-v="' + id + '"]'), v = parseFloat(String(inp.value).replace(',', '.'));
+      if (!(v > 0)) { toast('Enter the volume in m³'); inp.focus(); return; }
+      b.disabled = true;
+      post(D.base + '/' + id + '/cbm', { cbm: v }).then(function (j) { var o = byId(id); o.cbm = j.cbm; o.est = false; render(); toast('Volume saved — you can load it now'); }).catch(function (x) { b.disabled = false; toast(x.message); });
+      return;
+    }
+    if ((id = b.getAttribute('data-lp-del'))) {
+      var c = cById(id); if (itemsOf(c).length && !confirm('Remove this container? Its POs go back to "Not loaded yet".')) return;
+      itemsOf(c).forEach(function (o) { o.container = null; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render();
+      post(D.base + '/containers/' + id + '/delete').catch(fail); return;
+    }
+    if ((id = b.getAttribute('data-lp-ship'))) {
+      var c2 = cById(id), n = itemsOf(c2).length;
+      if (!confirm('Mark all ' + n + ' line' + (n > 1 ? 's' : '') + ' in this container as shipped?')) return;
+      b.disabled = true;
+      post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast('Container shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' closed'); }).catch(fail);
+    }
+  });
+  // Booking request popup
+  var rq = document.querySelector('[data-lp-req]'), rqForm = rq && rq.querySelector('[data-lp-req-form]'), rqId = null;
+  function rqDraft(contacts) {
+    rq.querySelector('[data-lp-req-loading]').hidden = false; rq.querySelector('[data-lp-req-fields]').hidden = true;
+    return fetch(D.base + '/containers/' + rqId + '/request' + (contacts ? '?contacts=1' : ''), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'Could not prepare the request');
+      var f = rqForm.elements;
+      if (!f.to.value) f.to.value = j.draft.to; if (!f.cc.value) f.cc.value = j.draft.cc;
+      f.subject.value = j.draft.subject; f.body.value = j.draft.body;
+      rq.querySelector('[data-lp-req-loading]').hidden = true; rq.querySelector('[data-lp-req-fields]').hidden = false;
+      (f.to.value ? f.body : f.to).focus();
+    }).catch(function (x) { rq.close(); toast(x.message); });
+  }
+  if (rq) {
+    root.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-lp-request]'); if (!b) return;
+      rqId = b.getAttribute('data-lp-request'); rqForm.reset(); rq.querySelector('[data-lp-req-note]').textContent = '';
+      if (rq.showModal) rq.showModal(); rqDraft(false);
+    });
+    rq.addEventListener('change', function (e) { if (e.target.hasAttribute('data-lp-req-contacts')) rqDraft(e.target.checked); });
+    rq.addEventListener('click', function (e) { if (e.target.closest('[data-lp-req-close]') || e.target === rq) rq.close(); });
+    rqForm.addEventListener('submit', function (e) {
+      e.preventDefault(); var f = rqForm.elements, btn = rq.querySelector('[data-lp-req-send]'), note = rq.querySelector('[data-lp-req-note]');
+      btn.disabled = true; note.textContent = 'Sending…';
+      post(D.base + '/containers/' + rqId + '/request', { to: f.to.value, cc: f.cc.value, subject: f.subject.value, body: f.body.value }).then(function (j) {
+        var c = cById(rqId); c.status = j.status; c.requestTo = j.requestTo; c.requestedAt = j.requestedAt;
+        btn.disabled = false; rq.close(); render(); toast('Booking request sent to ' + j.requestTo);
+      }).catch(function (x) { btn.disabled = false; note.textContent = x.message; });
+    });
+  }
+
+  var addBtn = document.querySelector('[data-lp-add]');
+  if (addBtn) addBtn.addEventListener('click', function () {
+    addBtn.disabled = true;
+    post(D.base + '/containers', { port: D.port, box: '40GP' }).then(function (j) { D.containers.push(j.container); render(); addBtn.disabled = false; }).catch(function (x) { addBtn.disabled = false; toast(x.message); });
+  });
+  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(render, 150); });
+  render();
+})();
