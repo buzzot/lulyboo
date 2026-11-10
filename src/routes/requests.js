@@ -177,10 +177,13 @@ module.exports = function requestRoutes(router, { db, config }) {
     const KIND = { out: ['Sent to supplier', 'out'], in: ['Reply from supplier', 'in'], note: ['Internal note', 'note'] };
     const files = (m) => (m.attachments || []).length ? html`<div class="clog-files">${m.attachments.map((a) => (a.path && urls[a.path] ? html`<a class="att-chip" href="${urls[a.path]}" download="${a.filename}">📎 ${a.filename}</a>` : html`<span class="att-chip off">📎 ${a.filename}${a.error ? ` (${a.error})` : ''}</span>`))}</div>` : '';
     const fallback = (t) => { const paras = String(t || '').trim().split(/\n{2,}/).filter(Boolean); return html`<div class="clog-text ${String(t || '').length > 480 ? 'clamp' : ''}">${paras.map((x) => html`<p>${x}</p>`)}</div>${String(t || '').length > 480 ? html`<button type="button" class="link small" data-more>Show more</button>` : ''}`; };
+    // One odd message must never break the whole page: fall back to its plain text.
+    const safeEntry = (m) => { try { return logEntry(m); } catch (e) { console.error('Log entry render failed', m.id, e.message); return html`<li class="clog-item"><div class="clog-head"><span class="clog-kind">${m.direction || 'note'}</span>${when(m.created_at)}</div>${fallback(m.original || m.body)}</li>`; } };
     const logEntry = (m) => {
-      const [label, cls] = KIND[m.direction] || KIND.note; const a = m.ai;
+      const [label, cls] = KIND[m.direction] || KIND.note; const a = RS.normalize(m.ai);
       const from = m.direction === 'out' ? (m.from_email || process.env.EMAIL_FROM || 'Lulyboo') : m.from_email || (m.direction === 'note' ? m.author || 'Lulyboo' : supplier?.name || 'Supplier');
-      const to = ((m.to_emails || []).length ? m.to_emails : m.direction === 'out' ? [...new Set([...(r.to_emails || []), ...(r.contact && /@/.test(r.contact) ? [r.contact] : [])])] : m.direction === 'in' ? ['Lulyboo'] : []).join(', ');
+      const toList = RS.arr(m.to_emails).map(RS.str);
+      const to = (toList.length ? toList : m.direction === 'out' ? [...new Set([...RS.arr(r.to_emails).map(RS.str), ...(r.contact && /@/.test(r.contact) ? [r.contact] : [])])] : m.direction === 'in' ? ['Lulyboo'] : []).join(', ');
       const original = m.original || m.body || '';
       return html`<li class="clog-item ${cls}"><div class="clog-head"><span class="clog-kind ${cls}">${label}</span>${when(m.created_at)}${m.author && m.direction === 'note' ? html`<span class="sub">by ${m.author}</span>` : ''}${a ? html`<span class="ai-badge" title="Summarised by AI from the original">✨ AI summary</span>` : ''}</div>
         <h3 class="clog-title">${a?.headline || m.subject || label}</h3>
@@ -231,7 +234,7 @@ module.exports = function requestRoutes(router, { db, config }) {
       </div>
       <section class="card"><div class="head-row"><h2>Communication log</h2>${aiPending ? html`<span class="ai-wait" data-ai-wait="/admin/requests/${r.id}/ai-status">✨ Preparing AI summaries…</span>` : ''}</div>
         ${RS.isColumnMissing() ? html`<p class="flash warn">AI summaries can't be saved yet: run the request-log SQL in Supabase (<code>alter table public.info_request_messages add column if not exists ai jsonb;</code>).</p>` : ''}
-        ${msgs.length ? html`<ol class="clog">${msgs.map((m) => logEntry(m)).reverse()}</ol>` : html`<p class="muted">Nothing logged yet.</p>`}
+        ${msgs.length ? html`<ol class="clog">${msgs.map((m) => safeEntry(m)).reverse()}</ol>` : html`<p class="muted">Nothing logged yet.</p>`}
       </section>`,
     }));
   }));

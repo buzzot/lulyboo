@@ -26,6 +26,25 @@ const TOOL = {
   },
 };
 
+// The model sometimes returns nested arrays as JSON text or single strings: make the shape safe to render.
+const arr = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') { const t = v.trim(); if (t.startsWith('[')) { try { const j = JSON.parse(t); if (Array.isArray(j)) return j; } catch {} } return t ? t.split(/\n+/).map((x) => x.replace(/^[-•*]\s*/, '').trim()).filter(Boolean) : []; }
+  return v && typeof v === 'object' ? [v] : [];
+};
+const str = (v) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : Array.isArray(v) ? v.map(str).join(', ') : JSON.stringify(v));
+function normalize(ai) {
+  if (!ai || typeof ai !== 'object') return null;
+  return {
+    ...ai,
+    headline: str(ai.headline), summary: str(ai.summary), language: str(ai.language),
+    sections: arr(ai.sections).map((x) => (typeof x === 'string' ? { title: '', items: [x] } : { title: str(x?.title), items: arr(x?.items).map(str).filter(Boolean) })).filter((x) => x.items.length),
+    facts: arr(ai.facts).map((f) => (typeof f === 'string' ? { label: '', value: f } : { label: str(f?.label), value: str(f?.value) })).filter((f) => f.value),
+    open_questions: arr(ai.open_questions).map(str).filter(Boolean),
+    commitments: arr(ai.commitments).map(str).filter(Boolean),
+  };
+}
+
 const running = new Set();
 let columnMissing = false;
 
@@ -39,7 +58,7 @@ async function summarizeMessage(db, m, { request, supplierName } = {}) {
     tool: TOOL, maxTokens: 1800,
     content: `Request: ${request?.ref || ''} ${request?.subject || ''}\nSupplier: ${supplierName || ''}\nDirection: ${who}\nSubject: ${m.subject || ''}\n\nMessage:\n${text}`,
   });
-  const ai = { ...result, model, at: new Date().toISOString() };
+  const ai = { ...normalize(result), model, at: new Date().toISOString() };
   try { await db.update('info_request_messages', { id: m.id }, { ai }); }
   catch (e) { if (/column|ai/i.test(e.message)) columnMissing = true; throw e; }
   return ai;
@@ -61,4 +80,4 @@ function ensureSummaries(db, msgs, ctx) {
 
 const pendingCount = (msgs) => msgs.filter((m) => running.has(m.id)).length;
 
-module.exports = { summarizeMessage, ensureSummaries, pendingCount, eligible, isColumnMissing: () => columnMissing };
+module.exports = { normalize, arr, str, summarizeMessage, ensureSummaries, pendingCount, eligible, isColumnMissing: () => columnMissing };
