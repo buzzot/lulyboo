@@ -66,7 +66,8 @@ module.exports = function requestRoutes(router, { db, config }) {
     const rec = { filename: name || 'file', size: buffer.length, content_type: type || null };
     if (buffer.length > MAX_FILE) return { ...rec, error: 'too large to store' };
     const path = `requests/${ref}/${Date.now()}-${crypto.randomBytes(3).toString('hex')}-${safeName(name)}`;
-    try { await db.storage.upload(path, buffer, type || 'application/octet-stream'); return { ...rec, path }; } catch (e) {
+    // Documents bucket: any file type up to 25 MB (the image bucket only accepts the portal's own WebP photos).
+    try { await db.docs.upload(path, buffer, type || 'application/octet-stream'); return { ...rec, path, bucket: 'docs' }; } catch (e) {
       console.error('Attachment save failed:', e.message); return { ...rec, error: 'could not be stored' };
     }
   }
@@ -199,7 +200,8 @@ module.exports = function requestRoutes(router, { db, config }) {
       db.list('info_request_messages', { filters: { request_id: r.id }, order: 'created_at.asc' }),
       (r.product_ids || []).length ? db.list('products', { filters: { id: ['in', r.product_ids] } }) : [],
     ]);
-    const urls = await db.storage.signedUrls(msgs.flatMap((m) => (m.attachments || []).map((a) => a.path)), 3600);
+    const urls = await db.storage.signedUrls(msgs.flatMap((m) => (m.attachments || []).filter((a) => a.bucket !== 'docs').map((a) => a.path)), 3600).catch(() => ({}));
+    for (const m of msgs) (m.attachments || []).forEach((a, i) => { if (a.bucket === 'docs' && a.path) urls[a.path] = `/admin/request-files/${m.id}/${i}`; });
     const aiPending = RS.ensureSummaries(db, msgs, { request: r, supplierName: supplier?.name });
     const KIND = { out: ['Sent to supplier', 'out'], in: ['Reply from supplier', 'in'], note: ['Internal note', 'note'] };
     const files = (m) => (m.attachments || []).length ? html`<div class="clog-files">${m.attachments.map((a) => (a.path && urls[a.path] ? html`<a class="att-chip" href="${urls[a.path]}" download="${a.filename}">📎 ${a.filename}</a>` : html`<span class="att-chip off">📎 ${a.filename}${a.error ? ` (${a.error})` : ''}</span>`))}</div>` : '';
@@ -266,6 +268,16 @@ module.exports = function requestRoutes(router, { db, config }) {
     }));
   }));
 
+  router.get('/admin/request-files/:msgId/:idx', G(async (req, res) => {
+    const m = await db.get('info_request_messages', req.params.msgId);
+    const a = (m?.attachments || [])[Number(req.params.idx)];
+    if (!a || !a.path || a.bucket !== 'docs') throw new HttpError(404, 'File not found');
+    const buf = await db.docs.download(a.path);
+    const name = String(a.filename || 'file').replace(/["\r\n]/g, '_');
+    const inline = req.query.inline === '1' && /^(image\/|application\/pdf)/.test(a.content_type || '');
+    res.writeHead(200, { 'Content-Type': a.content_type || 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+    res.end(buf);
+  }));
   router.get('/admin/requests/:id/ai-status', G(async (req, res) => {
     const msgs = await db.list('info_request_messages', { filters: { request_id: req.params.id } });
     res.json({ pending: RS.pendingCount(msgs), missing: msgs.filter(RS.eligible).length });

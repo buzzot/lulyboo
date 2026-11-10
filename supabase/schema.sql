@@ -690,3 +690,7 @@ create table if not exists public.sailings (
 create index if not exists sailings_etd_idx on public.sailings (etd);
 create index if not exists sailings_batch_idx on public.sailings (batch);
 alter table public.sailings enable row level security;
+
+-- RFQ API: reserve a reference before the email is sent (run once)
+alter table public.info_requests drop constraint if exists info_requests_status_check;
+alter table public.info_requests add constraint info_requests_status_check check (status in ('Draft','Sent','Replied','Complete','Closed'));

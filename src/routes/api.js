@@ -48,7 +48,7 @@ module.exports = function apiRoutes(router, { db, config }) {
   }
   const enabled = () => ['INTEGRATION_API_KEY', 'INTEGRATION_API_KEY_NEXT'].some((n) => (process.env[n] || '').length >= 16);
 
-  async function handle(req) {
+  async function handle(req, mode = 'record') {
     if (!enabled()) throw new ApiError(503, 'The integration API is not enabled');
     const ip = ipOf(req);
     // Repeated bad keys from one address are throttled before anything else is checked.
@@ -72,14 +72,14 @@ module.exports = function apiRoutes(router, { db, config }) {
     const original = str(b.original_message, 50000);
     const products = (Array.isArray(b.products) ? b.products : []).slice(0, 50).map((p) => (typeof p === 'string' ? { name: p } : p)).filter((p) => p && str(p.name, 300));
     const title = str(b.title, 300) || (products[0] ? `RFQ: ${str(products[0].name, 200)}` : '');
-    if (!title) throw new ApiError(400, 'title is required (or send at least one product)');
+    if (!title && mode !== 'reserve') throw new ApiError(400, 'title is required (or send at least one product)');
     const channel = CHANNELS.find((c) => c.toLowerCase() === String(b.channel || '').toLowerCase()) || 'Other';
     const externalId = str(b.external_id, 200) || null;
 
     // Retries with the same external_id never create a second record.
     if (externalId) {
       const dupe = (await db.list('info_requests', { filters: { external_id: externalId } }))[0];
-      if (dupe) return { status: 200, ref: dupe.ref, body: { ok: true, duplicate: true, ref: dupe.ref, request_id: dupe.id, url: `${config.publicUrl}/admin/requests/${dupe.id}` }, note: 'duplicate' };
+      if (dupe && !(dupe.status === 'Draft' && mode === 'record')) return { status: 200, ref: dupe.ref, body: { ok: true, duplicate: true, ref: dupe.ref, request_id: dupe.id, url: `${config.publicUrl}/admin/requests/${dupe.id}` }, note: 'duplicate' };
     }
 
     // Supplier: match, else create (flagged for review). A matched supplier only gets blank fields filled; nothing is returned about it.
@@ -93,7 +93,12 @@ module.exports = function apiRoutes(router, { db, config }) {
     }
 
     const { nextRef, saveAttachment } = router.requestHelpers;
-    const ref = await nextRef();
+    const extDraft = externalId ? (await db.list('info_requests', { filters: { external_id: externalId, status: 'Draft' } }))[0] : null;
+    const wanted = String(b.ref || extDraft?.ref || '').trim().toUpperCase();
+    const draft = /^LB-\d{3,7}$/.test(wanted) ? (await db.list('info_requests', { filters: { ref: wanted } }))[0] : null;
+    if (wanted && !draft) throw new ApiError(400, `Reference ${wanted} was not reserved: call POST /api/v1/rfq/reserve first, or leave "ref" out`);
+    if (draft && draft.status !== 'Draft') return { status: 200, ref: draft.ref, body: { ok: true, duplicate: true, ref: draft.ref, request_id: draft.id, url: `${config.publicUrl}/admin/requests/${draft.id}` }, note: 'duplicate' };
+    const ref = draft ? draft.ref : await nextRef();
     if (created) {
       supplier = await db.insert('suppliers', { name: sName, email: sEmail || null, ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, v || null])), crm_status: 'Contacted', needs_review: true, created_via: 'api', notes: `Added automatically from RFQ ${ref} logged by the Hermes agent. Please check the details.` });
     } else {
@@ -103,13 +108,30 @@ module.exports = function apiRoutes(router, { db, config }) {
       if (Object.keys(patch).length) await db.update('suppliers', { id: supplier.id }, patch);
     }
 
+    // Reserve a reference BEFORE sending, so the email subject can carry it: "[LB-1032] RFQ: …".
+    // Replies then match the request by number. Record the sent email afterwards with the same "ref".
+    if (mode === 'reserve') {
+      const ext = str(b.external_id, 200) || null;
+      if (ext) {
+        const dupe = (await db.list('info_requests', { filters: { external_id: ext } }))[0];
+        if (dupe) return { status: 200, ref: dupe.ref, body: { ok: true, ref: dupe.ref, subject_tag: `[${dupe.ref}]`, duplicate: true }, note: 'reserve duplicate' };
+      }
+      const { nextRef: nr } = router.requestHelpers;
+      const ref = await nr();
+      const now = new Date().toISOString();
+      await db.insert('info_requests', { ref, supplier_id: supplier.id, kind: 'rfq', status: 'Draft', subject: title || '(reserved: not sent yet)', external_id: ext, channel, created_at: now, updated_at: now, to_emails: sEmail ? [sEmail] : [] });
+      return { status: 201, ref, body: { ok: true, ref, subject_tag: `[${ref}]`, hint: `Put ${ref} in the email subject, send it, then POST /api/v1/rfq with "ref": "${ref}".` }, note: 'reserved' };
+    }
     const sentAt = b.sent_at && !Number.isNaN(Date.parse(b.sent_at)) ? new Date(b.sent_at).toISOString() : new Date().toISOString();
     const productLines = products.map((p) => `• ${str(p.name, 300)}${p.sku ? ` (${str(p.sku, 100)})` : ''}${p.qty ? ` — qty ${str(p.qty, 50)}` : ''}${p.target_price ? ` — target ${str(p.target_price, 50)}` : ''}${p.notes ? ` — ${str(p.notes, 300)}` : ''}`);
     const bodyText = [message, productLines.length ? `Products:\n${productLines.join('\n')}` : ''].filter(Boolean).join('\n\n') || '(no text recorded)';
-    const row = await db.insert('info_requests', {
-      ref, supplier_id: supplier.id, kind: 'rfq', channel, contact: str(b.contact, 200) || null, external_id: externalId,
+    const fields = {
+      ref, supplier_id: supplier.id, kind: 'rfq', channel, contact: str(b.contact, 200) || null, external_id: externalId || draft?.external_id || null,
       subject: title, note: str(b.notes, 2000) || null, to_emails: sEmail ? [sEmail] : [], created_at: sentAt, updated_at: sentAt,
-    });
+    };
+    let row;
+    if (draft) { await db.update('info_requests', { id: draft.id }, { ...fields, status: 'Sent' }); row = { ...draft, ...fields }; }
+    else row = await db.insert('info_requests', fields);
     const attachments = [];
     for (const a of (Array.isArray(b.attachments) ? b.attachments : []).slice(0, 10)) {
       const buf = Buffer.from(String(a?.content_base64 || ''), 'base64');
@@ -126,14 +148,14 @@ module.exports = function apiRoutes(router, { db, config }) {
     return { status: 201, ref, created, body: { ok: true, ref, request_id: row.id, url: `${config.publicUrl}/admin/requests/${row.id}`, supplier_created: created }, note: created ? 'new supplier' : null };
   }
 
-  router.post('/api/v1/rfq', async (req, res) => {
+  for (const [path, mode] of [['/api/v1/rfq', 'record'], ['/api/v1/rfq/reserve', 'reserve']]) router.post(path, async (req, res) => {
     let out;
-    try { out = await handle(req); } catch (e) {
+    try { out = await handle(req, mode); } catch (e) {
       if (e instanceof ApiError) out = { status: e.status, body: { error: e.message }, note: e.message };
       else { console.error(new Date().toISOString(), 'API /rfq failed:', e.message); out = { status: 500, body: { error: 'Could not record the request' }, note: 'server error' }; }
     }
     if (out.status !== 503) {
-      try { await db.insert('api_log', { ip: ipOf(req), key_label: req.keyLabel || null, endpoint: 'POST /api/v1/rfq', status: out.status, ref: out.ref || null, supplier_created: out.created ?? null, note: out.note || null }); } catch (e) { console.error('API log failed:', e.message); }
+      try { await db.insert('api_log', { ip: ipOf(req), key_label: req.keyLabel || null, endpoint: `POST ${path}`, status: out.status, ref: out.ref || null, supplier_created: out.created ?? null, note: out.note || null }); } catch (e) { console.error('API log failed:', e.message); }
     }
     res.json(out.body, out.status);
   });

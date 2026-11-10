@@ -670,7 +670,11 @@ test('information requests: ticked products → email with CC and reference → 
   assert.equal(db.tables.info_requests[0].status, 'Replied');
   const detail2 = await req(base, 'GET', ok.location, { cookie });
   assert.match(detail2.text, /Dieline attached/); assert.match(detail2.text, /dieline\.pdf/);
-  assert.match(detail2.text, /href="https:\/\/x\.supabase\.co\/storage[^"]*LB-1001[^"]*dieline\.pdf/); // stored and linked
+  const fileLink = (detail2.text.match(/href="(\/admin\/request-files\/[^"]+)" download="dieline\.pdf"/) || [])[1];
+  assert.ok(fileLink, 'attachment stored and linked');
+  const dl = await fetch(base + fileLink, { headers: { cookie } });
+  assert.equal(dl.status, 200); assert.match(dl.headers.get('content-disposition'), /dieline\.pdf/);
+  assert.notEqual((await fetch(base + fileLink, { redirect: 'manual' })).status, 200);   // not without signing in
   // list + status + manual log
   assert.match((await req(base, 'GET', '/admin/requests', { cookie })).text, /LB-1001/);
   const id = db.tables.info_requests[0].id;
@@ -898,7 +902,7 @@ test('mailgun inbound: signed reply is logged with attachment; bad/stale signatu
   assert.equal(msgs.length, 1); assert.equal(msgs[0].direction, 'in'); assert.equal(msgs[0].body, 'Attached are the photos.');
   assert.match(msgs[0].from_email, /lily@dadi\.example/);
   assert.equal(msgs[0].attachments.length, 1); assert.ok(msgs[0].attachments[0].path);
-  assert.ok(db.files.has(msgs[0].attachments[0].path));
+  assert.ok(db.files.has('docs/' + msgs[0].attachments[0].path));
   assert.equal(db.tables.info_requests[0].status, 'Replied');
 
   // Mailgun retry of the same message is not logged twice
@@ -952,7 +956,7 @@ test('integration API: Hermes records RFQs (write-only), creates new suppliers, 
   assert.equal(rq.kind, 'rfq'); assert.equal(rq.channel, 'Telegram'); assert.equal(rq.subject, 'RFQ: silicone bottle');
   const msg = db.tables.info_request_messages[0];
   assert.match(msg.body, /Please quote 3000 pcs/); assert.match(msg.body, /Silicone baby bottle — qty 3000 — target \$1\.20/);
-  assert.equal(msg.attachments.length, 1); assert.ok(db.files.has(msg.attachments[0].path));
+  assert.equal(msg.attachments.length, 1); assert.ok(db.files.has('docs/' + msg.attachments[0].path));
   assert.ok(db.tables.supplier_activities.some((a) => a.type === 'WeChat/WhatsApp' && a.summary.includes(j1.ref)));
   const task = db.tables.crm_tasks[0];
   assert.equal(task.request_id, rq.id); assert.equal(task.done, false);
@@ -2024,4 +2028,27 @@ test('RFQ reply without an LB number is matched by sender and subject', async (t
   const msgs = db.tables.info_request_messages.filter((m) => m.direction === 'in');
   assert.equal(msgs.length, 1); assert.equal(msgs[0].request_id, r.id);   // same domain, subject picks LB-1031 over the newer LB-1030
   assert.notEqual(msgs[0].request_id, other.id);
+});
+
+test('RFQ API: reserve a reference first so the email subject carries it', async (t) => {
+  process.env.INTEGRATION_API_KEY = 'k'.repeat(32);
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { delete process.env.INTEGRATION_API_KEY; server.close(); });
+  const call = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${'k'.repeat(32)}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, j: await r.json() }));
+  const sup = { name: 'Taizhou Xinhaosheng', email: 'elina@wlhaosheng.example' };
+  const r1 = await call('/api/v1/rfq/reserve', { supplier: sup, title: 'RFQ: Padded potty seat', external_id: 'tg-77' });
+  assert.equal(r1.status, 201); assert.match(r1.j.ref, /^LB-\d+$/); assert.equal(r1.j.subject_tag, `[${r1.j.ref}]`);
+  const again = await call('/api/v1/rfq/reserve', { supplier: sup, external_id: 'tg-77' });
+  assert.equal(again.j.ref, r1.j.ref);                                               // retry-safe
+  assert.equal(db.tables.info_requests.length, 1); assert.equal(db.tables.info_requests[0].status, 'Draft');
+  const rec = await call('/api/v1/rfq', { ref: r1.j.ref, supplier: sup, title: `[${r1.j.ref}] RFQ: Padded potty seat`, channel: 'Email', message: 'Please quote.', external_id: 'tg-77' });
+  assert.equal(rec.status, 201); assert.equal(rec.j.ref, r1.j.ref);
+  assert.equal(db.tables.info_requests.length, 1); assert.equal(db.tables.info_requests[0].status, 'Sent');
+  assert.equal(db.tables.info_request_messages.length, 1);
+  const bad = await call('/api/v1/rfq', { ref: 'LB-9999', supplier: sup, title: 'x' });
+  assert.equal(bad.status, 400);
+  // Recording without reserving still works as before
+  const plain = await call('/api/v1/rfq', { supplier: sup, title: 'RFQ: Bath seat' });
+  assert.equal(plain.status, 201); assert.notEqual(plain.j.ref, r1.j.ref);
 });
