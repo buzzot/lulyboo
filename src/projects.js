@@ -69,23 +69,24 @@ async function storeFiles(db, { projectId, files = [], maxBytes = 20 * 1024 * 10
 const fileList = (files, key) => [].concat(files?.[key] || []);
 
 // ── Notifications (best effort: a failed email never blocks the action)
-async function notifyOwner(config, subject, text, email) {
+async function notifyOwner(config, subject, text, email, replyTo) {
   const to = ownerEmails(); if (!to.length) return;
   try {
-    if (email) { const e = adminEmail({ preheader: subject, ...email }); await sendEmail(config, { to, subject, text: e.text, html: e.html }); return; }
-    await sendEmail(config, { to, subject, text });
+    if (email) { const e = adminEmail({ preheader: subject, ...email }); await sendEmail(config, { to, subject, text: e.text, html: e.html, replyTo }); return; }
+    await sendEmail(config, { to, subject, text, replyTo });
   } catch (e) { console.error('Owner notice failed:', e.message); }
 }
 async function supplierRecipients(db, supplier) {
   const users = await db.list('supplier_users', { filters: { supplier_id: supplier.id } });
   return [...new Set([supplier.email, ...users.filter((u) => u.status !== 'disabled').map((u) => u.email)].filter(Boolean).map((e) => e.toLowerCase()))];
 }
-async function notifySupplier(config, db, supplier, { subject, en, zh, link, email }) {
+async function notifySupplier(config, db, supplier, { subject, en, zh, link, email, replyTo }) {
   try {
     const to = await supplierRecipients(db, supplier); if (!to.length) return false;
-    if (email) { const e = projectEmail({ ...email, companyName: supplier.name, link }); await sendEmail(config, { to, subject, text: e.text, html: e.html, cc: ownerEmails() }); return true; }
-    const text = `${en}\n\nOpen in the supplier portal: ${link}\n\n${zh}\n\n在供应商平台中查看：${link}`;
-    await sendEmail(config, { to, subject, text, cc: ownerEmails() });
+    if (email) { const e = projectEmail({ ...email, companyName: supplier.name, link, replyHint: !!replyTo }); await sendEmail(config, { to, subject, text: e.text, html: e.html, cc: ownerEmails(), replyTo }); return true; }
+    const hint = replyTo ? `\n\nYou can simply reply to this email: your reply is added to the project.\n直接回复此邮件即可，您的回复会自动添加到项目中。` : '';
+    const text = `${en}\n\nOpen in the supplier portal: ${link}\n\n${zh}\n\n在供应商平台中查看：${link}${hint}`;
+    await sendEmail(config, { to, subject, text, cc: ownerEmails(), replyTo });
     return true;
   } catch (e) { console.error('Supplier notice failed:', e.message); return false; }
 }

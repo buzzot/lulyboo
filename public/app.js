@@ -72,6 +72,13 @@
     if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
 
+  // Copy a fixed text (e.g. a thread's email address)
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-copy-text]'); if (!b) return;
+    var v = b.getAttribute('data-copy-text');
+    (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).catch(function () { window.prompt('Copy:', v); });
+    var old = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = old; }, 1500);
+  });
   // Copy portal link
   document.querySelectorAll('[data-copybtn]').forEach(function (b) {
     b.addEventListener('click', function () {

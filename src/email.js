@@ -150,12 +150,13 @@ function staffInviteEmail({ link, name, reset }) {
  * Development project notices to a supplier (invitation, spec update, new message), in the same layout as the other emails.
  * title/lead/button are [en, zh]; `note` is free text from Lulyboo shown in a highlighted box; `points` is a list of [en, zh].
  */
-function projectEmail({ ref, project, companyName, title, lead, noteLabel, note, points = [], button, link }) {
+function projectEmail({ ref, project, companyName, title, lead, noteLabel, note, points = [], button, link, replyHint = false }) {
   const p = (x, zh) => `<p style="margin:${zh ? '6px' : '0'} 0 0;font-size:15px;line-height:${zh ? 26 : 25}px;${zh ? 'color:#62676e;' : ''}"${zh ? ' lang="zh-CN"' : ''}>${x}</p>`;
   const paras = (t) => esc(t).split(/\n{2,}/).map((x) => x.replace(/\n/g, '<br>')).join('<br><br>');
   const text = `${companyName ? `Hello ${companyName},\n\n` : ''}${lead[0]} "${project}" (${ref})${note ? `\n\n${noteLabel ? noteLabel[0] + ':\n' : ''}${note}` : ''}${points.length ? `\n\n${points.map((x) => `- ${x[0]}`).join('\n')}` : ''}\n\n${button[0]}: ${link}\n\n${companyName ? '您好，\n\n' : ''}${lead[1]}“${project}”（${ref}）${points.length ? `\n\n${points.map((x) => `- ${x[1]}`).join('\n')}` : ''}\n\n${button[1]}：${link}`;
+  const hint = replyHint ? ['You can simply reply to this email: your reply is added to the project thread.', '直接回复此邮件即可，您的回复会自动添加到项目对话中。'] : null;
   return {
-    text,
+    text: hint ? `${text}\n\n${hint[0]}\n${hint[1]}` : text,
     html: layout({
       preheader: `${title[0]}: ${project} · ${title[1]}`,
       body: `<tr><td style="padding:32px 0 0;"><h1 style="margin:0;font-size:27px;line-height:36px;font-weight:600;">${esc(title[0])}</h1>
@@ -170,6 +171,7 @@ ${noteLabel ? `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#7
 ${points.length ? `<tr><td style="padding:20px 0 0;"><ul style="margin:0;padding-left:20px;font-size:15px;line-height:24px;">${points.map((x) => `<li style="margin:0 0 8px;">${esc(x[0])}<br><span style="color:#62676e;" lang="zh-CN">${esc(x[1])}</span></li>`).join('')}</ul></td></tr>` : ''}
 <tr><td style="padding:26px 0 0;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
 <a href="${esc(link)}" target="_blank" style="display:inline-block;padding:15px 25px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(button[0])} · ${esc(button[1])}</a></td></tr></table></td></tr>
+${hint ? `<tr><td style="padding:20px 0 0;"><p style="margin:0;padding:12px 16px;background:#f4f7f6;border-radius:6px;font-size:14px;line-height:22px;color:#3d4247;">↩ ${esc(hint[0])}<br><span style="color:#62676e;" lang="zh-CN">${esc(hint[1])}</span></p></td></tr>` : ''}
 <tr><td style="padding:24px 0 30px;"><p style="margin:0;font-size:12px;line-height:21px;color:#73777d;">If the button doesn't work, <a href="${esc(link)}" style="color:#62676e;text-decoration:underline;">open the project in the supplier portal</a>.</p>
 <p style="margin:3px 0 0;font-size:12px;line-height:21px;color:#73777d;" lang="zh-CN">如果按钮无法打开，请<a href="${esc(link)}" style="color:#62676e;text-decoration:underline;">点击此处在供应商平台中查看</a>。</p></td></tr>`,
     }),

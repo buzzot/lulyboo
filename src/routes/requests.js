@@ -323,6 +323,12 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });
       return res.json({ ok: true, samples: true, ...out });
     }
+    // Development threads: matched by the code in the subject, e.g. [Lulyboo DP-1001-9D6A].
+    const DE = require('../dev-email');
+    if (/\bDP-?\d{3,7}\b/i.test(subject)) {
+      const out = await DE.handleDevEmail({ db, config, from, toList, cc: [f.To, f.to, f.Cc, f.cc].filter(Boolean).join(', '), subject, text, bodyPlain: String(f['body-plain'] || ''), files: Object.values(parsed.files).flat(), messageId: String(f['Message-Id'] || f['message-id'] || ''), date: f.Date || f.date });
+      if (out.matched) return res.json({ ok: true, dev: true, ...out });
+    }
     const ref = refOf(subject) || toList.map(refOf).find(Boolean) || refOf(f['body-plain']) || null;
     const r = ref ? (await db.list('info_requests', { filters: { ref } }))[0] : null;
     if (!r) return res.json({ ok: true, matched: false }); // 200 so Mailgun does not retry

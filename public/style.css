@@ -1334,3 +1334,16 @@ img.ph{object-fit:cover;padding:0}
 .store-pick input:checked+span i::after{content:"";width:6px;height:3px;border:solid #fff;border-width:0 0 2px 2px;transform:translateY(-1px) rotate(-45deg)}
 .store-pick input:focus-visible+span{outline:2px solid var(--brand);outline-offset:2px}
 .pw-body .fields .frow.stores{align-items:center}
+
+/* Development threads by email */
+.via-email{margin-left:8px;font-size:11px;font-weight:600;color:#3f6f8f;background:#e9f2f8;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.em-points{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px;font-size:13.5px}
+.em-tag{display:inline-block;margin-right:6px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;border-radius:4px;padding:1px 6px}
+.em-tag.q{background:#fdf4e3;color:#a86400}.em-tag.c{background:#e7f6ec;color:#1d7a43}
+.em-orig{margin-top:8px;font-size:13px}.em-orig summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+.em-orig .em-meta{margin:6px 0 4px;color:var(--muted);font-size:12px}
+.em-orig pre{white-space:pre-wrap;word-break:break-word;font:inherit;font-size:13px;line-height:1.5;margin:0;padding:10px 12px;background:rgba(255,255,255,.7);border:1px solid var(--line);border-radius:8px;max-height:320px;overflow:auto}
+.em-addr .sub{margin:4px 0 0;font-size:12.5px;line-height:1.5}
+.em-copy{display:flex;align-items:center;gap:8px;margin:10px 0 2px;padding:8px 10px;background:#f6f8f7;border:1px solid var(--line);border-radius:8px}
+.em-copy code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.em-copy .em-k{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:34px}.em-copy+.em-copy{margin-top:6px}

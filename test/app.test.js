@@ -1796,3 +1796,77 @@ test('resend invitation: a rejected email keeps the new link and shows the reaso
   assert.match(pg.text, /\/s\/[A-Za-z0-9_-]{20,}/);
   assert.ok((await db.get('supplier_users', u.id)).invite_expires_at > new Date().toISOString());
 });
+
+test('development threads by email: supplier reply is summarised, posted with name and time, relayed both ways', async (t) => {
+  process.env.MAILGUN_SIGNING_KEY = 'mg-key'; process.env.RESEND_API_KEY = 're_test'; process.env.ANTHROPIC_API_KEY = 'sk-test'; process.env.REQUEST_CC = 'marsel@lulyboo.com';
+  const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'em_' + sent.length }), { status: 200 }); }
+    if (u.includes('api.anthropic.com')) return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_email_summary', input: { summary: 'Teether is 9 x 6 cm, food-grade silicone. Asks for the target price.', language: 'Chinese', questions: ['What is the target price?'], commitments: ['Samples ship Nov 20'] } }] }), { status: 200 });
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; for (const k of ['MAILGUN_SIGNING_KEY', 'RESEND_API_KEY', 'ANTHROPIC_API_KEY', 'REQUEST_CC']) delete process.env[k]; server.close(); });
+  const DE = require('../src/dev-email');
+  const crypto = require('node:crypto');
+  const s = await db.insert('suppliers', { name: 'Milky Way Rubber', email: 'li@milkyway.example' });
+  const p = await db.insert('dev_projects', { ref: 'DP-1001', name: 'Salon Teether Set - 3PC', status: 'Sourcing', current_version: 1 });
+  const inv = await db.insert('dev_invitations', { project_id: p.id, supplier_id: s.id, status: 'Invited', ack_version: 1 });
+  const addr = DE.threadAddress(); const code = DE.threadCode(p, inv);
+  assert.equal(addr, 'projects@in.lulyboo.space'); assert.match(code, /^DP-1001-[0-9A-F]{4}$/);
+  const other = await db.insert('suppliers', { name: 'Other Co', email: 'ann@other.example' });
+  await db.insert('dev_invitations', { project_id: p.id, supplier_id: other.id, status: 'Invited', ack_version: 1 });
+  const post = (fields, files = []) => {
+    const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok' + Math.random();
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), ...fields })) fd.append(k, v);
+    for (const [n, buf, type] of files) fd.append('attachment-1', new Blob([buf], { type }), n);
+    return fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: fd }).then((r) => r.json());
+  };
+  const date = new Date(Math.floor(Date.now() / 60000) * 60000 - 3 * 3600_000).toUTCString();
+  const j = await post({ from: 'Li Kuan <li@milkyway.example>', recipient: addr, subject: `Re: [Lulyboo ${code}] New message`, 'stripped-text': '尺寸 9x6cm，食品级硅胶。目标价格是多少？', 'body-plain': '尺寸 9x6cm，食品级硅胶。目标价格是多少？\n\n> earlier', Date: date, 'Message-Id': '<m1@milkyway>' },
+    [['drawing.pdf', Buffer.alloc(30000, 1), 'application/pdf'], ['image001.png', Buffer.alloc(800, 1), 'image/png']]);
+  assert.equal(j.matched, true); assert.equal(j.direction, 'supplier');
+  const msgs = db.tables.dev_messages;
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].author, 'Li Kuan');
+  assert.equal(msgs[0].created_at, new Date(date).toISOString());
+  assert.match(msgs[0].body, /food-grade silicone/);
+  assert.equal(msgs[0].source, 'email'); assert.equal(msgs[0].email.from, 'li@milkyway.example');
+  assert.equal(msgs[0].attachments.length, 1); assert.equal(msgs[0].attachments[0].name, 'drawing.pdf');
+  assert.equal((await db.get('dev_invitations', inv.id)).status, 'Questions');
+  // owners get the summary, with Reply-To on the thread
+  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, ['marsel@lulyboo.com']); assert.equal(sent[0].reply_to, addr);
+  assert.match(sent[0].html, /food-grade silicone/); assert.ok(sent[0].subject.startsWith(`[${code}] Milky Way Rubber: New message`));
+  // Mailgun retry: no duplicate
+  await post({ from: 'Li Kuan <li@milkyway.example>', recipient: addr, subject: 'Re: x', 'stripped-text': 'again', Date: date, 'Message-Id': '<m1@milkyway>' });
+  assert.equal(db.tables.dev_messages.length, 1);
+
+  // Owner replies from their inbox to the thread address → logged as Lulyboo and relayed to the supplier
+  const j2 = await post({ from: 'Marsel <marsel@lulyboo.com>', recipient: addr, subject: `RE: [${code}] Milky Way Rubber: New message`, 'stripped-text': 'Target is $0.80 at 5k pcs.', 'Message-Id': '<m2@lulyboo>' });
+  assert.equal(j2.direction, 'admin');
+  assert.equal(db.tables.dev_messages[1].author, 'Marsel');
+  assert.equal(sent.length, 2); assert.deepEqual(sent[1].to, ['li@milkyway.example']); assert.equal(sent[1].reply_to, addr);
+  assert.match(sent[1].text, /Target is \$0\.80/); assert.equal(sent[1].subject, `[Lulyboo ${code}] New message`);
+
+  // Owner wrote to the supplier directly with only the project number and CC'd the mailbox → matched by recipient, logged, not sent twice
+  await post({ from: 'marsel@lulyboo.com', recipient: addr, To: 'li@milkyway.example', Cc: addr, subject: 'DP-1001 tooling', 'stripped-text': 'Please confirm tooling cost.', 'Message-Id': '<m3@lulyboo>' });
+  assert.equal(db.tables.dev_messages.length, 3); assert.equal(db.tables.dev_messages[2].invitation_id, inv.id); assert.equal(sent.length, 2);
+  // Supplier writes a new email with just the project number from their company address → matched by sender
+  const j4 = await post({ from: 'Wang <wang@milkyway.example>', recipient: addr, subject: 'About DP-1001 colours', 'stripped-text': 'Pantone codes attached.', 'Message-Id': '<m4@milkyway>' });
+  assert.equal(j4.how, 'project'); assert.equal(db.tables.dev_messages[3].author, 'Wang');
+
+  // Forged code: not matched
+  const bad = await post({ from: 'x@evil.example', recipient: addr, subject: 'Re: [Lulyboo DP-1001-0000] hi', 'stripped-text': 'x' });
+  assert.notEqual(bad.dev, true); assert.equal(db.tables.dev_messages.length, 4);
+
+  // Admin page shows the email badge, AI points and the thread address
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const pg = await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie });
+  assert.match(pg.text, /✉ email · AI summary/);
+  assert.match(pg.text, /What is the target price\?/);
+  assert.match(pg.text, /Original email \(Chinese\)/);
+  assert.ok(pg.text.includes(addr)); assert.ok(pg.text.includes(`[${code}]`));
+});
