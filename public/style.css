@@ -1498,3 +1498,4 @@ img.ph{object-fit:cover;padding:0}
 .cp-pos a:hover{background:#e3e7e5}
 .cp-facts{display:flex;gap:4px;align-items:center}
 .cp-clip{text-decoration:none;font-size:12px;margin-left:2px}
+.lg-calc,.lg-rates{max-width:none}
