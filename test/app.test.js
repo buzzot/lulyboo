@@ -2209,6 +2209,16 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   assert.match(tb.text, /will be apply later/);
   const csv = await fetch(`${base}/admin/logistics/planning.csv`, { headers: { cookie } });
   assert.equal(csv.status, 200); assert.match(await csv.text(), /PO200013/);
+  // edit popup: set the port (and for the supplier's other lines) and move a date
+  assert.match(byPort.text, /data-edit-order="[^"]*PO900018/); assert.match(byPort.text, /data-edit-dlg/);
+  const st = db.tables.plan_orders.find((o) => o.po === 'PO900018');
+  const ef = new FormData(); for (const [k, v] of Object.entries({ port: 'CNYTN', ready_date: d(3), cbm: '8.5', production_status: 'Ready for shipping', all_po: '1', all_port: '1', back: '/admin/logistics/planning?view=table' })) ef.append(k, v);
+  const er = await fetch(`${base}/admin/logistics/planning/${st.id}/edit`, { method: 'POST', body: ef, headers: { cookie }, redirect: 'manual' });
+  assert.equal(er.status, 303); assert.equal(er.headers.get('location'), '/admin/logistics/planning?view=table');
+  const st2 = db.tables.plan_orders.find((o) => o.po === 'PO900018');
+  assert.equal(st2.port, 'CNYTN'); assert.equal(st2.ready_date, d(3)); assert.equal(Number(st2.cbm), 8.5);
+  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO900021').port, 'CNYTN');      // same supplier, had no port
+  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO200013').port, 'CNNGB');      // other supplier untouched
   // the imported Benno sheet was stored and linked to its POs
   const doc = db.tables.plan_files.find((f) => f.name === 'POs-Ningbo_Benno_20261110.xlsx');
   assert.ok(doc); assert.deepEqual(doc.pos, ['PO200013', 'PO200014', 'PO200016']); assert.ok(db.files.has('docs/' + doc.path));

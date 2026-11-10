@@ -1043,3 +1043,23 @@
     }
   });
 })();
+
+// Container planning: edit one order line (port, ready date, CBM…) in a popup.
+(function () {
+  var dlg = document.querySelector('[data-edit-dlg]'); if (!dlg) return;
+  var form = dlg.querySelector('[data-edit-form]');
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-edit-order]'); if (!b) return;
+    var o; try { o = JSON.parse(b.getAttribute('data-edit-order')); } catch (x) { return; }
+    form.action = location.pathname.replace(/\/$/, '') + '/' + o.id + '/edit';
+    dlg.querySelector('[data-f-title]').textContent = o.po;
+    dlg.querySelector('[data-f-sub]').textContent = [o.supplier, o.product].filter(Boolean).join(' · ');
+    dlg.querySelectorAll('[data-f]').forEach(function (el) {
+      var k = el.getAttribute('data-f');
+      if (el.type === 'checkbox') el.checked = !!o[k]; else el.value = o[k] == null ? '' : o[k];
+    });
+    if (dlg.showModal) dlg.showModal();
+    var first = dlg.querySelector(o.port ? '[data-f=ready_date]' : '[data-f=port]'); if (first) first.focus();
+  });
+  dlg.addEventListener('click', function (e) { if (e.target.closest('[data-edit-close]') || e.target === dlg) dlg.close(); });
+})();

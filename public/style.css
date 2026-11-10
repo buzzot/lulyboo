@@ -1499,3 +1499,16 @@ img.ph{object-fit:cover;padding:0}
 .cp-facts{display:flex;gap:4px;align-items:center}
 .cp-clip{text-decoration:none;font-size:12px;margin-left:2px}
 .lg-calc,.lg-rates{max-width:none}
+/* Container planning: edit popup */
+.cp-card{position:relative}.cp-card .cp-card-top{padding-right:22px}
+.cp-edit{position:absolute;top:6px;right:6px;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1}
+.cp-edit:hover,.cp-edit:focus-visible{background:#eef1ef;color:var(--ink)}
+.cp-dlg{width:min(640px,94vw);border:0;border-radius:14px;padding:0;box-shadow:0 24px 60px rgba(0,0,0,.25)}
+.cp-dlg::backdrop{background:rgba(20,24,22,.45)}
+.cp-dlg form{padding:20px 22px;display:flex;flex-direction:column;gap:12px;max-width:none}
+.cp-dlg-h{display:flex;justify-content:space-between;align-items:flex-start}.cp-dlg-h h2{margin:0;font-size:20px}
+.cp-dlg-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}
+.cp-dlg-grid label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--muted);margin:0}
+.cp-dlg-grid label.wide{grid-column:1 / -1}.cp-dlg-grid input,.cp-dlg-grid select,.cp-dlg-grid textarea{margin:0;font-weight:400;color:var(--ink)}
+.cp-dlg .cp-chk{display:flex;align-items:center;gap:8px;font-size:14px;margin:0}.cp-dlg .cp-chk input{width:auto;margin:0}
+.cp-dlg-a{display:flex;gap:10px;margin-top:4px}
