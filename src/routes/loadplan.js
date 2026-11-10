@@ -5,6 +5,7 @@
 const { html, raw } = require('../lib/html');
 const { parseForm, takeFlash, HttpError } = require('../lib/http');
 const { sendEmail } = require('../email');
+const Q = require('../quotes');
 const { page, adminNav } = require('../views/layout');
 const { guard } = require('./admin');
 const PL = require('../planning');
@@ -23,7 +24,7 @@ const emails = (v) => String(v || '').split(/[,;\s]+/).map((x) => x.trim()).filt
 const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
 const int = (v) => Number(v || 0).toLocaleString('en-US');
 const COLORS = ['#d9634f', '#3b7dd8', '#2f9e6a', '#8e5bd1', '#d39a2a', '#1f9bb0', '#c2477f', '#6b8e23', '#7a6a58', '#b4473b'];
-const missingTable = (e) => /plan_containers|container_id|PGRST20[45]|relation|column/i.test(e?.message || '');
+const missingTable = (e) => /plan_containers|plan_quotes|forwarders|container_id|PGRST20[45]|relation|column/i.test(e?.message || '');
 const portName = (c) => SC.PORT[c]?.name || c;
 
 /** Short label for a sailing, e.g. "COSCO · ETD Nov 28 → Long Beach · 15 d". */
@@ -40,7 +41,7 @@ async function containerIndex(db) {
   const labelFor = (line) => {
     const c = line?.container_id && byId[line.container_id];
     if (!c) return null;
-    return { c, text: [`${portName(c.port)} · Container ${c.no}`, BOX[c.box]?.name || c.box, c.sailing ? `ETD ${PL.short(c.sailing.etd)}` : null, c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Booking requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
+    return { c, text: [`${portName(c.port)} · Container ${c.no}`, BOX[c.box]?.name || c.box, c.sailing ? `ETD ${PL.short(c.sailing.etd)}` : null, c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Quotes requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
   };
   return { byId, labelFor };
 }
@@ -74,6 +75,16 @@ function loadPlanRoutes(router, { db, config }) {
     const sail = await db.list('sailings', { filters: { origin: port, etd: ['gte', day] }, order: 'etd.asc', limit: 40 }).catch(() => []);
     for (const c of portCs) if (c.sailing_id && !sail.some((s) => s.id === c.sailing_id)) { const s = await db.get('sailings', c.sailing_id).catch(() => null); if (s) sail.unshift(s); }
 
+    let quotes = [];
+    if (portCs.length) quotes = await db.list('plan_quotes', { order: 'created_at.asc' }).catch(() => []);
+    const qOf = (c) => quotes.filter((q) => q.container_id === c.id).map((q) => ({
+      id: q.id, code: q.code, company: q.company || 'Forwarder', to: q.to_email || '', status: q.status, sent: q.sent_at ? PL.short(String(q.sent_at).slice(0, 10)) : '',
+      replied: q.replied_at ? PL.short(String(q.replied_at).slice(0, 10)) : '', total: q.total_usd != null ? Number(q.total_usd) : null, ocean: q.ocean_usd != null ? Number(q.ocean_usd) : null, currency: q.currency || '',
+      carrier: q.carrier || '', vessel: q.vessel || '', etd: q.etd || '', eta: q.eta || '', etdText: q.etd ? PL.short(q.etd) : '', etaText: q.eta ? PL.short(q.eta) : '', transit: q.transit_days ?? null,
+      cy: q.cy_cutoff || '', valid: q.valid_until || '', validText: q.valid_until ? PL.short(q.valid_until) : '', expired: !!(q.valid_until && q.valid_until < day), free: q.free_days ?? null,
+      summary: q.summary || '', notes: q.notes || '', from: q.reply_from || '', reply: q.reply_text ? String(q.reply_text).slice(0, 8000) : '', charges: Array.isArray(q.charges) ? q.charges.slice(0, 20) : [],
+      files: (Array.isArray(q.files) ? q.files : []).map((f, i) => ({ name: f.name, url: `${BASE}/quotes/${q.id}/files/${i}`, inline: /^(image\/|application\/pdf)/.test(f.type || '') })),
+    }));
     const data = {
       base: BASE, port, today: day, box: BOX,
       orders: here.map((o, i) => ({
@@ -81,7 +92,7 @@ function loadPlanRoutes(router, { db, config }) {
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, color: COLORS[i % COLORS.length],
       })),
-      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '' })),
+      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
       states: Object.fromEntries(Object.entries(PL.STATE).map(([k, v]) => [k, { label: v.label, tag: v.tag }])),
     };
@@ -103,17 +114,33 @@ function loadPlanRoutes(router, { db, config }) {
         </div>
         <div class="lp-toast" data-lp-toast role="status" aria-live="polite"></div>
         <dialog class="rp-modal" data-lp-req aria-labelledby="lp-req-t"><form data-lp-req-form>
-          <div class="rp-top"><h2 id="lp-req-t">Booking request</h2><button type="button" class="icon-btn" data-lp-req-close aria-label="Close">×</button></div>
-          <p class="sub rp-ctx">Sent from the portal to your logistics company. Edit anything before sending.</p>
+          <div class="rp-top"><h2 id="lp-req-t">Request quotations</h2><button type="button" class="icon-btn" data-lp-req-close aria-label="Close">×</button></div>
+          <p class="sub rp-ctx">Each forwarder you tick gets their own formal email with a reference in the subject. Their replies come back here and AI reads the rate, ETD and ETA.</p>
           <div class="rp-loading" data-lp-req-loading>Preparing the packing list…</div>
           <div class="rp-fields" data-lp-req-fields hidden>
-            <label>To <input name="to" type="text" required placeholder="booking@forwarder.com" autocomplete="off"></label>
-            <label>CC <input name="cc" type="text" placeholder="optional, comma separated" autocomplete="off"></label>
-            <label>Subject <input name="subject" type="text" required></label>
+            <fieldset class="lp-fw"><legend>Send to <a class="link small" href="/admin/logistics/forwarders" target="_blank" rel="noopener">Manage forwarders</a></legend>
+              <div class="lp-fw-list" data-lp-fw-list></div>
+              <details class="lp-fw-add" data-lp-fw-add><summary>+ Add a forwarder</summary>
+                <div class="lp-fw-addrow"><input data-nf="company" placeholder="Company" aria-label="Company"><input data-nf="contact_name" placeholder="Contact person" aria-label="Contact person"><input data-nf="email" type="email" placeholder="email@forwarder.com" aria-label="Email"><button type="button" class="btn small" data-lp-fw-save>Add</button></div></details></fieldset>
+            <label>CC <input name="cc" type="text" placeholder="optional, e.g. yourself — comma separated" autocomplete="off"></label>
+            <label>Subject <input name="subject" type="text" required><span class="sub lp-hint">The reference (LBQ-…) is added for each forwarder.</span></label>
             <label class="cp-chk lp-req-chk"><input type="checkbox" name="contacts" value="1" data-lp-req-contacts> Include supplier contact details (for pickup / CFS delivery)</label>
-            <label>Message <textarea name="body" rows="18" required></textarea></label>
-            <div class="rp-actions"><button class="btn" data-lp-req-send>Send booking request</button><button type="button" class="btn ghost" data-lp-req-close>Cancel</button><span class="sub" data-lp-req-note></span></div>
-          </div></form></dialog>`,
+            <label>Message <textarea name="body" rows="18" required></textarea><span class="sub lp-hint">{contact} becomes each forwarder's contact name.</span></label>
+            <div class="rp-actions"><button class="btn" data-lp-req-send>Send requests</button><button type="button" class="btn ghost" data-lp-req-close>Cancel</button><span class="sub" data-lp-req-note></span></div>
+          </div></form></dialog>
+        <dialog class="rp-modal lp-qdlg" data-lp-q aria-labelledby="lp-q-t"><form data-lp-q-form>
+          <div class="rp-top"><h2 id="lp-q-t">Quote</h2><button type="button" class="icon-btn" data-lp-q-close aria-label="Close">×</button></div>
+          <p class="sub rp-ctx" data-lp-q-sub></p>
+          <div class="lp-qgrid">
+            <label>All-in total (USD) <input name="total_usd" type="number" step="0.01" min="0"></label>
+            <label>Ocean freight (USD) <input name="ocean_usd" type="number" step="0.01" min="0"></label>
+            <label>Carrier <input name="carrier"></label><label>Vessel / voyage <input name="vessel"></label>
+            <label>ETD <input name="etd" type="date"></label><label>ETA <input name="eta" type="date"></label>
+            <label>CY cut-off <input name="cy_cutoff" type="date"></label><label>Valid until <input name="valid_until" type="date"></label>
+            <label>Free days at destination <input name="free_days" type="number" min="0"></label><label>Status <select name="status"><option value="sent">Waiting for reply</option><option value="replied">Quoted</option><option value="declined">Declined</option><option value="chosen">Chosen</option></select></label>
+          </div>
+          <label class="lp-qnote">Notes <textarea name="notes" rows="3"></textarea></label>
+          <div class="rp-actions"><button class="btn">Save</button><button type="button" class="btn ghost" data-lp-q-close>Cancel</button><span class="sub" data-lp-q-note></span></div></form></dialog>`,
     }));
   }));
 
@@ -172,60 +199,87 @@ function loadPlanRoutes(router, { db, config }) {
     return {};
   }));
 
-  /** Booking request e-mail for one container: packing info, cargo-ready date, port, sailing, optional supplier contacts. */
-  async function bookingDraft(c, { contacts = false, by = '' } = {}) {
-    const all = await db.list('plan_containers', { filters: { port: c.port }, order: 'created_at.asc' }).catch(() => []);
-    const no = Math.max(1, all.findIndex((x) => x.id === c.id) + 1);
-    const ls = (await db.list('plan_orders', { filters: { container_id: c.id } })).sort((a, b) => String(a.supplier_id).localeCompare(String(b.supplier_id)) || String(a.po).localeCompare(String(b.po)));
-    if (!ls.length) throw new HttpError(400, 'Load some POs into this container first');
-    const sups = Object.fromEntries((await Promise.all([...new Set(ls.map((l) => l.supplier_id))].map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((x) => [x.id, x]));
-    const s = c.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
-    const t = BOX[c.box] || BOX['40GP'];
-    const sum = (k) => ls.reduce((a, l) => a + (Number(l[k]) || 0), 0);
-    const has = (k) => ls.some((l) => Number(l[k]) > 0);
-    const dates = ls.map((l) => l.ready_date).filter(Boolean).sort();
-    const ready = dates[dates.length - 1] || null;
-    const dest = s ? `${portName(s.destination)} (${s.destination})` : 'Los Angeles / Long Beach';
-    const nSup = Object.keys(sups).length;
-    const lines = ls.map((l, i) => `${i + 1}. ${l.po} — ${sups[l.supplier_id]?.name || 'Supplier'}${l.product ? ` — ${l.product}` : ''}\n   ${[l.qty ? `${int(l.qty)} pcs` : null, l.cartons ? `${int(l.cartons)} ctns` : null, l.cbm ? `${n2(l.cbm)} m³${l.cbm_estimated ? ' (est.)' : ''}` : null, l.gross_kg ? `${int(l.gross_kg)} kg` : null, l.ready_date ? `ready ${PL.short(l.ready_date)}` : null].filter(Boolean).join(' · ')}`);
-    const total = [`${int(sum('qty'))} pcs`, has('cartons') ? `${int(sum('cartons'))} ctns` : null, `${n2(sum('cbm'))} m³`, has('gross_kg') ? `${int(sum('gross_kg'))} kg` : null].filter(Boolean).join(' · ');
-    const contactBlock = Object.values(sups).map((x) => [`• ${x.name}`, x.contact_name ? `  Contact: ${x.contact_name}` : null, x.email ? `  Email: ${x.email}` : null, x.phone ? `  Phone: ${x.phone}` : null, x.address ? `  Address: ${x.address}` : null].filter(Boolean).join('\n'));
-    const ref = `${c.port.slice(2)}-${no}`;
-    const subject = `Booking request: 1 × ${t.name}, ${portName(c.port)} → ${s ? portName(s.destination) : 'LA / Long Beach'}${ready ? `, cargo ready ${PL.short(ready)}` : ''} [Lulyboo ${ref}]`;
-    const body = [
-      'Hello,', '',
-      'Please book the container below and confirm space, rate, cut-off dates and the SO.', '',
-      `Container: 1 × ${t.name} (planned load ${n2(sum('cbm'))} m³ of ~${t.cap} m³)`,
-      `Port of loading: ${portName(c.port)} (${c.port})`,
-      `Destination: ${dest}`,
-      `Preferred sailing: ${s ? [s.carrier, s.vessel ? `${s.vessel}${s.voyage ? ` ${s.voyage}` : ''}` : null, `ETD ${PL.short(s.etd)}`, s.cy_cutoff ? `CY cut-off ${PL.short(s.cy_cutoff)}` : null].filter(Boolean).join(' · ') : 'first available sailing after the cargo-ready date'}`,
-      `Cargo ready: ${ready ? PL.short(ready) : 'to be confirmed'}${dates.length > 1 && dates[0] !== ready ? ` (first PO ready ${PL.short(dates[0])})` : ''}`,
-      `Shippers: ${nSup} supplier${nSup > 1 ? 's — cargo comes from more than one factory, please advise on loading (CFS or pickups)' : ''}`, '',
-      'Packing list', ...lines, `Total: ${total}`,
-      ...(contacts ? ['', 'Supplier contacts', ...contactBlock] : []),
-      '', 'Thank you,', by || 'Lulyboo', 'Lulyboo',
-    ].join('\n');
-    const prev = (await db.list('plan_containers', { order: 'requested_at.desc' }).catch(() => [])).find((x) => x.request_to);
-    return { to: c.request_to || prev?.request_to || process.env.FORWARDER_EMAIL || '', cc: c.request_cc || prev?.request_cc || '', subject, body };
+  /** Lines, suppliers and sailing of a container — for the quotation request. */
+  async function containerFacts(c) {
+    const lines = (await db.list('plan_orders', { filters: { container_id: c.id } })).sort((a, b) => String(a.supplier_id).localeCompare(String(b.supplier_id)) || String(a.po).localeCompare(String(b.po)));
+    if (!lines.length) throw new HttpError(400, 'Load some POs into this container first');
+    const sups = Object.fromEntries((await Promise.all([...new Set(lines.map((l) => l.supplier_id))].map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((x) => [x.id, x]));
+    const sailing = c.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
+    return { lines, sups, sailing, box: BOX[c.box] || BOX['40GP'] };
   }
+  const fwList = async () => (await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((f) => f.active !== false);
 
   router.get(`${BASE}/containers/:id/request`, json(async (req) => {
     const c = await getContainer(req.params.id);
-    return { draft: await bookingDraft(c, { contacts: req.query.contacts === '1', by: req.staff?.name || '' }) };
+    const facts = await containerFacts(c);
+    const draft = Q.rfqText({ container: c, ...facts, contacts: req.query.contacts === '1', by: req.staff?.name || '' });
+    const sent = await db.list('plan_quotes', { filters: { container_id: c.id } }).catch(() => []);
+    const fws = (await fwList()).map((f) => ({ id: f.id, company: f.company, contact: f.contact_name || '', email: f.email, sent: sent.some((q) => q.forwarder_id === f.id) }));
+    return { draft: { ...draft, cc: c.request_cc || '' }, forwarders: fws };
   }));
 
   router.post(`${BASE}/containers/:id/request`, json(async (req) => {
     const c = await getContainer(req.params.id);
     const { fields: f } = await parseForm(req, { limitBytes: 200000 });
-    const to = emails(f.to); const cc = emails(f.cc);
-    if (!to.length) throw new HttpError(400, 'Add the logistics company email');
-    const bad = [...to, ...cc].find((e) => !EMAIL_RE.test(e));
-    if (bad) throw new HttpError(400, `Check this email address: ${bad}`);
-    const subject = String(f.subject || '').trim(); const text = String(f.body || '').trim();
-    if (!subject || !text) throw new HttpError(400, 'Subject and message are required');
-    await sendEmail(config, { to, cc, subject, text });
-    await db.update('plan_containers', { id: c.id }, { status: c.status === 'booked' ? 'booked' : 'requested', request_to: to.join(', '), request_cc: cc.join(', '), requested_at: now(), request_body: text, updated_at: now() });
-    return { status: c.status === 'booked' ? 'booked' : 'requested', requestTo: to.join(', '), requestedAt: PL.short(PL.today()) };
+    const ids = String(f.forwarders || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!ids.length) throw new HttpError(400, 'Tick at least one forwarder');
+    const cc = emails(f.cc);
+    const badCc = cc.find((e) => !EMAIL_RE.test(e)); if (badCc) throw new HttpError(400, `Check this email address: ${badCc}`);
+    const subject = String(f.subject || '').replace(Q.CODE_RE, '').replace(/\[\s*\]/g, '').trim(); const body = String(f.body || '').trim();
+    if (!subject || !body) throw new HttpError(400, 'Subject and message are required');
+    await containerFacts(c);
+    const all = await fwList();
+    const replyTo = [Q.quoteAddress(), process.env.EMAIL_REPLY_TO].filter(Boolean);
+    const sent = []; const failed = [];
+    for (const id of ids) {
+      const fw = all.find((x) => x.id === id); if (!fw) continue;
+      const to = emails(fw.email).filter((e) => EMAIL_RE.test(e)); const fcc = emails(fw.cc).filter((e) => EMAIL_RE.test(e));
+      if (!to.length) { failed.push(`${fw.company}: no valid email`); continue; }
+      const code = Q.newCode();
+      const text = body.replace(/\{contact\}/g, Q.greetName(fw));
+      const subj = `${subject} [${code}]`;
+      try {
+        await sendEmail(config, { to, cc: [...fcc, ...cc], subject: subj, text: `${text}\n\nReference: ${code}`, replyTo });
+        await db.insert('plan_quotes', { container_id: c.id, forwarder_id: fw.id, code, company: fw.company, to_email: to.join(', '), sent_at: now(), status: 'sent', request_text: text, charges: [], files: [], created_at: now(), updated_at: now() });
+        sent.push(fw.company);
+      } catch (e) { failed.push(`${fw.company}: ${e.provider?.reason || e.message}`); }
+    }
+    if (sent.length) await db.update('plan_containers', { id: c.id }, { status: c.status === 'booked' ? 'booked' : 'requested', request_to: sent.join(', '), request_cc: cc.join(', '), requested_at: now(), updated_at: now() });
+    if (!sent.length) throw new HttpError(502, failed.join('; ') || 'Nothing was sent');
+    return { sent, failed };
+  }));
+
+  // ── quotes ────────────────────────────────────────────────────────────────
+  const getQuote = async (id) => { const q = await db.get('plan_quotes', id).catch(() => null); if (!q) throw new HttpError(404, 'Quote not found'); return q; };
+  router.post(`${BASE}/quotes/:id`, json(async (req) => {
+    const q = await getQuote(req.params.id);
+    const { fields: f } = await parseForm(req);
+    const patch = { ...Q.quoteFields(f), notes: f.notes ? String(f.notes).slice(0, 2000) : null, updated_at: now() };
+    if (['sent', 'replied', 'declined', 'chosen'].includes(f.status)) patch.status = f.status;
+    if (patch.status === 'chosen') await chooseOnly(q);
+    await db.update('plan_quotes', { id: q.id }, patch);
+    return {};
+  }));
+  async function chooseOnly(q) {
+    for (const o of await db.list('plan_quotes', { filters: { container_id: q.container_id } })) if (o.id !== q.id && o.status === 'chosen') await db.update('plan_quotes', { id: o.id }, { status: o.replied_at ? 'replied' : 'sent', updated_at: now() });
+  }
+  router.post(`${BASE}/quotes/:id/choose`, json(async (req) => {
+    const q = await getQuote(req.params.id);
+    await chooseOnly(q);
+    await db.update('plan_quotes', { id: q.id }, { status: 'chosen', updated_at: now() });
+    const patch = { updated_at: now() };
+    if (q.etd) { const s = (await db.list('sailings', { filters: { origin: (await getContainer(q.container_id)).port, etd: q.etd } }).catch(() => [])).find((x) => !q.carrier || String(x.carrier).toLowerCase().includes(String(q.carrier).toLowerCase().split(' ')[0])); if (s) patch.sailing_id = s.id; }
+    await db.update('plan_containers', { id: q.container_id }, patch);
+    return { sailing: patch.sailing_id || null };
+  }));
+  router.get(`${BASE}/quotes/:id/files/:idx`, G(async (req, res) => {
+    const q = await db.get('plan_quotes', req.params.id).catch(() => null);
+    const f = q && (Array.isArray(q.files) ? q.files : [])[Number(req.params.idx)];
+    if (!f) throw new HttpError(404, 'File not found');
+    const buf = await db.docs.download(f.path);
+    const inline = req.query.inline === '1' && /^(image\/|application\/pdf)/.test(f.type || '');
+    res.writeHead(200, { 'Content-Type': f.type || 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+    res.end(buf);
   }));
 
   router.post(`${BASE}/:id/cbm`, json(async (req) => {

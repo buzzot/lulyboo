@@ -18,6 +18,7 @@ const todayIso = () => new Date().toLocaleDateString('en-CA', { timeZone: proces
 const logisticsTabs = (active) => html`<div class="lg-top"><h1>Logistics</h1><nav class="lg-tabs" aria-label="Logistics">
   <a href="/admin/logistics/planning" class="lg-tab${active === 'planning' ? ' is-on' : ''}" ${active === 'planning' ? raw('aria-current="page"') : ''}>Container planning</a>
   <a href="/admin/logistics/schedules" class="lg-tab${active === 'schedules' ? ' is-on' : ''}" ${active === 'schedules' ? raw('aria-current="page"') : ''}>Sailing schedules</a>
+  <a href="/admin/logistics/forwarders" class="lg-tab${active === 'forwarders' ? ' is-on' : ''}" ${active === 'forwarders' ? raw('aria-current="page"') : ''}>Forwarders</a>
   <a href="/admin/logistics" class="lg-tab${active === 'costs' ? ' is-on' : ''}" ${active === 'costs' ? raw('aria-current="page"') : ''}>Costs &amp; freight rates</a></nav></div>`;
 
 /** Compact "next departures" strip for the Logistics costs page. */

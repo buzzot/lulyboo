@@ -19,7 +19,7 @@ const n1 = (v) => (v === null || v === undefined || v === '' ? '—' : Math.roun
 const cbmText = (v) => (v ? `${n1(v)} m³` : 'CBM ?');
 const BASE = '/admin/logistics/planning';
 
-const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
+const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', units_per_carton: o.units_per_carton ?? '', carton_size: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => x) ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)}` : '', carton_gw_kg: o.carton_gw_kg ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
 const editBtn = (o, cls = 'cp-edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="Edit ${o.po}" title="Edit">✎</button>`;
 /** The order-line edit popup (posts to /admin/logistics/planning/:id/edit; app.js fills it). */
 const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labelledby="cp-dlg-t"><form method="post" data-edit-form>
@@ -31,6 +31,10 @@ const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labe
             <label>CBM<input name="cbm" data-f="cbm" inputmode="decimal" placeholder="m³"></label>
             <label>Quantity<input name="qty" data-f="qty" inputmode="numeric"></label>
             <label class="wide">Product<input name="product" data-f="product"></label>
+            <label>Pcs / carton<input name="units_per_carton" data-f="units_per_carton" inputmode="numeric"></label>
+            <label>Carton L×W×H cm<input name="carton_size" data-f="carton_size" placeholder="60×40×35"></label>
+            <label>Carton gross kg<input name="carton_gw_kg" data-f="carton_gw_kg" inputmode="decimal"></label>
+            <p class="cp-dlg-hint sub">Leave CBM unchanged and it is calculated from quantity ÷ pcs per carton × carton size.</p>
             <label>Production status<input name="production_status" data-f="production_status"></label>
             <label>Inspection date<input type="date" name="inspection_date" data-f="inspection_date"></label>
             <label class="wide">Waiting on Lulyboo<input name="pending_from_us" data-f="pending_from_us" placeholder="e.g. Package artwork (leave empty if nothing)"></label>
@@ -143,7 +147,7 @@ function planningRoutes(router, { db, config }) {
             <label>PO numbers <input name="pos" value="${fPo}" placeholder="e.g. PO200013, PO200014 (optional)"></label>
             <label>Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option>${k}</option>`)}</select></label>
             <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Choose files"><span class="dz-main" data-main>Drag &amp; drop or choose files</span><span class="dz-hint">PDF, Excel, Word, images · up to 25 MB each</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-            <label class="cp-chk"><input type="checkbox" name="read" value="1"> Also read the order lines with AI</label>
+            <label class="cp-chk"><input type="checkbox" name="read" value="1" checked> Read products, quantities and packing with AI (calculates the volume)</label>
             <button class="btn">Upload</button></form></section>
         <section class="card cp-files"><div class="head-row"><h2 class="sec">${fPo ? `Documents for ${fPo}` : 'All documents'} <span class="sub">${shown.length}</span></h2>${fPo ? html`<a class="link small" href="${BASE}?view=docs${fSup ? `&supplier=${fSup}` : ''}">Show all</a>` : ''}</div>
           ${shown.length ? html`<ul class="cp-filelist">${shown.map((f) => html`<li>
@@ -298,9 +302,19 @@ function planningRoutes(router, { db, config }) {
     const port = SC.PORT[f.port] ? f.port : null;
     const shared = { port, ready_date: PL.isoDay(f.ready_date), production_status: t(f.production_status, 120), inspection_date: PL.isoDay(f.inspection_date), pending_from_us: t(f.pending_from_us, 200), shipped: f.shipped === '1' };
     const own = { product: t(f.product, 300), qty: num(f.qty), cbm: num(f.cbm), notes: t(f.notes, 1000) };
-    if (own.cbm !== (o.cbm === null || o.cbm === undefined ? null : Number(o.cbm))) own.cbm_estimated = false;
+    const size = String(f.carton_size || '').match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)/);
+    if (f.units_per_carton !== undefined) {
+      Object.assign(own, { units_per_carton: num(f.units_per_carton), carton_gw_kg: num(f.carton_gw_kg) });
+      const [l, w, h] = size ? size.slice(1, 4).map((x) => Number(x.replace(',', '.'))) : [null, null, null];
+      Object.assign(own, { carton_l_cm: l, carton_w_cm: w, carton_h_cm: h });
+    }
+    const was = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+    const packChanged = PL.PACK.some((k) => own[k] !== undefined && own[k] !== was(o[k])) || own.qty !== was(o.qty);
+    if (own.cbm !== was(o.cbm)) own.cbm_estimated = false;
+    else if (packChanged && own.carton_l_cm && own.carton_w_cm && own.carton_h_cm) { const v = PL.volumeFrom(own.qty, own); if (v) Object.assign(own, { cbm: v.cbm, cartons: v.cartons, gross_kg: v.gross_kg, cbm_estimated: true }); }
     const now = new Date().toISOString();
     await db.update('plan_orders', { id: o.id }, { ...shared, ...own, updated_at: now });
+    if (packChanged) await PL.fillVolumes(db, o.supplier_id).catch(() => 0);
     let extra = 0;
     if (f.all_po === '1') {
       for (const x of await db.list('plan_orders', { filters: { supplier_id: o.supplier_id } })) {
@@ -341,15 +355,25 @@ function planningRoutes(router, { db, config }) {
     const docs = (files.file ? [].concat(files.file) : []).filter((f) => f.buffer?.length);
     if (!docs.length) return back('error', 'Choose at least one file', `&supplier=${supplier.id}`);
     const typed = String(fields.pos || '').split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
-    let read = null;
+    let read = null; const unread = [];
+    const kind = PL.DOC_KINDS.includes(fields.kind) ? fields.kind : null;
     if (fields.read === '1' && AI.enabled()) {
       const lines = [];
-      for (const f of docs) { try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer }); f.pos = [...typed, ...r.orders.map((o) => o.po)]; lines.push(...r.orders); } catch { /* keep the file anyway */ } }
-      if (lines.length) { for (const o of lines) if (!o.port) o.port = null; await PL.estimateCbm(db, supplier.id, lines); read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
+      for (const f of docs) {
+        if (!/\.(pdf|png|jpe?g|webp|gif|xlsx|xlsm|xls|csv)$/i.test(f.name || '')) continue;
+        const k = kind || PL.guessKind(f.name, typed);
+        const hint = [`This document is a ${/packing/i.test(k) ? 'packing list' : k === 'PO' ? 'purchase order' : k.toLowerCase()} from ${supplier.name}.`,
+          typed.length ? `It belongs to PO ${typed.join(', ')}; use that PO number for lines that do not show one.` : '',
+          'Record one line per product with its order quantity, and the export-carton packing (pieces per carton, carton L×W×H in cm, gross kg per carton, number of cartons) when shown.',
+          /packing/i.test(k) ? 'Totals of cartons, m³ and kg per product go in cartons, cbm and gross_kg.' : 'Do not copy a carton or volume total that is not printed.'].filter(Boolean).join(' ');
+        try { const r = await PL.readOrders({ name: f.name, buffer: f.buffer, hint, defaultPo: typed.length === 1 ? typed[0] : '' }); f.pos = [...new Set([...typed, ...r.orders.map((o) => o.po)])]; lines.push(...r.orders); }
+        catch { unread.push(f.name); }
+      }
+      if (lines.length) { for (const o of lines) if (!o.port) o.port = null; read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
     }
-    const kind = PL.DOC_KINDS.includes(fields.kind) ? fields.kind : null;
     const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' });
-    back(r.errors.length ? 'warn' : 'ok', `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}${read ? ` · orders: ${read.added} new, ${read.updated} updated` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
+    const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} catalog product${read.catalog === 1 ? '' : 's'}` : ''}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
+    back(r.errors.length || unread.length ? 'warn' : 'ok', `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
   }));
   router.get(`${BASE}/files/:id`, G(async (req, res) => {
     const f = await db.get('plan_files', req.params.id); if (!f) throw new HttpError(404, 'Document not found');

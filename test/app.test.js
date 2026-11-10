@@ -2275,7 +2275,7 @@ test('orders menu: PO list, PO page with lines and documents, mark shipped', asy
   assert.match(shipped.text, /PO200014/);
 });
 
-test('load containers: drag lines into a container, fill + volume, booking request email, Orders shows the container', async (t) => {
+test('load containers: drag lines into a container, fill + volume, forwarder quote requests and replies, Orders shows the container', async (t) => {
   process.env.RESEND_API_KEY = 're_test';
   const realFetch = global.fetch; const sent = [];
   global.fetch = async (url, opts = {}) => {
@@ -2311,30 +2311,127 @@ test('load containers: drag lines into a container, fill + volume, booking reque
   assert.equal(data.orders.filter((o) => o.container === c.id).length, 2);
   assert.equal(data.containers[0].sailing, s.id); assert.match(data.sailings[0].label, /COSCO · ETD/);
 
-  const draft = (await j(`${B}/containers/${c.id}/request`)).draft;
-  assert.match(draft.subject, /Booking request: 1 × 40' GP, Ningbo → Long Beach/);
-  assert.match(draft.body, /Port of loading: Ningbo \(CNNGB\)/); assert.match(draft.body, /COSCO · COSCO PRIDE 045E/);
-  assert.match(draft.body, /PO200013 — Ningbo Benno — Roll Sun Shade/); assert.match(draft.body, /209 ctns · 12\.30 m³ · 1,450 kg/);
-  assert.match(draft.body, /Total: 13,824 pcs · 209 ctns · 32\.77 m³ · 1,450 kg/);
+  // forwarders: page form + JSON quick-add from the popup
+  const fp = await req(base, 'POST', '/admin/logistics/forwarders', { cookie, form: { company: 'Sino Freight', contact_name: 'Lily Chen', email: 'Lily@SinoFreight.com', cc: 'ops@sinofreight.com' } });
+  assert.equal(fp.status, 303);
+  assert.match((await req(base, 'GET', '/admin/logistics/forwarders', { cookie })).text, /Sino Freight[\s\S]*lily@sinofreight\.com/);
+  assert.match((await req(base, 'POST', '/admin/logistics/forwarders', { cookie, form: { company: 'X', email: 'bad' } })).location, /forwarders/);
+  const quick = JSON.parse(await (await fetch(`${base}/admin/logistics/forwarders`, { method: 'POST', headers: { cookie, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: 'company=Pacific+Lines+Logistics&email=quotes%40pll.com' })).text());
+  assert.ok(quick.ok); const fw1 = db.tables.forwarders.find((x) => x.company === 'Sino Freight');
+
+  const dr = await j(`${B}/containers/${c.id}/request`);
+  const draft = dr.draft;
+  assert.equal(dr.forwarders.length, 2);
+  assert.match(draft.subject, /Request for quotation – 1 × 40' GP, Ningbo → Long Beach/);
+  assert.match(draft.body, /^Dear \{contact\},/); assert.match(draft.body, /Port of loading:\s+Ningbo \(CNNGB\), China/); assert.match(draft.body, /COSCO · COSCO PRIDE 045E/);
+  assert.match(draft.body, /PO200013 — Ningbo Benno — Roll Sun Shade/); assert.match(draft.body, /209 cartons · 12\.30 m³ · 1,450 kg/);
+  assert.match(draft.body, /Total: 13,824 pcs · 209 cartons · 32\.77 m³ · 1,450 kg/);
   assert.doesNotMatch(draft.body, /amy@benno\.cn/);
   assert.match((await j(`${B}/containers/${c.id}/request?contacts=1`)).draft.body, /Contact: Amy Li[\s\S]*Email: amy@benno\.cn/);
-  assert.equal((await j(`${B}/containers/${c.id}/request`, { to: 'nope', subject: 'x', body: 'y' })).ok, false);
-  const r = await j(`${B}/containers/${c.id}/request`, { to: 'booking@forwarder.com', cc: 'me@lulyboo.com', subject: draft.subject, body: draft.body });
-  assert.ok(r.ok, r.error); assert.equal(r.status, 'requested');
-  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, ['booking@forwarder.com']); assert.match(sent[0].text, /Packing list/);
-  assert.equal(db.tables.plan_containers[0].request_to, 'booking@forwarder.com');
-  const c2 = (await j(`${B}/containers`, { port: 'CNNGB' })).container;                          // next request remembers the forwarder
+  assert.equal((await j(`${B}/containers/${c.id}/request`, { forwarders: '', subject: 'x', body: 'y' })).ok, false);
+  const r = await j(`${B}/containers/${c.id}/request`, { forwarders: `${fw1.id},${quick.forwarder.id}`, cc: 'me@lulyboo.com', subject: draft.subject, body: draft.body });
+  assert.ok(r.ok, r.error); assert.deepEqual(r.sent, ['Sino Freight', 'Pacific Lines Logistics']);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[0].to, ['lily@sinofreight.com']); assert.deepEqual(sent[0].cc, ['ops@sinofreight.com', 'me@lulyboo.com']);
+  assert.match(sent[0].text, /^Dear Lily Chen,/); assert.match(sent[1].text, /^Dear Pacific Lines Logistics team,/);
+  assert.match(sent[0].subject, /\[LBQ-[A-Z0-9]{5}\]$/); assert.notEqual(sent[0].subject, sent[1].subject);
+  assert.ok([].concat(sent[0].reply_to).includes('quotes@in.lulyboo.space'));
+  assert.equal(db.tables.plan_containers[0].status, 'requested');
+  assert.equal(db.tables.plan_quotes.length, 2);
+  assert.ok((await j(`${B}/containers/${c.id}/request`)).forwarders.every((f) => f.sent));
+
+  // a reply comes back through the inbound mailbox → AI reads the quote
+  const code = sent[0].subject.match(/LBQ-[A-Z0-9]{5}/)[0];
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const prevFetch = global.fetch;
+  global.fetch = async (url, opts = {}) => (String(url).includes('api.anthropic.com')
+    ? new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_quote', input: { is_quote: true, currency: 'USD', ocean_usd: 2350, total_usd: 2780, carrier: 'COSCO', vessel: 'COSCO PRIDE 045E', etd: d(18), eta: d(33), valid_until: d(20), free_days: 14, charges: [{ name: 'THC', amount: 280, currency: 'USD', per: 'container' }], summary: 'All-in USD 2,780 with COSCO.' } }] }), { status: 200 })
+    : prevFetch(url, opts));
+  const Q = require('../src/quotes');
+  const got = await Q.handleQuoteEmail({ db, from: 'Lily Chen <lily@sinofreight.com>', subject: `RE: ${sent[0].subject}`, text: 'Dear Sir, please find our offer: 40GP USD 2350 + THC 280...', files: [{ name: 'offer.pdf', buffer: Buffer.from('%PDF-1.4 x'), type: 'application/pdf' }] });
+  global.fetch = prevFetch; delete process.env.ANTHROPIC_API_KEY;
+  assert.ok(got.matched); assert.equal(got.status, 'replied');
+  const q1 = db.tables.plan_quotes.find((q) => q.code === code);
+  assert.equal(q1.total_usd, 2780); assert.equal(q1.transit_days, 15); assert.equal(q1.files.length, 1); assert.match(q1.reply_text, /our offer/);
+  assert.equal((await Q.handleQuoteEmail({ db, from: 'x@y.com', subject: 'RE: LBQ-ZZZZZ', text: '' })).matched, false);
+  const fileRes = await req(base, 'GET', `${B}/quotes/${q1.id}/files/0`, { cookie });
+  assert.equal(fileRes.status, 200); assert.match(fileRes.text, /%PDF/);
+  assert.match((await req(base, 'GET', `${B}/load?port=CNNGB`, { cookie })).text, /All-in USD 2,780 with COSCO/);
+  // second forwarder replied by WeChat → typed in by hand; then choose the first
+  const q2 = db.tables.plan_quotes.find((q) => q.code !== code);
+  assert.ok((await j(`${B}/quotes/${q2.id}`, { total_usd: '2950', carrier: 'ONE', etd: d(20), eta: d(36), status: 'replied', notes: 'by WeChat' })).ok);
+  assert.equal(db.tables.plan_quotes.find((q) => q.id === q2.id).transit_days, 16);
+  assert.ok((await j(`${B}/quotes/${q1.id}/choose`, {})).ok);
+  assert.equal(db.tables.plan_quotes.find((q) => q.id === q1.id).status, 'chosen');
+  assert.equal(db.tables.plan_containers[0].sailing_id, s.id);
+
+  const c2 = (await j(`${B}/containers`, { port: 'CNNGB' })).container;
   assert.equal(c2.no, 2);
   await j(`${B}/assign`, { order: o1.id, container: c2.id });
-  assert.equal((await j(`${B}/containers/${c2.id}/request`)).draft.to, 'booking@forwarder.com');
 
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${b.id}&po=PO200014`, { cookie });
   assert.match(po.text, /📦 Ningbo · Container 1 · 40&#39; GP · ETD/);
-  assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /Booking requested/);
+  assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /Quotes requested/);
 
   assert.ok((await j(`${B}/containers/${c.id}/shipped`, {})).ok);
   assert.ok(db.tables.plan_orders.find((o) => o.id === o2.id).shipped);
   assert.ok(!db.tables.plan_orders.find((o) => o.id === o1.id).shipped);                       // o1 moved to container 2
   assert.ok((await j(`${B}/containers/${c2.id}/delete`, {})).ok);
   assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
+});
+
+test('PO / packing list upload: AI adds product lines, packing → product, volume from quantity', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; let answer = null; const prompts = [];
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.anthropic.com')) { prompts.push(JSON.parse(opts.body).messages[0].content.map((c) => c.text || '').join('')); return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_orders', input: answer }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean' });
+  const cat = await db.insert('products', { supplier_id: k.id, product_name: 'Silicone Suction Plate', supplier_sku: 'KS-200' });
+  const ph = await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', ready_date: '2026-12-01', port: 'CNYTN', production_status: 'Under production' });
+  const upload = async (name, kind) => {
+    const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('pos', 'PO900018'); fd.append('kind', kind); fd.append('read', '1'); fd.append('back', `/admin/orders/view?supplier=${k.id}&po=PO900018`);
+    fd.append('file', new Blob([Buffer.from('%PDF-1.4 test')], { type: 'application/pdf' }), name);
+    return fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  };
+  // 1. signed PO: two products, no PO number on the lines
+  answer = { orders: [{ po: '', product: 'Silicone Bib', sku: 'KS-100', qty: 4000 }, { po: '', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 3600 }] };
+  const r1 = await upload('PO900018_Kean Signed.pdf', 'PO');
+  assert.equal(r1.status, 303); assert.match(r1.headers.get('location'), /\/admin\/orders\/view.*#docs/);
+  assert.match(prompts[0], /purchase order from Shenzhen Kean/); assert.match(prompts[0], /PO PO900018/);
+  let ls = db.tables.plan_orders.filter((o) => o.po === 'PO900018');
+  assert.equal(ls.length, 2);                                                                  // placeholder replaced
+  assert.ok(!ls.some((o) => o.id === ph.id));
+  assert.ok(ls.every((o) => o.ready_date === '2026-12-01' && o.port === 'CNYTN'));            // kept its date and port
+  // 2. packing list, product name written differently, matched by SKU
+  answer = { orders: [{ po: 'PO900018', product: 'Suction plate (silicone) blue', sku: 'KS 200', units_per_carton: 48, carton_l_cm: 52, carton_w_cm: 40, carton_h_cm: 30, carton_gw_kg: 11.5 }] };
+  const r2 = await upload('PL PO900018.pdf', 'Packing list');
+  assert.equal(r2.status, 303);
+  ls = db.tables.plan_orders.filter((o) => o.po === 'PO900018');
+  assert.equal(ls.length, 2);
+  const plate = ls.find((o) => o.sku === 'KS-200');
+  assert.equal(plate.product, 'Silicone Suction Plate');                                      // name from the PO kept
+  assert.equal(plate.units_per_carton, 48); assert.equal(plate.cartons, 75);                   // 3600 / 48
+  assert.equal(plate.cbm, 4.68); assert.equal(plate.gross_kg, 862.5); assert.equal(plate.cbm_estimated, true);
+  const c = db.tables.products.find((p) => p.id === cat.id);
+  assert.equal(c.carton_l_cm, 52); assert.equal(c.units_per_carton, 48);                       // standard packing on the catalog product
+  const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
+  assert.match(po.text, /48 pcs\/ctn · 52×40×30 cm · 11\.5 kg · 75 ctns/); assert.match(po.text, /Read products, quantities and packing with AI/);
+  // 3. the next PO for the same item gets its volume from the remembered packing
+  answer = { orders: [{ po: 'PO900030', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 960 }] };
+  const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('pos', 'PO900030'); fd.append('kind', 'PO'); fd.append('read', '1');
+  fd.append('file', new Blob([Buffer.from('%PDF-1.4 x')], { type: 'application/pdf' }), 'PO900030.pdf');
+  await fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  const next = db.tables.plan_orders.find((o) => o.po === 'PO900030');
+  assert.equal(next.cartons, 20); assert.equal(next.cbm, 1.25);
+  // 4. editing the quantity recalculates the volume
+  const ef = new FormData(); for (const [kk, v] of Object.entries({ product: 'Silicone Suction Plate', qty: '1920', cbm: '1.25', units_per_carton: '48', carton_size: '52 x 40 x 30', carton_gw_kg: '11.5', back: '/admin/logistics/planning' })) ef.append(kk, v);
+  await fetch(`${base}/admin/logistics/planning/${next.id}/edit`, { method: 'POST', body: ef, headers: { cookie }, redirect: 'manual' });
+  const after = db.tables.plan_orders.find((o) => o.id === next.id);
+  assert.equal(after.cartons, 40); assert.equal(after.cbm, 2.5);
 });

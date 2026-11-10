@@ -764,3 +764,58 @@ alter table public.plan_containers add column if not exists request_to   text;  
 alter table public.plan_containers add column if not exists request_cc   text;
 alter table public.plan_containers add column if not exists requested_at timestamptz;
 alter table public.plan_containers add column if not exists request_body text;
+
+-- Forwarders you ask for quotes, and their quotes per container (run once)
+create table if not exists public.forwarders (
+  id            uuid primary key default gen_random_uuid(),
+  company       text not null,
+  contact_name  text,
+  email         text not null,
+  cc            text,                         -- extra addresses, comma separated
+  phone         text,
+  notes         text,
+  active        boolean not null default true,
+  created_at    timestamptz default now(),
+  updated_at    timestamptz default now()
+);
+alter table public.forwarders enable row level security;
+create table if not exists public.plan_quotes (
+  id            uuid primary key default gen_random_uuid(),
+  container_id  uuid not null references public.plan_containers(id) on delete cascade,
+  forwarder_id  uuid references public.forwarders(id) on delete set null,
+  code          text not null unique,         -- LBQ-XXXXX, in the subject so replies are matched
+  company       text,
+  to_email      text,
+  sent_at       timestamptz,
+  status        text not null default 'sent', -- sent · replied · chosen · declined
+  currency      text,
+  ocean_usd     numeric,
+  total_usd     numeric,
+  charges       jsonb default '[]',
+  carrier       text,
+  vessel        text,
+  etd           date,
+  eta           date,
+  transit_days  int,
+  cy_cutoff     date,
+  valid_until   date,
+  free_days     int,
+  summary       text,
+  notes         text,
+  request_text  text,                         -- the email we sent (personalised)
+  reply_from    text,
+  reply_text    text,
+  replied_at    timestamptz,
+  files         jsonb default '[]',
+  created_at    timestamptz default now(),
+  updated_at    timestamptz default now()
+);
+create index if not exists plan_quotes_container_idx on public.plan_quotes (container_id);
+alter table public.plan_quotes enable row level security;
+
+-- Packing per PO line (from POs / packing lists), used to calculate cartons and m³ from the order quantity (run once)
+alter table public.plan_orders add column if not exists units_per_carton numeric;
+alter table public.plan_orders add column if not exists carton_l_cm      numeric;
+alter table public.plan_orders add column if not exists carton_w_cm      numeric;
+alter table public.plan_orders add column if not exists carton_h_cm      numeric;
+alter table public.plan_orders add column if not exists carton_gw_kg     numeric;

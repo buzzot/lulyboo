@@ -462,6 +462,12 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });
       return res.json({ ok: true, samples: true, ...out });
     }
+    // Forwarder quotations: replies to our request for quotation carry LBQ-XXXXX in the subject.
+    const QT = require('../quotes');
+    if (toList.some((x) => /^quotes@/i.test(x.trim())) || QT.CODE_RE.test(subject)) {
+      const out = await QT.handleQuoteEmail({ db, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
+      if (out.matched) return res.json({ ok: true, quote: true, ...out });
+    }
     // Development threads: matched by the code in the subject, e.g. [Lulyboo DP-1001-9D6A].
     const DE = require('../dev-email');
     if (/\bDP-?\d{3,7}\b/i.test(subject)) {

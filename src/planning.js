@@ -66,7 +66,7 @@ const STATE = {
 // ── AI reading ──────────────────────────────────────────────────────────────
 const TOOL = {
   name: 'record_orders',
-  description: 'Record every purchase-order line in a supplier\'s order report, PO, production status table or "goods ready" email.',
+  description: 'Record every purchase-order line (one per product) in a supplier\'s order report, PO, proforma invoice, packing list, production status table or "goods ready" email, including the packing (pieces per carton, carton size and weight) when shown.',
   input_schema: {
     type: 'object',
     properties: {
@@ -83,6 +83,11 @@ const TOOL = {
             cartons: { type: 'number' },
             cbm: { type: 'number', description: 'Total goods volume in m³ for this line' },
             gross_kg: { type: 'number', description: 'Total gross weight in kg' },
+            units_per_carton: { type: 'number', description: 'Packing: pieces per export carton (master carton), from a packing list or PO packing spec' },
+            carton_l_cm: { type: 'number', description: 'Export carton length in cm (convert mm/inches to cm)' },
+            carton_w_cm: { type: 'number', description: 'Export carton width in cm' },
+            carton_h_cm: { type: 'number', description: 'Export carton height in cm' },
+            carton_gw_kg: { type: 'number', description: 'Gross weight of ONE carton in kg' },
             ready_date: { type: 'string', description: 'Cargo ready date YYYY-MM-DD; resolve dates without a year (e.g. "25th Nov") to the next such date from today' },
             inspection_date: { type: 'string', description: 'YYYY-MM-DD, or a short note like "to be booked"' },
             production_status: { type: 'string', description: 'e.g. Under production, Ready for shipping' },
@@ -108,7 +113,7 @@ const num = (v) => { if (v === null || v === undefined || v === '') return null;
 const txt = (v, n = 200) => { const s = String(v ?? '').trim(); return s ? s.slice(0, n) : null; };
 
 /** Read one file / pasted text with AI → clean order lines. */
-async function readOrders({ name = 'document', buffer = null, text = '' }) {
+async function readOrders({ name = 'document', buffer = null, text = '', hint = '', defaultPo = '' }) {
   if (!AI.enabled()) throw new Error('AI is not configured: set ANTHROPIC_API_KEY');
   const content = []; let table = '';
   const n = String(name).toLowerCase(); const ext = (n.match(/\.([a-z0-9]+)$/) || [])[1] || '';
@@ -118,7 +123,7 @@ async function readOrders({ name = 'document', buffer = null, text = '' }) {
     else if (/\.(xlsx|xlsm)$/.test(n) || (buffer[0] === 0x50 && buffer[1] === 0x4b)) table = tableText(parseXlsx(buffer));
     else table = tableText(parseCsv(decodeText(buffer)));
   }
-  content.push({ type: 'text', text: `Today is ${today()}. Record every purchase-order line.${table ? `\n\n${table}` : ''}${text ? `\n\n${String(text).slice(0, 60000)}` : ''}` });
+  content.push({ type: 'text', text: `Today is ${today()}. Record every purchase-order line, one per product.${hint ? ` ${hint}` : ''}${table ? `\n\n${table}` : ''}${text ? `\n\n${String(text).slice(0, 60000)}` : ''}` });
   const { result } = await AI.callTool({ tool: TOOL, content, maxTokens: 16000 });
   const orders = (Array.isArray(result?.orders) ? result.orders : []).map((o) => {
     const insp = isoDay(o.inspection_date);
@@ -128,22 +133,34 @@ async function readOrders({ name = 'document', buffer = null, text = '' }) {
       ready_date: isoDay(o.ready_date), inspection_date: insp, inspection_note: insp ? null : txt(o.inspection_date, 80),
       production_status: txt(o.production_status, 120), pending_from_us: txt(o.pending_from_lulyboo, 200), order_type: txt(o.order_type, 60), approved_by: txt(o.approved_by, 60),
       port_text: port, port: SC.portCode(port), notes: txt(o.notes, 500),
+      units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg),
     };
-  }).filter((o) => o.po);
+  }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po);
   return { orders, supplierName: txt(result?.supplier_name, 120) };
 }
 
 // ── match against what is already saved ─────────────────────────────────────
 const normPo = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const normSku = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const normProd = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes'];
-const LABEL = { qty: 'Qty', cbm: 'CBM', cartons: 'Cartons', gross_kg: 'Weight', ready_date: 'Ready', inspection_date: 'Inspection', production_status: 'Status', pending_from_us: 'Pending', port: 'Port' };
+const PACK = ['units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg'];
+const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes'];
+const LABEL = { qty: 'Qty', cbm: 'CBM', cartons: 'Cartons', gross_kg: 'Weight', units_per_carton: 'Pcs/carton', carton_l_cm: 'Carton L', carton_w_cm: 'Carton W', carton_h_cm: 'Carton H', carton_gw_kg: 'Carton kg', ready_date: 'Ready', inspection_date: 'Inspection', production_status: 'Status', pending_from_us: 'Pending', port: 'Port' };
 
 /** For each incoming line: the existing rows it updates and what changes. */
 function diff(incoming, existing) {
   return incoming.map((o) => {
     const same = existing.filter((e) => normPo(e.po) === normPo(o.po) && !e.shipped);
-    const targets = o.product ? same.filter((e) => normProd(e.product) === normProd(o.product)) : same;
+    let targets = o.product ? same.filter((e) => normProd(e.product) === normProd(o.product)) : same;
+    let fuzzy = false;
+    if (o.product && !targets.length) {
+      // same item under another name (PO vs packing list): match by SKU, then by one name containing the other
+      const named = same.filter((e) => e.product);
+      const bySku = o.sku ? named.filter((e) => e.sku && normSku(e.sku) === normSku(o.sku)) : [];
+      const byName = named.filter((e) => { const a = normProd(e.product), b = normProd(o.product); return a.length > 3 && b.length > 3 && (a.includes(b) || b.includes(a)); });
+      targets = bySku.length === 1 ? bySku : byName.length === 1 ? byName : [];
+      fuzzy = targets.length > 0;
+    }
     if (!targets.length) return { ...o, change: 'new', changes: [] };
     const changes = [];
     for (const k of Object.keys(LABEL)) {
@@ -151,7 +168,7 @@ function diff(incoming, existing) {
       const ov = targets[0][k];
       if (String(ov ?? '') !== String(nv)) changes.push({ field: LABEL[k], from: k.endsWith('_date') ? short(ov) : ov ?? '—', to: k.endsWith('_date') ? short(nv) : nv });
     }
-    return { ...o, change: changes.length ? 'updated' : 'same', changes, targetIds: targets.map((t) => t.id) };
+    return { ...o, change: changes.length ? 'updated' : 'same', changes, targetIds: targets.map((t) => t.id), keepName: fuzzy };
   });
 }
 
@@ -165,24 +182,115 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
     const vals = {};
     for (const k of FIELDS) if (o[k] !== null && o[k] !== undefined && o[k] !== '') vals[k] = o[k];
     if (o.change === 'new') { await db.insert('plan_orders', { supplier_id: supplierId, po: o.po, ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++; }
-    else if (o.change === 'updated') { for (const id of o.targetIds) await db.update('plan_orders', { id }, { ...(o.product ? vals : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg'].includes(k)))), updated_at: now, source_name: sourceName }); updated++; }
+    else if (o.change === 'updated') {
+      const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK].includes(k)));
+      if (keep.cbm !== undefined) keep.cbm_estimated = !!o.cbm_estimated;
+      for (const id of o.targetIds) await db.update('plan_orders', { id }, { ...keep, updated_at: now, source_name: sourceName }); updated++;
+    }
   }
-  return { added, updated, same: d.filter((x) => x.change === 'same').length };
+  const pos = [...new Set(lines.map((o) => normPo(o.po)))];
+  await mergePlaceholders(db, supplierId, pos);
+  const vol = await fillVolumes(db, supplierId);
+  const catalog = await packingToCatalog(db, supplierId, lines);
+  return { added, updated, same: d.filter((x) => x.change === 'same').length, volumes: vol, catalog };
 }
 
 /** Fill CBM from the supplier's products (carton size × cartons) when the document gave none. */
+// ── packing → volume ────────────────────────────────────────────────────────
+const hasPack = (x) => !!(num(x?.carton_l_cm) && num(x?.carton_w_cm) && num(x?.carton_h_cm));
+const sameItem = (a, b) => (a.sku && (b.sku || b.supplier_sku) && normSku(a.sku) === normSku(b.sku || b.supplier_sku)) || (a.product && (b.product || b.product_name) && normProd(a.product) === normProd(b.product || b.product_name));
+const looseItem = (a, b) => { const x = normProd(a.product), y = normProd(b.product || b.product_name); return x.length > 3 && y.length > 3 && (x.includes(y) || y.includes(x)); };
+const packOf = (x) => Object.fromEntries(PACK.map((k) => [k, num(x[k])]));
+
+/** Cartons, m³ and gross kg from order quantity and carton packing. */
+function volumeFrom(qty, pack, cartons = null) {
+  const l = num(pack.carton_l_cm), w = num(pack.carton_w_cm), h = num(pack.carton_h_cm), per = num(pack.units_per_carton), gw = num(pack.carton_gw_kg);
+  if (!l || !w || !h) return null;
+  const ctns = num(cartons) || (num(qty) && per ? Math.ceil(num(qty) / per) : null);
+  if (!ctns) return null;
+  return { cartons: ctns, cbm: Math.round((l * w * h) / 1e6 * ctns * 100) / 100, gross_kg: gw ? Math.round(gw * ctns * 10) / 10 : null };
+}
+
+/** Standard packing for a line: its own, else the same item on an earlier PO, else the catalog product. */
+function findPacking(o, history, prods) {
+  if (hasPack(o)) return { pack: packOf(o), from: 'line' };
+  const h = history.filter((x) => x.id !== o.id && hasPack(x) && sameItem(o, x)).sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))[0];
+  if (h) return { pack: packOf(h), from: 'history' };
+  const p = prods.find((x) => hasPack(x) && sameItem(o, x)) || prods.filter((x) => hasPack(x) && looseItem(o, x)).slice(0, 2).reduce((a, x, i, all) => (all.length === 1 ? x : null), null);
+  if (p) return { pack: packOf(p), from: 'catalog' };
+  return null;
+}
+
+/**
+ * For every open line of a supplier: take the standard packing (own / earlier PO / catalog) and, when the volume
+ * was not given by the supplier, calculate cartons, m³ and gross kg from the order quantity. Returns lines updated.
+ */
+async function fillVolumes(db, supplierId) {
+  const all = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
+  const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
+  let n = 0;
+  for (const o of all) {
+    if (o.shipped || !o.product) continue;
+    const given = num(o.cbm) && !o.cbm_estimated;
+    const f = findPacking(o, all, prods); if (!f) continue;
+    const patch = {};
+    if (f.from !== 'line') for (const k of PACK) if (f.pack[k] != null && num(o[k]) == null) patch[k] = f.pack[k];
+    if (!given) {
+      const v = volumeFrom(o.qty, { ...packOf(o), ...patch }, o.cbm_estimated ? null : o.cartons);
+      if (v && (num(o.cbm) !== v.cbm || num(o.cartons) !== v.cartons)) Object.assign(patch, { cbm: v.cbm, cartons: v.cartons, cbm_estimated: true, ...(v.gross_kg && !num(o.gross_kg) || o.cbm_estimated ? { gross_kg: v.gross_kg } : {}) });
+    }
+    if (Object.keys(patch).length) { await db.update('plan_orders', { id: o.id }, { ...patch, updated_at: new Date().toISOString() }); n++; }
+  }
+  return n;
+}
+
+/** A PO that now has product lines: copy dates/port/status/container from its "(whole PO)" line, then drop that line. */
+async function mergePlaceholders(db, supplierId, pos) {
+  if (!pos.length) return 0;
+  const all = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
+  const SHARED = ['ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'container_id', 'notes'];
+  let n = 0;
+  for (const po of pos) {
+    const ls = all.filter((x) => normPo(x.po) === po && !x.shipped);
+    const ph = ls.filter((x) => !x.product); const real = ls.filter((x) => x.product);
+    if (!ph.length || !real.length) continue;
+    for (const r of real) {
+      const patch = {};
+      for (const k of SHARED) if ((r[k] === null || r[k] === undefined || r[k] === '') && ph[0][k] !== null && ph[0][k] !== undefined && ph[0][k] !== '') patch[k] = ph[0][k];
+      if (Object.keys(patch).length) await db.update('plan_orders', { id: r.id }, { ...patch, updated_at: new Date().toISOString() });
+    }
+    for (const x of ph) { await db.remove('plan_orders', { id: x.id }); n++; }
+  }
+  return n;
+}
+
+/** Packing read from a document becomes the catalog product's standard packing when the product has none yet. */
+async function packingToCatalog(db, supplierId, lines) {
+  const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
+  let n = 0;
+  for (const o of lines.filter(hasPack)) {
+    const p = prods.find((x) => sameItem(o, x)) || prods.filter((x) => looseItem(o, x)).reduce((a, x, i, all) => (all.length === 1 ? x : null), null);
+    if (!p || hasPack(p)) continue;
+    const patch = { carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm) };
+    if (num(o.units_per_carton) && !num(p.units_per_carton)) patch.units_per_carton = num(o.units_per_carton);
+    if (num(o.carton_gw_kg) && !num(p.carton_gw_kg)) patch.carton_gw_kg = num(o.carton_gw_kg);
+    await db.update('products', { id: p.id }, { ...patch, updated_at: new Date().toISOString() }).catch(() => null);
+    p.carton_l_cm = patch.carton_l_cm; p.carton_w_cm = patch.carton_w_cm; p.carton_h_cm = patch.carton_h_cm; n++;
+  }
+  return n;
+}
+
+/** For the review screen: fill m³ of lines that have none, from their own / earlier / catalog packing. */
 async function estimateCbm(db, supplierId, lines) {
   const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
+  const history = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
   for (const o of lines) {
     if (o.cbm || !o.product) continue;
-    const p = prods.find((x) => normProd(x.product_name).includes(normProd(o.product)) || normProd(o.product).includes(normProd(x.product_name)));
-    if (!p) continue;
-    const l = num(p.carton_l_cm), w = num(p.carton_w_cm), h = num(p.carton_h_cm);
-    const perCtn = num(p.units_per_carton);
-    if (!l || !w || !h) continue;
-    const ctnCbm = (l * w * h) / 1e6;
-    const cartons = o.cartons || (o.qty && perCtn ? Math.ceil(o.qty / perCtn) : null);
-    if (cartons) { o.cbm = Math.round(ctnCbm * cartons * 100) / 100; o.cartons = cartons; o.cbm_estimated = true; }
+    const f = findPacking(o, history, prods); if (!f) continue;
+    const v = volumeFrom(o.qty, f.pack, o.cartons); if (!v) continue;
+    o.cbm = v.cbm; o.cartons = v.cartons; o.cbm_estimated = true;
+    if (!o.gross_kg && v.gross_kg) o.gross_kg = v.gross_kg;
+    if (f.from !== 'line') for (const k of PACK) if (o[k] == null && f.pack[k] != null) o[k] = f.pack[k];
   }
   return lines;
 }
@@ -209,4 +317,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, fillVolumes, volumeFrom, mergePlaceholders, packingToCatalog };

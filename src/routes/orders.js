@@ -10,6 +10,7 @@ const PL = require('../planning');
 const SC = require('../schedules');
 const PR = require('./planning');
 const LP = require('./loadplan');
+const AI = require('../ai');
 
 const RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 };
 const n2 = (v) => Math.round(Number(v || 0) * 100) / 100;
@@ -127,7 +128,7 @@ module.exports = function orderRoutes(router, { db, config }) {
           <div class="cp-kpi"><span>Volume</span><b>${p.cbm ? `${n2(p.cbm)} m³` : '—'}</b><small>${p.cbm ? `≈ ${PL.suggest(p.cbm).text}` : 'CBM missing'}</small></div>
           <div class="cp-kpi ${p.pending.length ? 'warn' : ''}"><span>Waiting on Lulyboo</span><b>${p.pending.length ? p.pending.length : '—'}</b><small>${p.pending.join(', ') || 'nothing'}</small></div></div>
         <section class="card"><h2>Lines</h2><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Container</th><th></th></tr></thead>
-          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub"> est.</i>` : ''}</td>
+          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${o.units_per_carton || o.carton_l_cm ? html`<div class="sub or-pack">📦 ${[o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
             <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
             <td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
@@ -141,7 +142,9 @@ module.exports = function orderRoutes(router, { db, config }) {
           <form method="post" action="/admin/logistics/planning/files" enctype="multipart/form-data" data-busy class="or-up">
             <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="pos" value="${poQ}"><input type="hidden" name="back" value="${back}">
             <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Add the PO, PI, packing list… (drag &amp; drop or choose)</span><span class="dz-hint">Linked to ${poQ}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-            <div class="or-up-row"><label>Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option ${k === 'PO' ? raw('selected') : ''}>${k}</option>`)}</select></label><button class="btn">Upload</button></div></form></section>
+            <div class="or-up-row"><label>Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option ${k === 'PO' ? raw('selected') : ''}>${k}</option>`)}</select></label>
+              ${AI.enabled() ? html`<label class="cp-chk"><input type="checkbox" name="read" value="1" checked> Read products, quantities and packing with AI</label>` : ''}<button class="btn">Upload</button></div>
+            ${AI.enabled() ? html`<p class="sub or-up-note">PO / PI: each product becomes a line of ${poQ}. Packing list: pcs per carton and carton size are saved to the product, and cartons, m³ and kg are calculated from the order quantity.</p>` : ''}</form></section>
         ${PR.editDialog(back)}`,
     }));
   }));

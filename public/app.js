@@ -1105,6 +1105,36 @@
     poolEl.innerHTML = list.length ? list.map(poolCard).join('') : '<div class="lp-empty">' + (D.orders.length ? 'Everything at this port is loaded.<br>Drag a PO back here to unload it.' : 'No open orders at this port.') + '</div>';
   }
 
+  var QST = { sent: ['Waiting for reply', 'plan'], replied: ['Quoted', 'ok'], declined: ['Declined', 'done'], chosen: ['Chosen', 'ok'] };
+  var money = function (v) { return v == null ? '' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }); };
+  function quotesHTML(c) {
+    var qs = c.quotes || []; if (!qs.length) return '';
+    var priced = qs.filter(function (q) { return q.total != null && q.status !== 'declined'; });
+    var best = priced.length ? Math.min.apply(null, priced.map(function (q) { return q.total; })) : null;
+    var replied = qs.filter(function (q) { return q.status !== 'sent'; }).length;
+    return '<div class="lp-q"><div class="lp-qh"><h3>Quotes <span class="sub">' + replied + ' of ' + qs.length + ' replied</span></h3></div>' +
+      '<div class="table-wrap"><table class="list lp-qt"><thead><tr><th>Forwarder</th><th class="r">All-in USD</th><th>Carrier</th><th>ETD</th><th>ETA</th><th class="r">Transit</th><th>Valid until</th><th class="r">Free days</th><th>Status</th><th></th></tr></thead><tbody>' +
+      qs.map(function (q) {
+        var st = QST[q.status] || [q.status, 'plan'], isBest = best != null && q.total === best && priced.length > 1;
+        var detail = (q.summary || q.reply || q.files.length || q.charges.length || q.notes) ?
+          '<tr class="lp-qd"><td colspan="10"><details' + (q.status === 'chosen' ? ' open' : '') + '><summary>' + (q.summary ? esc(q.summary.length > 140 ? q.summary.slice(0, 140) + '…' : q.summary) : 'Details') + '</summary>' +
+            (q.summary && q.summary.length > 140 ? '<p>' + esc(q.summary) + '</p>' : '') +
+            (q.charges.length ? '<ul class="lp-charges">' + q.charges.map(function (x) { return '<li>' + esc(x.name) + (x.amount != null ? ': ' + esc((x.currency || '') + ' ' + Number(x.amount).toLocaleString('en-US')) : '') + (x.per ? ' <span class="sub">' + esc(x.per) + '</span>' : '') + '</li>'; }).join('') + '</ul>' : '') +
+            (q.notes ? '<p><b>Notes:</b> ' + esc(q.notes) + '</p>' : '') +
+            (q.files.length ? '<p class="lp-qfiles">' + q.files.map(function (f) { return '<a href="' + f.url + (f.inline ? '?inline=1" target="_blank" rel="noopener"' : '"') + '>📎 ' + esc(f.name) + '</a>'; }).join(' ') + '</p>' : '') +
+            (q.reply ? '<details class="lp-orig"><summary>Original email' + (q.from ? ' from ' + esc(q.from) : '') + (q.replied ? ' · ' + esc(q.replied) : '') + '</summary><pre>' + esc(q.reply) + '</pre></details>' : '') +
+          '</details></td></tr>' : '';
+        return '<tr class="' + (q.status === 'chosen' ? 'lp-chosen' : q.status === 'declined' ? 'done' : '') + '"><td><b>' + esc(q.company) + '</b><div class="sub">' + esc(q.code) + (q.sent ? ' · sent ' + esc(q.sent) : '') + '</div></td>' +
+          '<td class="r">' + (q.total != null ? '<b>' + money(q.total) + '</b>' + (isBest ? ' <span class="cp-tag ok">Lowest</span>' : '') + (q.ocean != null && q.ocean !== q.total ? '<div class="sub">ocean ' + money(q.ocean) + '</div>' : '') + (q.currency && q.currency !== 'USD' ? '<div class="sub">' + esc(q.currency) + '</div>' : '') : '—') + '</td>' +
+          '<td>' + (esc(q.carrier) || '—') + (q.vessel ? '<div class="sub">' + esc(q.vessel) + '</div>' : '') + '</td><td>' + (esc(q.etdText) || '—') + '</td><td>' + (esc(q.etaText) || '—') + '</td><td class="r">' + (q.transit != null ? q.transit + ' d' : '—') + '</td>' +
+          '<td' + (q.expired ? ' class="lp-exp" title="Expired"' : '') + '>' + (esc(q.validText) || '—') + '</td><td class="r">' + (q.free != null ? q.free : '—') + '</td>' +
+          '<td><span class="cp-tag ' + st[1] + '">' + st[0] + '</span></td>' +
+          '<td class="lp-qa">' + (q.status !== 'chosen' && q.status !== 'declined' && (q.total != null || q.etd) ? '<button type="button" class="btn small" data-lp-choose="' + q.id + '" data-c="' + c.id + '">Choose</button>' : '') +
+            '<button type="button" class="link small" data-lp-qedit="' + q.id + '" data-c="' + c.id + '">' + (q.status === 'sent' ? 'Enter quote' : 'Edit') + '</button></td></tr>' + detail;
+      }).join('') + '</tbody></table></div></div>';
+  }
+  function findQuote(cid, qid) { var c = cById(cid); if (!c) return null; for (var i = 0; i < c.quotes.length; i++) if (c.quotes[i].id === qid) return c.quotes[i]; return null; }
+
   function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
   function containerHTML(c, idx) {
     var t = D.box[c.box], items = itemsOf(c), u = usedOf(c), pct = u / t.cap * 100, over = u > t.cap;
@@ -1133,10 +1163,10 @@
     if (!over && items.length && c.box !== '20GP' && u <= D.box['20GP'].cap) warns.push("<div class=\"lp-warn soft\">Only " + n2(u) + " m³ — a 20' GP or LCL may be cheaper.</div>");
     var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
     return '<section class="card lp-c" data-c="' + c.id + '">' +
-      '<div class="lp-ch"><h2>Container ' + c.no + (c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' : c.status === 'requested' ? ' <span class="cp-tag wait">Booking requested</span>' : '') + '</h2><div class="lp-ctl">' +
+      '<div class="lp-ch"><h2>Container ' + c.no + (c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' : c.status === 'requested' ? ' <span class="cp-tag wait">Quotes requested</span>' : '') + '</h2><div class="lp-ctl">' +
         '<select data-lp-box="' + c.id + '" aria-label="Container type">' + Object.keys(D.box).map(function (b) { return '<option value="' + b + '"' + (b === c.box ? ' selected' : '') + '>' + esc(D.box[b].name) + '</option>'; }).join('') + '</select>' +
         '<select data-lp-sail="' + c.id + '" aria-label="Sailing"><option value="">' + (D.sailings.length ? 'Choose sailing…' : 'No sailings loaded') + '</option>' + D.sailings.map(function (s) { return '<option value="' + s.id + '"' + (s.id === c.sailing ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('') + '</select>' +
-        '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Booking requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+        '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
         '<button type="button" class="icon-btn" title="Remove container" aria-label="Remove container ' + c.no + '" data-lp-del="' + c.id + '">×</button></div></div>' +
       '<div class="lp-stage" data-lp-drop="' + c.id + '"><div class="lp-box" style="width:' + W + 'px;height:' + H + 'px">' +
         '<div class="lp-lbl">' + esc(t.name) + ' · ' + t.cap + ' m³ practical load</div><div class="lp-lbl2" style="left:' + (W - 70) + 'px">door →</div>' +
@@ -1146,11 +1176,11 @@
       '</div></div>' +
       '<div class="lp-fill"><div class="lp-track"><i class="' + lvl + '" style="width:' + Math.min(pct, 100) + '%"></i></div><div class="lp-fnum">' + n2(u) + ' / ' + t.cap + ' m³<small>' + Math.round(pct) + '% full · ' + n2(Math.max(0, t.cap - u)) + ' m³ left</small></div></div>' +
       (items.length ? '<div class="lp-chips">' + items.map(function (o) { return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-id="' + o.id + '"><i></i><b>' + esc(o.po) + '</b>' + esc((o.product ? ' ' + o.product + ' · ' : ' ') + n2(o.cbm) + ' m³') + '<button type="button" class="lp-x" data-lp-out="' + o.id + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>'; }).join('') + '</div>' : '') +
-      warns.join('') +
+      warns.join('') + quotesHTML(c) +
       '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
         '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
-        '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (items.length && !over ? '' : ' disabled title="' + (over ? 'Container is over capacity' : 'Load POs first') + '"') + '>' + (c.requestedAt ? 'Send again' : 'Request booking') + '</button></div></div>' +
-      (c.requestedAt ? '<p class="sub lp-reqd">Booking request sent ' + esc(c.requestedAt) + ' to ' + esc(c.requestTo) + '</p>' : '') +
+        '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (items.length && !over ? '' : ' disabled title="' + (over ? 'Container is over capacity' : 'Load POs first') + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>' +
+
       '</section>';
   }
   function render() {
@@ -1207,34 +1237,86 @@
       post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast('Container shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' closed'); }).catch(fail);
     }
   });
-  // Booking request popup
-  var rq = document.querySelector('[data-lp-req]'), rqForm = rq && rq.querySelector('[data-lp-req-form]'), rqId = null;
+  // Request quotations popup
+  var rq = document.querySelector('[data-lp-req]'), rqForm = rq && rq.querySelector('[data-lp-req-form]'), rqId = null, fws = [];
+  function fwRow(f, checked) {
+    return '<label class="lp-fw-item"><input type="checkbox" value="' + esc(f.id) + '"' + (checked ? ' checked' : '') + '><span><b>' + esc(f.company) + '</b> ' + esc(f.contact ? '· ' + f.contact : '') + '<span class="sub">' + esc(f.email) + (f.sent ? ' · already asked' : '') + '</span></span></label>';
+  }
+  function drawFws(checkedIds) {
+    var box = rq.querySelector('[data-lp-fw-list]');
+    box.innerHTML = fws.length ? fws.map(function (f) { return fwRow(f, checkedIds ? checkedIds.indexOf(f.id) >= 0 : !f.sent); }).join('') : '<p class="sub">No forwarders yet — add one below.</p>';
+    if (!fws.length) rq.querySelector('[data-lp-fw-add]').open = true;
+  }
+  var checkedFws = function () { return Array.prototype.map.call(rq.querySelectorAll('[data-lp-fw-list] input:checked'), function (i) { return i.value; }); };
   function rqDraft(contacts) {
+    var keep = rq.querySelector('[data-lp-fw-list] input') ? checkedFws() : null;
     rq.querySelector('[data-lp-req-loading]').hidden = false; rq.querySelector('[data-lp-req-fields]').hidden = true;
     return fetch(D.base + '/containers/' + rqId + '/request' + (contacts ? '?contacts=1' : ''), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) throw new Error(j.error || 'Could not prepare the request');
-      var f = rqForm.elements;
-      if (!f.to.value) f.to.value = j.draft.to; if (!f.cc.value) f.cc.value = j.draft.cc;
+      var f = rqForm.elements; fws = j.forwarders || [];
+      if (!f.cc.value) f.cc.value = j.draft.cc || '';
       f.subject.value = j.draft.subject; f.body.value = j.draft.body;
+      drawFws(keep);
       rq.querySelector('[data-lp-req-loading]').hidden = true; rq.querySelector('[data-lp-req-fields]').hidden = false;
-      (f.to.value ? f.body : f.to).focus();
     }).catch(function (x) { rq.close(); toast(x.message); });
   }
   if (rq) {
     root.addEventListener('click', function (e) {
       var b = e.target.closest('[data-lp-request]'); if (!b) return;
-      rqId = b.getAttribute('data-lp-request'); rqForm.reset(); rq.querySelector('[data-lp-req-note]').textContent = '';
+      rqId = b.getAttribute('data-lp-request'); rqForm.reset(); rq.querySelector('[data-lp-fw-list]').innerHTML = ''; rq.querySelector('[data-lp-req-note]').textContent = '';
       if (rq.showModal) rq.showModal(); rqDraft(false);
     });
     rq.addEventListener('change', function (e) { if (e.target.hasAttribute('data-lp-req-contacts')) rqDraft(e.target.checked); });
-    rq.addEventListener('click', function (e) { if (e.target.closest('[data-lp-req-close]') || e.target === rq) rq.close(); });
+    rq.addEventListener('click', function (e) {
+      if (e.target.closest('[data-lp-req-close]') || e.target === rq) { rq.close(); return; }
+      var add = e.target.closest('[data-lp-fw-save]'); if (!add) return;
+      var v = function (k) { return rq.querySelector('[data-nf="' + k + '"]').value.trim(); };
+      if (!v('company') || !v('email')) { rq.querySelector('[data-lp-req-note]').textContent = 'Company and email are required'; return; }
+      add.disabled = true;
+      var body = new URLSearchParams({ company: v('company'), contact_name: v('contact_name'), email: v('email') });
+      fetch('/admin/logistics/forwarders', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: body, credentials: 'same-origin' })
+        .then(function (r) { return r.json(); }).then(function (j) {
+          add.disabled = false; if (!j.ok) throw new Error(j.error);
+          var keep = checkedFws(); keep.push(j.forwarder.id); fws.push(j.forwarder); drawFws(keep);
+          rq.querySelectorAll('[data-nf]').forEach(function (i) { i.value = ''; }); rq.querySelector('[data-lp-req-note]').textContent = j.forwarder.company + ' added';
+        }).catch(function (x) { add.disabled = false; rq.querySelector('[data-lp-req-note]').textContent = x.message; });
+    });
     rqForm.addEventListener('submit', function (e) {
-      e.preventDefault(); var f = rqForm.elements, btn = rq.querySelector('[data-lp-req-send]'), note = rq.querySelector('[data-lp-req-note]');
-      btn.disabled = true; note.textContent = 'Sending…';
-      post(D.base + '/containers/' + rqId + '/request', { to: f.to.value, cc: f.cc.value, subject: f.subject.value, body: f.body.value }).then(function (j) {
-        var c = cById(rqId); c.status = j.status; c.requestTo = j.requestTo; c.requestedAt = j.requestedAt;
-        btn.disabled = false; rq.close(); render(); toast('Booking request sent to ' + j.requestTo);
+      e.preventDefault(); var f = rqForm.elements, btn = rq.querySelector('[data-lp-req-send]'), note = rq.querySelector('[data-lp-req-note]'), ids = checkedFws();
+      if (!ids.length) { note.textContent = 'Tick at least one forwarder'; return; }
+      btn.disabled = true; note.textContent = 'Sending ' + ids.length + ' email' + (ids.length > 1 ? 's' : '') + '…';
+      post(D.base + '/containers/' + rqId + '/request', { forwarders: ids.join(','), cc: f.cc.value, subject: f.subject.value, body: f.body.value }).then(function (j) {
+        rq.close(); toast('Sent to ' + j.sent.join(', ') + (j.failed.length ? ' — not sent: ' + j.failed.join('; ') : ''));
+        setTimeout(function () { location.reload(); }, j.failed.length ? 3500 : 1200);
       }).catch(function (x) { btn.disabled = false; note.textContent = x.message; });
+    });
+  }
+
+  // Quote: enter / edit by hand, choose
+  var qd = document.querySelector('[data-lp-q]'), qForm = qd && qd.querySelector('[data-lp-q-form]'), qId = null;
+  root.addEventListener('click', function (e) {
+    var ch = e.target.closest('[data-lp-choose]');
+    if (ch) {
+      var q = findQuote(ch.getAttribute('data-c'), ch.getAttribute('data-lp-choose'));
+      if (!confirm('Choose ' + q.company + (q.total != null ? ' at ' + money(q.total) : '') + ' for this container?')) return;
+      ch.disabled = true;
+      post(D.base + '/quotes/' + q.id + '/choose').then(function () { location.reload(); }).catch(fail);
+      return;
+    }
+    var ed = e.target.closest('[data-lp-qedit]'); if (!ed || !qd) return;
+    var q2 = findQuote(ed.getAttribute('data-c'), ed.getAttribute('data-lp-qedit')); if (!q2) return;
+    qId = q2.id; var f = qForm.elements;
+    qd.querySelector('#lp-q-t').textContent = q2.company; qd.querySelector('[data-lp-q-sub]').textContent = q2.code + (q2.to ? ' · ' + q2.to : '') + (q2.status === 'sent' ? ' · type in a quote you received by phone, WeChat or another email' : '');
+    f.total_usd.value = q2.total == null ? '' : q2.total; f.ocean_usd.value = q2.ocean == null ? '' : q2.ocean; f.carrier.value = q2.carrier; f.vessel.value = q2.vessel;
+    f.etd.value = q2.etd; f.eta.value = q2.eta; f.cy_cutoff.value = q2.cy; f.valid_until.value = q2.valid; f.free_days.value = q2.free == null ? '' : q2.free;
+    f.status.value = q2.status === 'sent' ? 'replied' : q2.status; f.notes.value = q2.notes; qd.querySelector('[data-lp-q-note]').textContent = '';
+    if (qd.showModal) qd.showModal(); f.total_usd.focus();
+  });
+  if (qd) {
+    qd.addEventListener('click', function (e) { if (e.target.closest('[data-lp-q-close]') || e.target === qd) qd.close(); });
+    qForm.addEventListener('submit', function (e) {
+      e.preventDefault(); var data = {}; Array.prototype.forEach.call(qForm.elements, function (el) { if (el.name) data[el.name] = el.value; });
+      post(D.base + '/quotes/' + qId, data).then(function () { location.reload(); }).catch(function (x) { qd.querySelector('[data-lp-q-note]').textContent = x.message; });
     });
   }
 
