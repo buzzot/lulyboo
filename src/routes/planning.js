@@ -176,7 +176,7 @@ function planningRoutes(router, { db, config }) {
               <div class="sub">${f.kind || 'Document'} · ${sups[f.supplier_id]?.name || ''} · ${fmt.date(f.created_at)}${f.size ? ` · ${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</div>
               ${(f.pos || []).length ? html`<div class="cp-pos">${f.pos.slice(0, 12).map((x) => html`<a href="${BASE}?view=docs&po=${encodeURIComponent(x)}">${x}</a>`)}${f.pos.length > 12 ? html`<span class="sub">+${f.pos.length - 12}</span>` : ''}</div>` : ''}</div>
             <div class="cp-facts"><a class="icon-btn" href="${BASE}/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a>
-              <form method="post" action="${BASE}/files/${f.id}/delete" class="inline" onsubmit="return confirm('Delete this document?')"><button class="icon-btn" title="Delete" aria-label="Delete ${f.name}">×</button></form></div></li>`)}</ul>`
+              <form method="post" action="${BASE}/files/${f.id}/delete" class="inline" data-confirm="Delete this document?"><button class="icon-btn" title="Delete" aria-label="Delete ${f.name}">×</button></form></div></li>`)}</ul>`
           : html`<p class="muted">No documents yet. Upload POs here, or they are kept automatically when you import orders.</p>`}</section></div>`;
     } else {
       body = html`<div class="card"><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Supplier</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Docs</th><th></th></tr></thead>
@@ -184,7 +184,7 @@ function planningRoutes(router, { db, config }) {
           <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || o.port_text || '—'}</td><td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
           <td>${filesFor(o.supplier_id, o.po).length ? html`<a href="${BASE}?view=docs&po=${encodeURIComponent(o.po)}">📎 ${filesFor(o.supplier_id, o.po).length}</a>` : '—'}</td>
           <td class="cp-acts">${editBtn(o, 'link small')} <form method="post" action="${BASE}/${o.id}/shipped" class="inline"><button class="link small">${o.shipped ? 'Undo shipped' : 'Mark shipped'}</button></form>
-            <form method="post" action="${BASE}/${o.id}/delete" class="inline" onsubmit="return confirm('Delete this order line?')"><button class="icon-btn" title="Delete" aria-label="Delete">×</button></form></td></tr>`)}</tbody></table></div>
+            <form method="post" action="${BASE}/${o.id}/delete" class="inline" data-confirm="Delete this order line?"><button class="icon-btn" title="Delete" aria-label="Delete">×</button></form></td></tr>`)}</tbody></table></div>
         ${list.length ? '' : html`<p class="muted">Nothing to show.</p>`}</div>`;
     }
 
@@ -370,10 +370,16 @@ function planningRoutes(router, { db, config }) {
     res.redirect(`${BASE}?view=table`);
   }));
   router.post(`${BASE}/:id/delete`, G(async (req, res) => {
-    await parseForm(req).catch(() => null);
+    const { fields } = await parseForm(req).catch(() => ({ fields: {} }));
+    const o = await db.get('plan_orders', req.params.id).catch(() => null);
     await db.remove('plan_orders', { id: req.params.id });
-    flash(res, 'ok', 'Order line deleted');
-    res.redirect(`${BASE}?view=table`);
+    flash(res, 'ok', o ? `Deleted ${o.po}${o.product ? ` · ${o.product}` : ''}` : 'Order line deleted');
+    const back = String(fields.back || '');
+    if (back.startsWith('/admin/orders/view')) {
+      const left = o ? (await db.list('plan_orders', { filters: { supplier_id: o.supplier_id } })).filter((x) => PL.normPo(x.po) === PL.normPo(o.po)).length : 1;
+      return res.redirect(left ? back : '/admin/orders');
+    }
+    res.redirect(back.startsWith(BASE) ? back : `${BASE}?view=table`);
   }));
 
   router.post(`${BASE}/files`, G(async (req, res) => {

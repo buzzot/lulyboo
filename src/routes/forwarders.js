@@ -46,7 +46,7 @@ module.exports = function forwarderRoutes(router, { db, config }) {
           <tbody>${rows.map((r) => { const s = stat(r.id); return html`<tr class="${r.active === false ? 'done' : ''}"><td><b>${r.company}</b>${r.notes ? html`<div class="sub">${r.notes}</div>` : ''}</td><td>${r.contact_name || '—'}</td><td>${r.email}${r.cc ? html`<div class="sub">cc ${r.cc}</div>` : ''}</td><td>${r.phone || '—'}</td>
             <td class="r">${s.n || '—'}${s.last ? html`<div class="sub">last ${fmt.date(s.last)}</div>` : ''}</td><td class="r">${s.n ? `${s.replied}` : '—'}</td><td class="r">${s.won || '—'}</td>
             <td class="fw-acts"><details><summary class="link small">Edit</summary><form method="post" action="${BASE}/${r.id}">${form(r)}<label class="cp-chk"><input type="checkbox" name="active" value="1" ${r.active !== false ? raw('checked') : ''}> Active (shown when requesting quotes)</label><button class="btn small">Save</button></form></details>
-              <form method="post" action="${BASE}/${r.id}/delete" class="inline" onsubmit="return confirm('Delete this forwarder? Past quotes are kept.')"><button class="icon-btn" title="Delete" aria-label="Delete ${r.company}">×</button></form></td></tr>`; })}</tbody></table></div>
+              <form method="post" action="${BASE}/${r.id}/delete" class="inline" data-confirm="Delete this forwarder? Past quotes are kept."><button class="icon-btn" title="Delete" aria-label="Delete ${r.company}">×</button></form></td></tr>`; })}</tbody></table></div>
           ${rows.length ? '' : html`<p class="muted or-empty">No forwarders yet. Add the companies you ask for quotes.</p>`}</section>`,
     }));
   }));

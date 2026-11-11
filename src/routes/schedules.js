@@ -112,7 +112,7 @@ function schedulesRoutes(router, { db, config }) {
           <td>${SC.PORT[s.origin]?.name || s.origin} → ${SC.PORT[s.destination]?.name || s.destination}${s.direct === false ? html`<div class="sub">via ${s.via || 'transshipment'}</div>` : html`<div class="sub">Direct</div>`}</td>
           <td>${short(s.eta)}</td><td class="r">${s.transit_days ? `${s.transit_days} d` : '—'}</td><td>${short(s.cy_cutoff)}</td><td>${short(s.doc_cutoff)}</td>
           <td><span class="sl-src ${s.source}">${s.source === 'api' ? 'API' : s.source === 'email' ? 'Email' : 'File'}</span>${s.source_name ? html`<div class="sub">${s.source_name}</div>` : ''}</td>
-          <td><form method="post" action="/admin/logistics/schedules/${s.id}/delete" class="inline" onsubmit="return confirm('Remove this sailing?')"><button class="icon-btn" title="Remove" aria-label="Remove">×</button></form></td></tr>`)}</tbody></table></div></section>` : ''}
+          <td><form method="post" action="/admin/logistics/schedules/${s.id}/delete" class="inline" data-confirm="Remove this sailing?"><button class="icon-btn" title="Remove" aria-label="Remove">×</button></form></td></tr>`)}</tbody></table></div></section>` : ''}
       <div class="sl-sources">
         <section class="card"><h2>Add a forwarder schedule</h2><p class="sub">Excel, CSV, PDF or a photo of the monthly schedule. AI reads every sailing and keeps the ones on your lanes.</p>
           <form method="post" action="/admin/logistics/schedules/import" enctype="multipart/form-data" data-busy>
@@ -120,7 +120,7 @@ function schedulesRoutes(router, { db, config }) {
             <label class="sl-paste">Or paste schedule text<textarea name="text" rows="3" placeholder="Paste a schedule table or email text"></textarea></label>
             <button class="btn" ${AI.enabled() ? '' : raw('disabled title="Set ANTHROPIC_API_KEY to read schedules"')}>Read schedule</button></form>
           <p class="sub sl-mail">Or forward the forwarder's email to <code>schedules@${inboundDomain()}</code> <button type="button" class="btn small ghost" data-copy-text="schedules@${inboundDomain()}">Copy</button></p>
-          ${recentBatches.length ? html`<h3 class="sl-h3">Recent imports</h3><ul class="sl-batches">${recentBatches.map((b) => html`<li><span>${b.name || 'Schedule'} · ${b.n} sailing${b.n === 1 ? '' : 's'} · ${fmt.date(b.at)}</span><form method="post" action="/admin/logistics/schedules/batch/${encodeURIComponent(b.batch)}/delete" class="inline" onsubmit="return confirm('Remove the sailings from this import?')"><button class="link small">Undo</button></form></li>`)}</ul>` : ''}
+          ${recentBatches.length ? html`<h3 class="sl-h3">Recent imports</h3><ul class="sl-batches">${recentBatches.map((b) => html`<li><span>${b.name || 'Schedule'} · ${b.n} sailing${b.n === 1 ? '' : 's'} · ${fmt.date(b.at)}</span><form method="post" action="/admin/logistics/schedules/batch/${encodeURIComponent(b.batch)}/delete" class="inline" data-confirm="Remove the sailings from this import?"><button class="link small">Undo</button></form></li>`)}</ul>` : ''}
         </section>
         <section class="card"><div class="head-row"><h2>Carrier APIs</h2><form method="post" action="/admin/logistics/schedules/refresh" class="inline" data-busy><button class="btn small ghost" ${srcs.some((s) => s.configured) ? '' : raw('disabled')}>Refresh now</button></form></div>
           <p class="sub">Free DCSA schedule APIs. Each lane is checked once a week.${lastApi ? ` Last update ${fmt.date(lastApi)}.` : ''}</p>

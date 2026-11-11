@@ -2518,3 +2518,24 @@ test('duplicate PO lines ("900018" + "PO900018", same item) are flagged and merg
   assert.equal(db.tables.plan_orders.filter((o) => o.po === 'PO900020').length, 1);
   assert.doesNotMatch((await req(base, 'GET', '/admin/logistics/planning', { cookie })).text, /Merge duplicates/);
 });
+
+test('orders: delete a line or a whole PO from the PO page (with confirm)', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Kean' });
+  const a = await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', product: 'Straps', qty: 5000 });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '900018', product: 'Rattle', qty: 5040 });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900020', product: 'Bib', qty: 10 });
+  const url = `/admin/orders/view?supplier=${k.id}&po=PO900018`;
+  const page = await req(base, 'GET', url, { cookie });
+  assert.match(page.text, /data-confirm="Delete this line \(PO900018 · Straps\)/); assert.match(page.text, /Delete PO<\/button>/);
+  assert.doesNotMatch(page.text, /onsubmit=/);
+  const r1 = await req(base, 'POST', `/admin/logistics/planning/${a.id}/delete`, { cookie, form: { back: url } });
+  assert.equal(r1.location, url);
+  assert.equal(db.tables.plan_orders.length, 2);
+  const r2 = await req(base, 'POST', '/admin/orders/delete', { cookie, form: { supplier: k.id, po: 'PO900018' } });
+  assert.equal(r2.location, '/admin/orders');
+  assert.deepEqual(db.tables.plan_orders.map((o) => o.po), ['PO900020']);
+});
