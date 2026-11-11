@@ -154,4 +154,13 @@ async function syncReminders(db, h, supplierName) {
   return ids;
 }
 
-module.exports = { STAGES, DATE_FIELDS, TOOL, isDate, yearOf, targetYear, clean, readHolidays, matchSupplier, events, closureOn, syncReminders };
+/** Default reminder email asking suppliers to add and confirm a year's holiday schedule (editable before sending). */
+function reminderDraft(year) {
+  return {
+    subject: `Lulyboo · please confirm your ${year} holiday schedule / 请确认 ${year} 年假期安排`,
+    en: `Please add and confirm your ${year} holiday schedule (Chinese New Year and any other closures) in the Lulyboo supplier portal:\n\n- last day to place an order before each holiday, and for the first shipment after\n- last shipment before and first shipment after\n- when the factory and the office are closed\n\nYou can upload your holiday notice (screenshot, PDF or email) and AI fills in the dates for you. Please confirm when everything is correct, so we can plan orders and containers around your holidays.\n\nThank you!`,
+    zh: `请在 Lulyboo 供应商平台填写并确认 ${year} 年假期安排（春节及其他放假）：\n\n- 节前最后下单日，以及节后首批出货的下单截止日\n- 节前最后出货日和节后首次出货日\n- 工厂和办公室放假时间\n\n可直接上传假期通知（截图、PDF 或邮件），AI 会自动识别日期。确认无误后请点击“确认”，以便我们据此安排订单和货柜。\n\n谢谢！`,
+  };
+}
+
+module.exports = { reminderDraft, STAGES, DATE_FIELDS, TOOL, isDate, yearOf, targetYear, clean, readHolidays, matchSupplier, events, closureOn, syncReminders };

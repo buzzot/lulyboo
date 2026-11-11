@@ -60,4 +60,37 @@ function holidayDialog({ action, readUrl, suppliers = null, deleteBase = '', bac
 /** Data attribute payload for editing an existing holiday. */
 const editData = (h) => JSON.stringify({ id: h.id, supplier_id: h.supplier_id, name: h.name, notes: h.notes || '', ...Object.fromEntries(H.DATE_FIELDS.map((k) => [k, h[k] || ''])), file: h.file_name || '' });
 
-module.exports = { stageTable, holidayDialog, editData };
+const CRM_STATUSES = ['Active', 'Quoting', 'Contacted', 'Prospect', 'On hold', 'Blocked'];
+
+/** Lulyboo: choose who gets the "confirm your holidays" email (default: Active suppliers who have not confirmed), check the draft, send. */
+function remindDialog({ year, suppliers, users = [], back = '' }) {
+  const mails = {};
+  for (const s of suppliers) mails[s.id] = new Set([s.email].filter(Boolean).map((e) => e.toLowerCase()));
+  for (const u of users) if (u.status !== 'disabled' && u.email && mails[u.supplier_id]) mails[u.supplier_id].add(u.email.toLowerCase());
+  const st = (s) => (CRM_STATUSES.includes(s.crm_status) ? s.crm_status : 'No status');
+  const groups = [...CRM_STATUSES, 'No status'].map((g) => ({ g, n: suppliers.filter((s) => st(s) === g).length })).filter((x) => x.n);
+  const confirmed = (s) => Number(s.holidays_confirmed_year) === year;
+  const d = H.reminderDraft(year);
+  return html`<dialog class="rp-modal hol-dlg rem-dlg" data-rem-dlg aria-labelledby="rem-t">
+    <div class="rp-top"><h2 id="rem-t">Email holiday reminder · ${year}</h2><button type="button" class="icon-btn" data-rem-close aria-label="Close">×</button></div>
+    <form method="post" action="/admin/crm/holidays/remind" class="hol-step rem-form" data-rem-form>
+      <input type="hidden" name="year" value="${year}"><input type="hidden" name="back" value="${back}">
+      <h3 class="rem-h">1 · Send to</h3>
+      <div class="up-bar rem-groups">${groups.map(({ g, n }) => html`<button type="button" class="cf ${g === 'Active' ? 'on' : ''}" data-rem-group="${g}" aria-pressed="${g === 'Active' ? 'true' : 'false'}">${g} <small>${n}</small></button>`)}</div>
+      <div class="rem-tools"><label class="cp-chk"><input type="checkbox" data-rem-skip checked> Skip suppliers who already confirmed ${year}</label><input type="search" placeholder="Search suppliers" data-rem-q autocomplete="off"></div>
+      <ul class="rem-list" data-rem-list>${suppliers.map((s) => { const em = [...mails[s.id]]; return html`<li data-status="${st(s)}" data-confirmed="${confirmed(s) ? '1' : ''}" data-name="${String(s.name).toLowerCase()} ${em.join(' ')}">
+        <label><input type="checkbox" name="ids" value="${s.id}" ${em.length ? '' : raw('disabled')} data-rem-cb><span class="rem-n"><b>${s.name}</b><small>${em.length ? em.join(', ') : 'No email on file'}</small></span>
+        <span class="rem-tags">${confirmed(s) ? html`<span class="pill s-complete">Confirmed</span>` : ''}<span class="pill">${st(s)}</span></span></label></li>`; })}</ul>
+      <p class="sub rem-none" data-rem-none hidden>No suppliers in the selected groups.</p>
+      <label class="hol-notes">Other email addresses <input name="extra" placeholder="name@factory.com, another@supplier.cn" data-rem-extra></label>
+      <h3 class="rem-h">2 · Check the email</h3>
+      <label class="hol-notes">Subject <input name="subject" value="${d.subject}" required maxlength="200"></label>
+      <div class="rem-msg"><label class="hol-notes">English <textarea name="en" rows="9" required>${d.en}</textarea></label>
+        <label class="hol-notes">中文 <textarea name="zh" rows="9" required>${d.zh}</textarea></label></div>
+      <p class="sub">Each supplier's email starts with "Hello {company name}," and ends with a button <b>Open holiday schedule</b> that opens their Holidays page in the portal. Lulyboo owners are copied.</p>
+      <div class="rp-actions"><button class="btn" data-rem-send>Send</button><button type="button" class="btn ghost" data-rem-close>Cancel</button><span class="sub" data-rem-count></span></div>
+    </form>
+  </dialog>`;
+}
+
+module.exports = { stageTable, holidayDialog, editData, remindDialog };

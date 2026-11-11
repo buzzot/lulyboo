@@ -1627,3 +1627,38 @@
   var bar = document.querySelector('[data-cal-filters]'); if (bar) bar.addEventListener('click', function () { setTimeout(apply, 0); });
   apply();
 })();
+
+// CRM calendar · holiday reminder email: choose groups / suppliers / extra emails, check the draft, send
+(function () {
+  var dlg = document.querySelector('[data-rem-dlg]'); if (!dlg) return;
+  var groups = Array.prototype.slice.call(dlg.querySelectorAll('[data-rem-group]'));
+  var rows = Array.prototype.slice.call(dlg.querySelectorAll('[data-rem-list] > li'));
+  var skip = dlg.querySelector('[data-rem-skip]'), q = dlg.querySelector('[data-rem-q]'), extra = dlg.querySelector('[data-rem-extra]');
+  var count = dlg.querySelector('[data-rem-count]'), send = dlg.querySelector('[data-rem-send]'), none = dlg.querySelector('[data-rem-none]');
+  var onGroups = function () { return groups.filter(function (b) { return b.classList.contains('on'); }).map(function (b) { return b.getAttribute('data-rem-group'); }); };
+  var inGroup = function (li) { return onGroups().indexOf(li.getAttribute('data-status')) >= 0; };
+  var cb = function (li) { return li.querySelector('[data-rem-cb]'); };
+  // tick everyone in the chosen groups (minus confirmed when skipping); untick the rest
+  function retick() { rows.forEach(function (li) { var c = cb(li); if (!c.disabled) c.checked = inGroup(li) && !(skip.checked && li.getAttribute('data-confirmed')); }); show(); }
+  function show() {
+    var w = q.value.trim().toLowerCase(), vis = 0;
+    rows.forEach(function (li) { var on = (inGroup(li) || cb(li).checked) && (!w || li.getAttribute('data-name').indexOf(w) >= 0); li.hidden = !on; if (on) vis++; });
+    none.hidden = vis > 0; tally();
+  }
+  function tally() {
+    var n = rows.filter(function (li) { return cb(li).checked; }).length;
+    var x = extra.value.split(/[\s,;]+/).filter(function (e) { return e.indexOf('@') > 0; }).length;
+    var parts = []; if (n) parts.push(n + ' supplier' + (n === 1 ? '' : 's')); if (x) parts.push(x + ' other email' + (x === 1 ? '' : 's'));
+    count.textContent = parts.length ? 'Will email ' + parts.join(' + ') : 'Nobody selected';
+    send.textContent = parts.length ? 'Send to ' + parts.join(' + ') : 'Send'; send.disabled = !parts.length;
+  }
+  groups.forEach(function (b) { b.addEventListener('click', function () { b.classList.toggle('on'); b.setAttribute('aria-pressed', b.classList.contains('on')); retick(); }); });
+  skip.addEventListener('change', retick); q.addEventListener('input', show); extra.addEventListener('input', tally);
+  dlg.addEventListener('change', function (e) { if (e.target.matches('[data-rem-cb]')) tally(); });
+  dlg.querySelector('[data-rem-form]').addEventListener('submit', function (e) {
+    if (!confirm(count.textContent.replace('Will email', 'Send the reminder to') + '?')) e.preventDefault();
+  });
+  document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-rem-open]')) { q.value = ''; retick(); dlg.showModal(); } });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg || e.target.closest('[data-rem-close]')) dlg.close(); });
+  retick();
+})();

@@ -2706,7 +2706,15 @@ test('supplier holidays: AI read, save, calendar bands, portal page, confirm, re
   // Reminder email to suppliers who have not confirmed
   const acts0 = db.tables.supplier_activities.length;
   await db.update('suppliers', { id: sup.id }, { holidays_confirmed_year: null });
-  const rm = await req(base, 'POST', '/admin/crm/holidays/remind', { cookie: admin, form: { year: String(year) } });
+  assert.equal((await req(base, 'POST', '/admin/crm/holidays/remind', { cookie: admin, form: { year: String(year) } })).status, 303);
+  assert.equal(db.tables.supplier_activities.slice(acts0).filter((a) => /Asked to confirm/.test(a.summary)).length, 0, 'nobody chosen → nothing sent');
+  const calR = await req(base, 'GET', '/admin/crm/calendar?m=2027-01', { cookie: admin });
+  assert.match(calR.text, /data-rem-dlg/); assert.match(calR.text, /class="cf on" data-rem-group="Active"/);
+  const body = new URLSearchParams([['year', String(year)], ['ids', sup.id], ['extra', 'sales@factory.cn, bad-address'], ['subject', 'Hi'], ['en', 'Please confirm'], ['zh', '请确认']]).toString();
+  const bad = await fetch(base + '/admin/crm/holidays/remind', { method: 'POST', headers: { cookie: admin, 'content-type': 'application/x-www-form-urlencoded' }, body, redirect: 'manual' });
+  assert.equal(bad.status, 303);
+  assert.equal(db.tables.supplier_activities.slice(acts0).filter((a) => /Asked to confirm/.test(a.summary)).length, 0, 'bad extra address → nothing sent');
+  const rm = await fetch(base + '/admin/crm/holidays/remind', { method: 'POST', headers: { cookie: admin, 'content-type': 'application/x-www-form-urlencoded' }, body: body.replace('%2C+bad-address', ''), redirect: 'manual' });
   assert.equal(rm.status, 303);
   const asked = db.tables.supplier_activities.slice(acts0).filter((a) => /Asked to confirm/.test(a.summary));
   assert.deepEqual(asked.map((a) => a.supplier_id), [sup.id], 'only Active suppliers are emailed');

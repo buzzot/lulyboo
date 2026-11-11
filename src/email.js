@@ -208,4 +208,25 @@ ${detail.label ? `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color
   };
 }
 
-module.exports = { adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+/** Plain bilingual notice with a button (holiday schedule reminder etc.). en / zh are the editable message bodies. */
+function noticeEmail({ title, companyName, en, zh, button, link }) {
+  const paras = (t) => esc(t).split(/\n{2,}/).map((x) => x.replace(/\n/g, '<br>')).join('<br><br>');
+  const text = `${companyName ? `Hello ${companyName},\n\n` : ''}${en}\n\n${button[0]}: ${link}\n\n${companyName ? '您好，\n\n' : ''}${zh}\n\n${button[1]}：${link}`;
+  return {
+    text,
+    html: layout({
+      preheader: `${title[0]} · ${title[1]}`,
+      body: `<tr><td style="padding:32px 0 0;"><h1 style="margin:0;font-size:26px;line-height:34px;font-weight:600;">${esc(title[0])}</h1>
+<p style="margin:8px 0 0;font-size:18px;line-height:28px;color:#73777d;" lang="zh-CN">${esc(title[1])}</p></td></tr>
+<tr><td style="padding:24px 0 0;">${companyName ? `<p style="margin:0 0 12px;font-size:15px;line-height:25px;">Hello ${esc(companyName)},</p>` : ''}
+<p style="margin:0;font-size:15px;line-height:25px;">${paras(en)}</p></td></tr>
+<tr><td style="padding:22px 0 0;"><div style="padding:16px 18px;background:#faf6f5;border-radius:6px;">${companyName ? '<p style="margin:0 0 10px;font-size:15px;line-height:25px;color:#3d4247;" lang="zh-CN">您好，</p>' : ''}
+<p style="margin:0;font-size:15px;line-height:26px;color:#3d4247;" lang="zh-CN">${paras(zh)}</p></div></td></tr>
+<tr><td style="padding:26px 0 0;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
+<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:15px 25px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(button[0])} · ${esc(button[1])}</a></td></tr></table></td></tr>
+<tr><td style="padding:24px 0 30px;"><p style="margin:0;font-size:12px;line-height:21px;color:#73777d;">If the button doesn't work, open this link: <a href="${esc(link)}" style="color:#62676e;">${esc(link)}</a></p></td></tr>`,
+    }),
+  };
+}
+
+module.exports = { noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

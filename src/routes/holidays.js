@@ -116,25 +116,43 @@ module.exports = function holidayRoutes(router, { db, config }) {
 
   router.get('/admin/crm/holidays/:id/file', G(async (req, res) => sendFile(res, await db.get('supplier_holidays', req.params.id).catch(() => null))));
 
-  /** Email suppliers who have not confirmed the coming year's holiday schedule. */
+  /** Email the holiday reminder (draft checked in the popup) to the chosen suppliers and any extra addresses. */
   router.post('/admin/crm/holidays/remind', G(async (req, res) => {
     const { fields: f } = await parseForm(req);
     const year = Number(f.year) || H.targetYear();
+    const back = backTo(f.back, '/admin/crm/calendar');
     const P = require('../projects');
-    const sups = (await db.list('suppliers')).filter((s) => s.crm_status === 'Active' && !s.archived_at && Number(s.holidays_confirmed_year) !== year);
-    const ids = String(f.ids || '').split(',').filter(Boolean);
-    let sent = 0;
-    for (const s of ids.length ? sups.filter((x) => ids.includes(x.id)) : sups) {
-      const ok = await P.notifySupplier(config, db, s, {
-        subject: `Lulyboo · please confirm your ${year} holiday schedule / 请确认 ${year} 年假期安排`,
-        en: `Please add and confirm your ${year} holiday schedule (Chinese New Year and other closures): the last order date and last shipment before each holiday, and when the factory and office are closed. You can upload your holiday notice and AI fills in the dates.`,
-        zh: `请在供应商平台填写并确认 ${year} 年假期安排（春节及其他放假）：节前最后下单日、最后出货日，以及工厂和办公室放假时间。可直接上传假期通知，AI 会自动识别日期。`,
-        link: `${config.publicUrl}/portal/holidays?year=${year}`,
-      });
-      if (ok) { sent++; await log(s.id, `Asked to confirm the ${year} holiday schedule (email).`); }
+    const { sendEmail, noticeEmail, emailConfigured } = require('../email');
+    const def = H.reminderDraft(year);
+    const subject = String(f.subject || def.subject).trim().slice(0, 200) || def.subject;
+    const en = String(f.en || def.en).trim().slice(0, 5000); const zh = String(f.zh || def.zh).trim().slice(0, 5000);
+    const ids = [].concat(f.ids || []).filter(Boolean);
+    const extra = [...new Set(String(f.extra || '').split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    const badExtra = extra.filter((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+    if (badExtra.length) { flash(res, 'error', `Check these email addresses: ${badExtra.join(', ')}`); return res.redirect(back); }
+    if (!ids.length && !extra.length) { flash(res, 'error', 'Choose at least one supplier or enter an email address'); return res.redirect(back); }
+    if (!emailConfigured() && process.env.EMAIL_DEV_LOG !== 'true') { flash(res, 'error', 'Email is not set up (RESEND_API_KEY)'); return res.redirect(back); }
+    const link = `${config.publicUrl}/portal/holidays?year=${year}`;
+    const title = [`Please confirm your ${year} holiday schedule`, `请确认 ${year} 年假期安排`];
+    const button = ['Open holiday schedule', '打开假期安排'];
+    const all = await db.list('suppliers');
+    let sent = 0; const failed = []; const done = new Set();
+    for (const s of all.filter((x) => ids.includes(x.id))) {
+      const to = await P.supplierRecipients(db, s);
+      if (!to.length) { failed.push(`${s.name} (no email)`); continue; }
+      try {
+        const e = noticeEmail({ title, companyName: s.name, en, zh, button, link });
+        await sendEmail(config, { to, subject, text: e.text, html: e.html, cc: P.ownerEmails() });
+        to.forEach((x) => done.add(x)); sent++;
+        await log(s.id, `Asked to confirm the ${year} holiday schedule (email to ${to.join(', ')}).`);
+      } catch (e) { failed.push(`${s.name} (${e.provider?.reason || 'send failed'})`); }
     }
-    flash(res, sent ? 'ok' : 'warn', sent ? `Reminder sent to ${sent} supplier${sent === 1 ? '' : 's'}` : 'No reminder sent (no Active suppliers with a contact email, or all have confirmed)');
-    res.redirect(backTo(f.back, '/admin/crm/calendar'));
+    for (const addr of extra.filter((x) => !done.has(x))) {
+      try { const e = noticeEmail({ title, en, zh, button, link }); await sendEmail(config, { to: addr, subject, text: e.text, html: e.html }); sent++; } catch (e) { failed.push(`${addr} (${e.provider?.reason || 'send failed'})`); }
+    }
+    if (sent) flash(res, failed.length ? 'warn' : 'ok', `Reminder sent to ${sent} recipient${sent === 1 ? '' : 's'}${failed.length ? `. Not sent: ${failed.join('; ')}` : ''}`);
+    else flash(res, 'error', `No reminder sent${failed.length ? `: ${failed.join('; ')}` : ''}`);
+    res.redirect(back);
   }));
 
   // ── Supplier portal ─────────────────────────────────────────────────────

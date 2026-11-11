@@ -156,10 +156,11 @@ module.exports = function crmRoutes(router, { db, config }) {
       db.list('crm_tasks', { filters: { due_date: ['gte', gridStart] }, order: 'due_date.asc' }),
       db.list('supplier_activities', { filters: { activity_date: ['gte', gridStart] }, order: 'activity_date.asc' }),
       db.list('supplier_activities', { filters: { done: false, follow_up_date: ['gte', gridStart] } }),
-      db.list('suppliers', { select: 'id,name', order: 'name.asc' }),
+      db.list('suppliers', { order: 'name.asc' }),
       C.supplierNames(db),
       db.list('info_requests', { select: 'id,ref' }),
     ]);
+    const supUsers = await db.list('supplier_users', { select: 'supplier_id,email,status' }).catch(() => []);
     const reqByRef = Object.fromEntries(reqRows.map((r) => [r.ref, r.id]));
     // supplier holidays: closures as bands across days, cut-offs as one-day flags
     let holidays = []; let holMissing = false;
@@ -243,9 +244,9 @@ module.exports = function crmRoutes(router, { db, config }) {
               <div><div class="${e.kind === 'flag' && e.field?.startsWith('order') && days <= 30 ? 'soon' : ''}">${e.kind === 'flag' ? `${e.ic} ${e.en}` : `${e.kind === 'factory' ? '🏭 Factory' : '🏢 Office'} closed until ${fmtShort(e.to)}`}</div><div class="sub"><i style="background:${holColor[e.h.supplier_id][0]}"></i>${names[e.h.supplier_id] || 'Supplier'} · ${e.h.name}</div></div></li>`; })}</ul><p class="hol-up-none muted" data-hol-upnone hidden>Nothing matches these filters.</p><button type="button" class="link hol-up-more" data-hol-upmore hidden></button>` : html`<p class="muted">No supplier deadlines in the next 4 months.${holidays.length ? '' : ' Add a supplier holiday notice to see them here.'}</p>`}
           </section>
           <section class="card"><h2>${ty} schedules confirmed by suppliers</h2>
-            <p><b>${done.length}</b> of ${active.length} active supplier${active.length === 1 ? '' : 's'}${done.length ? html` · ${done.map((x) => x.name).slice(0, 4).join(', ')}${done.length > 4 ? '…' : ''}` : ''}</p>
-            ${todo.length ? html`<form method="post" action="/admin/crm/holidays/remind" class="hol-remind-f"><input type="hidden" name="year" value="${ty}"><input type="hidden" name="back" value="${back}">
-              <span class="sub">Not yet: ${todo.slice(0, 5).map((x) => x.name).join(', ')}${todo.length > 5 ? ` +${todo.length - 5}` : ''}</span><button class="btn small ghost" data-confirm="${`Email ${todo.length} supplier${todo.length === 1 ? '' : 's'} asking them to add and confirm their ${ty} holidays in the portal?`}">Email reminder</button></form>` : active.length ? '' : html`<p class="muted">No suppliers with CRM status Active.</p>`}
+            <p><b>${done.length}</b> of ${active.length} active supplier${active.length === 1 ? '' : 's'} confirmed${done.length ? html` · ${done.map((x) => x.name).slice(0, 4).join(', ')}${done.length > 4 ? '…' : ''}` : ''}</p>
+            ${todo.length ? html`<p class="sub">Not yet: ${todo.slice(0, 5).map((x) => x.name).join(', ')}${todo.length > 5 ? ` +${todo.length - 5}` : ''}</p>` : ''}
+            <button type="button" class="btn small ghost" data-rem-open>✉ Email reminder…</button>
           </section></div>`;
       })()}
       <section class="card" id="day"><h2>${C.dayName(day)}</h2>
@@ -255,6 +256,7 @@ module.exports = function crmRoutes(router, { db, config }) {
           <div class="sub">${e.supplier_id ? html`<a href="/admin/suppliers/${e.supplier_id}">${names[e.supplier_id]}</a>` : 'General'}${(() => { const ref = (String(e.label).match(/\bLB-\d{3,7}\b/) || [])[0]; return ref && reqByRef[ref] ? html` · <a href="/admin/requests/${reqByRef[ref]}">Open request ${ref}</a>` : ''; })()}</div></div></li>`)}</ul>` : html`<p class="muted">Nothing on this day.</p>`}
         ${dayList.some((e) => e.state === 'done') ? html`<p class="muted small">Completed tasks are shown struck through in the calendar.</p>` : ''}
         <h3>Schedule something on this day</h3>${taskForm({ suppliers, date: day, back })}</section>
+      ${HV.remindDialog({ year: H.targetYear(today), suppliers: suppliers.filter((x) => !x.archived_at && !/^pending:/i.test(String(x.name || '').trim())), users: supUsers, back })}
       ${HV.holidayDialog({ action: '/admin/crm/holidays', readUrl: '/admin/crm/holidays/read', suppliers: suppliers.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || holidays.some((h) => h.supplier_id === x.id)), deleteBase: '/admin/crm/holidays', back, remind: true })}`,
     }));
   }));
