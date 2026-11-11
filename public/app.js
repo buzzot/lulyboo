@@ -90,26 +90,32 @@
   });
 
   // Live container fit on the product form (mirrors src/calc.js)
-  var box = document.querySelector('[data-live-fit] .live-fit');
-  if (box) {
+  var fitBox = document.querySelector('[data-live-fit]');
+  if (fitBox) {
     var C = { '20GP': [589, 235, 239, 17200], '40GP': [1203, 235, 239, 20000], '40HQ': [1203, 235, 269, 20000] };
-    var val = function (id) { var el = document.getElementById(id); return el ? parseFloat(el.value) : NaN; };
+    var val = function (id) { var el = document.getElementById(id); return el ? parseFloat(String(el.value).replace(',', '.')) : NaN; };
     var fit = function (l, w, h, gw, c) {
       var o = [[l, w, h], [l, h, w], [w, l, h], [w, h, l], [h, l, w], [h, w, l]], best = 0;
       o.forEach(function (d) { var n = Math.floor(c[0] / d[0]) * Math.floor(c[1] / d[1]) * Math.floor(c[2] / d[2]); if (n > best) best = n; });
-      return gw > 0 ? Math.min(best, Math.floor(c[3] / gw)) : best;
+      var byKg = gw > 0 ? Math.floor(c[3] / gw) : Infinity;
+      return { n: Math.min(best, byKg), kg: byKg < best };
     };
+    var setTxt = function (sel, v) { var el = fitBox.parentNode.querySelector(sel); if (el) el.innerHTML = v; };   // L() returns bilingual markup
     var update = function () {
       var l = val('f_carton_l_cm'), w = val('f_carton_w_cm'), h = val('f_carton_h_cm'), gw = val('f_carton_gw_kg'), upc = val('f_units_per_carton');
-      if (!(l > 0 && w > 0 && h > 0)) { box.innerHTML = L('Enter the carton size and units per carton to see how many fit.', '请输入外箱尺寸和装箱数，系统将计算装柜数量。'); return; }
-      var cbm = l * w * h / 1e6;
-      var en = ['Carton ' + cbm.toFixed(4) + ' CBM'], zh = ['外箱 ' + cbm.toFixed(4) + ' 立方米'];
+      var ok = l > 0 && w > 0 && h > 0, cbm = ok ? l * w * h / 1e6 : 0;
+      var chip = document.querySelector('[data-fit-cbm]'); if (chip) chip.textContent = ok ? cbm.toFixed(3) + ' m³' : '— m³';
+      setTxt('[data-fit-cbm-big]', ok ? cbm.toFixed(3) + ' m³' : '—');
+      setTxt('[data-fit-per]', ok ? L('per carton', '每箱') + (upc > 0 ? ' · ' + upc + ' ' + L('pcs', '件') + (gw > 0 ? ' · ' + gw + ' kg' : '') : '') : L('Enter the carton size to see how many fit.', '请输入外箱尺寸，系统将计算装柜数量。'));
+      var icon = fitBox.querySelector('.pk-box');
+      if (icon) { var m = Math.max(l, w, h) || 1; icon.style.setProperty('--l', ok ? (l / m) : .8); icon.style.setProperty('--h', ok ? (h / m) : .6); icon.classList.toggle('on', ok); }
       Object.keys(C).forEach(function (k) {
-        var n = fit(l, w, h, gw, C[k]);
-        en.push(k + ': ' + n.toLocaleString() + ' ctns' + (upc > 0 ? ' = ' + (n * upc).toLocaleString() + ' pcs' : ''));
-        zh.push(k + '：' + n.toLocaleString() + ' 箱' + (upc > 0 ? ' = ' + (n * upc).toLocaleString() + ' 件' : ''));
+        var row = fitBox.querySelector('[data-fit-row="' + k + '"]'); if (!row) return;
+        var r = ok ? fit(l, w, h, gw, C[k]) : null;
+        row.querySelector('[data-fit-c]').innerHTML = r ? r.n.toLocaleString() + (r.kg ? ' <span class="pk-kg" title="Limited by weight · 受重量限制">⚖</span>' : '') : '—';
+        row.querySelector('[data-fit-u]').textContent = r && upc > 0 ? (r.n * upc).toLocaleString() : '—';
+        row.classList.toggle('kg', !!(r && r.kg));
       });
-      box.innerHTML = L(en.join(' · '), zh.join(' · '));
     };
     ['f_carton_l_cm', 'f_carton_w_cm', 'f_carton_h_cm', 'f_carton_gw_kg', 'f_units_per_carton'].forEach(function (id) {
       var el = document.getElementById(id); if (el) el.addEventListener('input', update);
