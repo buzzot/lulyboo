@@ -2618,3 +2618,22 @@ test('product page: fill from a file with AI returns fields to review, picks the
   const bad = await (await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', body: (() => { const f = new FormData(); f.append('file', new Blob(['x']), 'notes.docx'); return f; })(), headers: { cookie } })).json();
   assert.equal(bad.ok, false);
 });
+
+test('volume from packing written in the product description; line pcs/carton kept; product carton fields filled', async (t) => {
+  const PL = require('../src/planning');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Huanger' });
+  const p = await db.insert('products', { supplier_id: h.id, product_name: 'TBT 001', supplier_sku: 'TBT 001', description: 'Teething toy, product size 8x6x2cm. Carton size: 60*40*35cm, 36pcs/ctn, G.W.: 12.5kg' });
+  const line = await db.insert('plan_orders', { supplier_id: h.id, po: '800019', sku: 'TBT 001', product: 'TBT 001', qty: 8028, units_per_carton: 36, port: 'CNYTN', ready_date: '2026-11-26' });
+  assert.equal(PL.packingFromText('Item size 18 x 18 x 3.9 cm, color box'), null);
+  const page = await req(base, 'GET', '/admin/logistics/planning?view=table', { cookie });       // opening planning recalculates
+  assert.equal(page.status, 200);
+  const o = db.tables.plan_orders.find((x) => x.id === line.id);
+  assert.equal(o.carton_l_cm, 60); assert.equal(o.carton_h_cm, 35); assert.equal(o.units_per_carton, 36);
+  assert.equal(o.cartons, 223); assert.equal(o.cbm, 18.73); assert.equal(o.gross_kg, 2787.5); assert.equal(o.cbm_estimated, true);   // 8028/36 → 223 ctns × 0.084 m³
+  const prod = db.tables.products.find((x) => x.id === p.id);
+  assert.equal(prod.carton_l_cm, 60); assert.equal(prod.units_per_carton, 36); assert.equal(prod.carton_gw_kg, 12.5);
+});

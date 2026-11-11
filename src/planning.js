@@ -233,12 +233,62 @@ function volumeFrom(qty, pack, cartons = null) {
 }
 
 /** Standard packing for a line: its own, else the same item on an earlier PO, else the catalog product. */
+/**
+ * Carton packing written as text (product description, notes, packaging): "Carton size: 60*40*35cm", "Meas 600x400x350mm",
+ * "36pcs/ctn", "G.W.: 12.5kg", "外箱尺寸 60*40*35", "毛重 12.5kg". Dimensions count only next to a carton word, so a
+ * product size ("18 x 18 x 3.9 cm") is not taken for the carton. Returns the fields found (may be partial) or null.
+ */
+function packingFromText(...texts) {
+  const t = texts.filter(Boolean).join('\n').replace(/[×*Xx✕]/g, 'x').replace(/，/g, ',').replace(/：/g, ':');
+  if (!t.trim()) return null;
+  const out = {};
+  const KW = /(master\s*carton|outer\s*carton|export\s*carton|carton|ctn|cartons|meas(?:urement)?|外箱|箱规|纸箱|外箱尺寸)/i;
+  const dimRe = /(\d+(?:\.\d+)?)\s*(cm|mm|in(?:ch(?:es)?)?|")?\s*x\s*(\d+(?:\.\d+)?)\s*(cm|mm|in(?:ch(?:es)?)?|")?\s*x\s*(\d+(?:\.\d+)?)\s*(cm|mm|in(?:ch(?:es)?)?|"|厘米|毫米)?/gi;
+  let m;
+  while ((m = dimRe.exec(t))) {
+    const before = t.slice(Math.max(0, m.index - 40), m.index);
+    if (!KW.test(before) || /product|item\s*size|产品尺寸/i.test(before.slice(-20))) continue;
+    const unit = (m[6] || m[4] || m[2] || 'cm').toLowerCase();
+    const k = /mm|毫米/.test(unit) ? 0.1 : /in|"/.test(unit) ? 2.54 : 1;
+    const [l, w, h] = [m[1], m[3], m[5]].map((x) => Math.round(Number(x) * k * 10) / 10);
+    if (l > 5 && w > 5 && h > 3 && l < 250 && w < 250 && h < 250) { Object.assign(out, { carton_l_cm: l, carton_w_cm: w, carton_h_cm: h }); break; }
+  }
+  const pcs = t.match(/(\d{1,5})\s*(?:pcs|pc|units?|sets?|pairs?|件|只|个|套)\s*(?:\/|per|each|a|in\s+one|\/\s*one)\s*(?:master\s*|outer\s*|export\s*)?(?:ctns?|cartons?|箱)/i)
+    || t.match(/(?:pcs|qty|quantity|units?)\s*(?:\/|per)\s*(?:ctn|carton)\s*[:=]?\s*(\d{1,5})/i) || t.match(/装箱数[^\d]{0,6}(\d{1,5})/);
+  if (pcs) out.units_per_carton = Number(pcs[1]);
+  const gw = t.match(/(?:G\.?\s*W\.?|gross\s*(?:weight|wt\.?)?|毛重)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(kgs?|千克|公斤)?/i);
+  if (gw) out.carton_gw_kg = Number(gw[1]);
+  const nw = t.match(/(?:N\.?\s*W\.?|net\s*(?:weight|wt\.?)|净重)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(kgs?|千克|公斤)?/i);
+  if (nw && !/unit|per\s*(?:pc|piece|unit)/i.test(t.slice(Math.max(0, nw.index - 15), nw.index))) out.carton_nw_kg = Number(nw[1]);
+  return Object.keys(out).length ? out : null;
+}
+
+/** The catalog product's packing: its carton fields, completed from what its description / notes say. */
+function productPack(p) {
+  const own = packOf(p);
+  if (hasPack(p) && own.units_per_carton && own.carton_gw_kg) return { pack: own, fromText: null };
+  const txt = packingFromText(p.description, p.factory_notes, p.packaging_type);
+  if (!txt) return hasPack(p) ? { pack: own, fromText: null } : null;
+  const pack = { ...own }; const filled = {};
+  for (const [k, v] of Object.entries(txt)) if (pack[k] == null) { pack[k] = v; filled[k] = v; }
+  return hasPack(pack) ? { pack, fromText: Object.keys(filled).length ? filled : null } : null;
+}
+
 function findPacking(o, history, prods) {
+  const r = findPackingRaw(o, history, prods);
+  if (!r || r.from === 'line') return r;
+  // the line's own numbers (e.g. pcs/carton printed on the PO) win over the standard packing
+  const own = Object.fromEntries(Object.entries(packOf(o)).filter(([, v]) => v != null));
+  return { ...r, pack: { ...r.pack, ...own } };
+}
+
+function findPackingRaw(o, history, prods) {
   if (hasPack(o)) return { pack: packOf(o), from: 'line' };
   const h = history.filter((x) => x.id !== o.id && hasPack(x) && sameItem(o, x)).sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))[0];
   if (h) return { pack: packOf(h), from: 'history' };
-  const p = prods.find((x) => hasPack(x) && sameItem(o, x)) || prods.filter((x) => hasPack(x) && looseItem(o, x)).slice(0, 2).reduce((a, x, i, all) => (all.length === 1 ? x : null), null);
-  if (p) return { pack: packOf(p), from: 'catalog' };
+  const withPack = prods.map((x) => ({ x, pp: productPack(x) })).filter((y) => y.pp);
+  const hit = withPack.find((y) => sameItem(o, y.x)) || withPack.filter((y) => looseItem(o, y.x)).reduce((a, y, i, all) => (all.length === 1 ? y : null), null);
+  if (hit) return { pack: hit.pp.pack, from: 'catalog', product: hit.x, fromText: hit.pp.fromText };
   return null;
 }
 
@@ -254,6 +304,12 @@ async function fillVolumes(db, supplierId) {
     if (o.shipped || !o.product) continue;
     const given = num(o.cbm) && !o.cbm_estimated;
     const f = findPacking(o, all, prods); if (!f) continue;
+    if (f.fromText && f.product && !f.product._packSaved) {
+      // carton data that was only written in the product's description: store it in the product's carton fields too
+      const fill = Object.fromEntries(Object.entries(f.fromText).filter(([k]) => num(f.product[k]) == null));
+      if (Object.keys(fill).length) await db.update('products', { id: f.product.id }, { ...fill, updated_at: new Date().toISOString() }).catch(() => null);
+      Object.assign(f.product, fill); f.product._packSaved = true;
+    }
     const patch = {};
     if (f.from !== 'line') for (const k of PACK) if (f.pack[k] != null && num(o[k]) == null) patch[k] = f.pack[k];
     if (!given) {
@@ -472,4 +528,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

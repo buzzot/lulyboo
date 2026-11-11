@@ -50,6 +50,10 @@ module.exports = function orderRoutes(router, { db, config }) {
     let lines = []; let missing = false;
     try { lines = await db.list('plan_orders', { order: 'ready_date.asc' }); }
     catch (e) { if (/plan_orders|PGRST205|relation/i.test(e.message)) missing = true; else throw e; }
+    const noVol = [...new Set(lines.filter((o) => !o.shipped && o.product && !(Number(o.cbm) > 0)).map((o) => o.supplier_id))];
+    let changed = 0;
+    for (const sid of noVol) changed += await PL.fillVolumes(db, sid).catch(() => 0);
+    if (changed) lines = await db.list('plan_orders', { order: 'ready_date.asc' });
     const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
     const ids = [...new Set([...lines.map((l) => l.supplier_id), ...files.map((f) => f.supplier_id)])];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));

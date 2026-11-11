@@ -56,6 +56,11 @@ function planningRoutes(router, { db, config }) {
     let orders = []; let missing = false;
     try { orders = await db.list('plan_orders', { order: 'ready_date.asc' }); }
     catch (e) { if (/plan_orders|PGRST205|relation/i.test(e.message)) missing = true; else throw e; }
+    // open lines without a volume: try the standard packing (earlier PO / product / product description) once more
+    const noVol = [...new Set(orders.filter((o) => !o.shipped && o.product && !(Number(o.cbm) > 0)).map((o) => o.supplier_id))];
+    let changed = 0;
+    for (const sid of noVol) changed += await PL.fillVolumes(db, sid).catch(() => 0);
+    if (changed) orders = await db.list('plan_orders', { order: 'ready_date.asc' });
     const ids = [...new Set(orders.map((o) => o.supplier_id))];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
     const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
@@ -344,7 +349,7 @@ function planningRoutes(router, { db, config }) {
     else if (packChanged && own.carton_l_cm && own.carton_w_cm && own.carton_h_cm) { const v = PL.volumeFrom(own.qty, own); if (v) Object.assign(own, { cbm: v.cbm, cartons: v.cartons, gross_kg: v.gross_kg, cbm_estimated: true }); }
     const now = new Date().toISOString();
     await db.update('plan_orders', { id: o.id }, { ...shared, ...own, updated_at: now });
-    if (packChanged) await PL.fillVolumes(db, o.supplier_id).catch(() => 0);
+    await PL.fillVolumes(db, o.supplier_id).catch(() => 0);
     let extra = 0;
     if (f.all_po === '1') {
       for (const x of await db.list('plan_orders', { filters: { supplier_id: o.supplier_id } })) {
