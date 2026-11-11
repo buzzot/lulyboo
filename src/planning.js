@@ -283,6 +283,62 @@ async function mergePlaceholders(db, supplierId, pos) {
   return n;
 }
 
+/** Same item: same supplier SKU, or the same product name once item numbers are taken off. */
+function sameLineItem(a, b) {
+  if (a.sku && b.sku) return normSku(a.sku) === normSku(b.sku);
+  const sku = a.sku || b.sku;
+  return normProd(cleanName(a.product, sku)) === normProd(cleanName(b.product, sku));
+}
+
+/** Groups of open lines that are the same item on the same PO of the same supplier (e.g. "900018" and "PO900018"). */
+function duplicateGroups(lines) {
+  const byPo = new Map();
+  for (const o of lines) {
+    if (o.shipped || !o.product) continue;
+    const k = `${o.supplier_id}|${normPo(o.po)}`;
+    if (!byPo.has(k)) byPo.set(k, []);
+    byPo.get(k).push(o);
+  }
+  const groups = [];
+  for (const ls of byPo.values()) {
+    const used = new Set();
+    for (const o of ls) {
+      if (used.has(o.id)) continue;
+      const g = ls.filter((x) => !used.has(x.id) && (x === o || sameLineItem(o, x)));
+      g.forEach((x) => used.add(x.id));
+      if (g.length > 1) groups.push(g);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Merge duplicate lines: keep the oldest line (its PO spelling, container, history), fill its empty fields from the
+ * others, take the clean product name and the newest cost / quantity, then delete the others. Returns lines removed.
+ */
+async function mergeDuplicates(db, supplierId = null) {
+  const all = await db.list('plan_orders', supplierId ? { filters: { supplier_id: supplierId } } : {}).catch(() => []);
+  let removed = 0;
+  for (const g of duplicateGroups(all)) {
+    const byAge = [...g].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const keep = byAge.find((x) => x.container_id) || byAge[0];
+    const others = g.filter((x) => x.id !== keep.id);
+    const newest = [...g].sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+    const patch = {};
+    const empty = (v) => v === null || v === undefined || v === '';
+    for (const k of [...FIELDS, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'port', 'port_text', 'container_id', 'notes']) {
+      if (!empty(keep[k])) continue;
+      const v = newest.find((x) => !empty(x[k])); if (v) patch[k] = v[k];
+    }
+    for (const k of ['unit_price', 'currency', 'qty']) { const v = newest.find((x) => !empty(x[k])); if (v && String(v[k]) !== String(keep[k] ?? '')) patch[k] = v[k]; }
+    const clean = g.map((x) => cleanName(x.product, x.sku || keep.sku)).sort((a, b) => a.length - b.length)[0];
+    if (clean && clean !== keep.product) patch.product = clean;
+    if (Object.keys(patch).length) await db.update('plan_orders', { id: keep.id }, { ...patch, updated_at: new Date().toISOString() }).catch(() => db.update('plan_orders', { id: keep.id }, Object.fromEntries(Object.entries(patch).filter(([k]) => ![...PACK, ...PRICE].includes(k)))));
+    for (const x of others) { await db.remove('plan_orders', { id: x.id }); removed++; }
+  }
+  return removed;
+}
+
 /** "BSTS 001 - Silicone straps set of three" with SKU "BSTS 001" → "Silicone straps set of three". */
 function cleanName(name, sku) {
   const n = String(name || '').trim(); if (!n || !sku) return n || null;
@@ -400,4 +456,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, fillVolumes, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

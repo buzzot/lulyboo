@@ -2491,3 +2491,30 @@ test('PO re-import: "900018" = "PO900018", item-code names cleaned, cost stored 
   db.update = upd;
   assert.equal(r2.updated, 1); assert.equal(fails, 1);
 });
+
+test('duplicate PO lines ("900018" + "PO900018", same item) are flagged and merged', async (t) => {
+  const PL = require('../src/planning');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean Silicone Product' });
+  const a = await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', sku: 'BSTS 001', product: 'BSTS 001 - Silicone straps set of three', qty: 5000, ready_date: '2026-10-30', port: 'CNYTN', production_status: 'Ready for shipping', created_at: '2026-11-01T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', sku: 'FRT 001', product: 'FRT 001 - Flower rattle & teether', qty: 5040, ready_date: '2026-10-30', port: 'CNYTN', created_at: '2026-11-01T00:00:01Z' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '900018', product: 'Silicone straps set of three', qty: 5000, unit_price: 0.85, currency: 'USD', ready_date: '2026-10-30', port: 'CNYTN', created_at: '2026-11-10T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '900018', product: 'Flower rattle & teether', qty: 5040, unit_price: 0.96, currency: 'USD', ready_date: '2026-10-30', port: 'CNYTN', created_at: '2026-11-10T00:00:01Z' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900020', product: 'Silicone straps set of three', qty: 100 });   // other PO: not a duplicate
+  assert.equal(PL.duplicateGroups(db.tables.plan_orders).length, 2);
+  assert.match((await req(base, 'GET', '/admin/logistics/planning', { cookie })).text, /2 items appear twice on the same PO[\s\S]*Merge duplicates/);
+  assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie })).text, /Merge duplicates/);
+  const r = await req(base, 'POST', '/admin/logistics/planning/dedupe', { cookie, form: {} });
+  assert.equal(r.status, 303);
+  const ls = db.tables.plan_orders.filter((o) => PL.normPo(o.po) === '900018');
+  assert.equal(ls.length, 2);
+  assert.ok(ls.every((o) => o.po === 'PO900018'));
+  const straps = ls.find((o) => o.id === a.id);
+  assert.equal(straps.product, 'Silicone straps set of three'); assert.equal(straps.unit_price, 0.85); assert.equal(straps.production_status, 'Ready for shipping');
+  assert.equal(ls.find((o) => o.sku === 'FRT 001').product, 'Flower rattle & teether');
+  assert.equal(db.tables.plan_orders.filter((o) => o.po === 'PO900020').length, 1);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/logistics/planning', { cookie })).text, /Merge duplicates/);
+});

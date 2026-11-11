@@ -1666,3 +1666,4 @@ img.ph{object-fit:cover;padding:0}
 .po-tip-f.muted{color:#999;border-top:0;padding-top:0;margin-top:4px}
 .cp-kpis:has(> :nth-child(5)){grid-template-columns:repeat(5,minmax(0,1fr))}
 @media(max-width:1100px){.cp-kpis:has(> :nth-child(5)){grid-template-columns:repeat(3,minmax(0,1fr))}}
+.cp-dup{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}

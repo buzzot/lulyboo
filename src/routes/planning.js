@@ -13,6 +13,7 @@ const AI = require('../ai');
 const SCR = require('./schedules');
 const SAM = require('./samples');
 const LP = require('./loadplan');
+const cleanItem = (o) => PL.cleanName(o.product, o.sku);
 
 const PALETTE = ['#3b6fb6', '#d07a1e', '#2f8a63', '#7a5bb0', '#b4473b', '#1f8a9a', '#a5682a', '#5b6c8f', '#c0507e', '#4e7d2f'];
 const portName = (code) => SC.PORT[code]?.name || null;
@@ -191,6 +192,7 @@ function planningRoutes(router, { db, config }) {
       title: 'Container planning · Logistics', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, req,
       body: html`${SCR.logisticsTabs('planning')}
         ${missing ? html`<p class="flash warn">Run the container planning SQL in Supabase first (supabase/schema.sql, "Container planning").</p>` : ''}
+        ${(() => { const dup = PL.duplicateGroups(orders); return dup.length ? html`<form method="post" action="${BASE}/dedupe" class="flash warn cp-dup"><span><b>${dup.length} item${dup.length === 1 ? ' appears' : 's appear'} twice on the same PO</b> — ${dup.slice(0, 3).map((g) => `${g[0].po} ${cleanItem(g[0])}`).join(', ')}${dup.length > 3 ? '…' : ''}. Merge keeps one line per item with all its details — skip it if they are separate shipments.</span><button class="btn small">Merge duplicates</button></form>` : ''; })()}
         <div class="cp-head"><div><h2 class="sl-title">Container planning</h2><p class="muted">Open purchase orders grouped by loading port and ready week, with a suggested container mix.</p></div>
           <div class="cp-head-r">${viewTabs(view, q)}<a class="btn" href="${BASE}/import">Import orders</a></div></div>
         <form class="cp-filters" method="get" action="${BASE}"><input type="hidden" name="view" value="${view}">
@@ -284,6 +286,12 @@ function planningRoutes(router, { db, config }) {
           <button class="btn">Save checked lines</button>
         </form>`,
     }));
+  }));
+
+  router.post(`${BASE}/dedupe`, G(async (req, res) => {
+    const n = await PL.mergeDuplicates(db);
+    flash(res, 'ok', n ? `Merged ${n} duplicate line${n === 1 ? '' : 's'}` : 'No duplicates found');
+    res.redirect(BASE);
   }));
 
   router.post(`${BASE}/save`, G(async (req, res) => {
