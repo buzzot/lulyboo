@@ -1809,3 +1809,124 @@ img.ph{object-fit:cover;padding:0}
 .cp-it-m i{color:#999;font-style:normal;font-size:11px;margin-left:3px}
 .cp-po-id .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cp-po-d{gap:4px 6px}
+
+/* ── Supplier holidays: CRM calendar ───────────────────────────────────── */
+.cal-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:0 0 10px}
+.cal-filters>b{font-size:11.5px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-right:2px}
+.cf{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:#fff;cursor:pointer;font:inherit;font-size:13px;color:#555}
+.cf.on{background:#1f1f1f;color:#fff;border-color:#1f1f1f}
+.cf.sup i{width:10px;height:10px;border-radius:3px;background:var(--c)}
+.cf.sup.on{background:#fff;color:#1f1f1f;border-color:var(--c);box-shadow:inset 0 0 0 1px var(--c)}
+.cf.sup:not(.on){opacity:.5}
+.cf-sep{width:1px;height:22px;background:var(--line)}
+.cf-add{margin-left:auto}
+table.cal td{position:relative}
+.hlanes{display:flex;flex-direction:column;gap:3px;margin:2px -5px 3px}
+.hb,.hb-sp{display:block;height:19px;min-width:0}
+.hb{border:0;font:inherit;font-size:11px;font-weight:600;line-height:19px;padding:0 6px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--f);cursor:pointer;border-top:1px solid var(--c);border-bottom:1px solid var(--c);background:var(--b2);position:relative;z-index:1}
+.hb span{position:relative;z-index:2}
+.hb-factory{background:repeating-linear-gradient(135deg,var(--b1) 0 6px,var(--b2) 6px 12px)}
+.hb-office{background:var(--b2);border-top-style:dashed;border-bottom-style:dashed}
+.hb-s{margin-left:4px;border-left:1px solid var(--c);border-top-left-radius:5px;border-bottom-left-radius:5px}
+.hb-e{margin-right:4px;border-right:1px solid var(--c);border-top-right-radius:5px;border-bottom-right-radius:5px}
+.hb-office.hb-s{border-left-style:dashed}.hb-office.hb-e{border-right-style:dashed}
+.hb-flag{background:#fff;border:1px solid var(--c);border-radius:5px;margin:0 4px}
+.hb:hover,.hb:focus-visible{filter:brightness(.97);outline:2px solid var(--c);outline-offset:-1px;z-index:3}
+.hb span{display:inline-block;max-width:none}
+td .hb span{overflow:visible}
+.hb-s span,.hb-flag span{overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.sup-off{visibility:hidden}
+li.sup-off,.hol-up li.sup-off{display:none}
+body.cal-no-hol .hlanes,body.cal-no-hol .hol-side,body.cal-no-hol .hol-day{display:none}
+body.cal-no-act .cal-acts{display:none}
+.hol-side{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px;margin-top:14px}
+@media(max-width:860px){.hol-side{grid-template-columns:1fr}}
+.hol-side .card{margin:0}
+.hol-side h2{font-size:1rem;margin:0 0 8px}
+.hol-up{list-style:none;margin:0;padding:0}
+.hol-up li{display:grid;grid-template-columns:62px 1fr;gap:10px;padding:8px 0;border-top:1px dashed var(--line);font-size:13.5px}
+.hol-up li:first-child{border-top:0}
+.hol-up .d b{display:block;font-variant-numeric:tabular-nums}.hol-up .d small{color:#999;font-size:11.5px}
+.hol-up .soon{color:#b23b2e;font-weight:700}
+.hol-up .sub i,.hol-day i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:0}
+.hol-remind-f{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
+.hol-day{list-style:none;padding:0;margin:0 0 12px}
+.hol-day li{padding:6px 10px;border-radius:8px;background:#faf8f6;margin-bottom:6px;font-size:13.5px}
+
+/* ── Supplier holidays: popup ──────────────────────────────────────────── */
+.hol-dlg{width:min(780px,96vw)}
+.hol-dlg>.rp-top,.hol-step{padding-left:22px;padding-right:22px}
+.hol-step{padding-bottom:20px}
+.hol-drop{display:flex;align-items:center;gap:14px;border:1.5px dashed #e3b7b3;background:var(--brand-soft);border-radius:12px;padding:16px;cursor:pointer;transition:background .15s,border-color .15s}
+.hol-drop:hover,.hol-drop.over,.hol-drop:focus-visible{border-color:var(--brand);background:#fbe3e1;outline:0}
+.hol-drop>span:nth-child(3){flex:1}
+.hol-drop b{display:block}.hol-drop small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.hol-drop-ic{width:36px;height:36px;border-radius:10px;background:#fff;color:var(--brand);display:grid;place-items:center;font-size:18px;flex:0 0 auto}
+.hol-drop.busy{pointer-events:none;opacity:.7}.hol-drop.busy .hol-drop-ic{animation:aifill-spin 1.1s linear infinite}
+.hol-or{display:flex;align-items:center;gap:10px;color:#999;font-size:12px;margin:14px 0 8px}
+.hol-or::before,.hol-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.hol-step textarea{width:100%;font:inherit;font-size:13.5px;border:1px solid #ddd9d4;border-radius:9px;padding:9px 11px;resize:vertical}
+.hol-read-row{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap}
+.hol-sent{display:flex;align-items:center;gap:8px;font-size:13px;color:#666;margin-right:auto}
+.hol-sent input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid #ddd9d4;border-radius:7px}
+.hol-status{margin:10px 0 0;font-size:13px;color:#666}.hol-status:empty{display:none}.hol-status.bad{color:#b23b2e}
+.hol-pick{margin-bottom:10px}.hol-pick label{display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600}
+.hol-row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.hol-row2:has(> :only-child){grid-template-columns:1fr}
+.hol-row2 label,.hol-notes{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:#555}
+.hol-row2 input,.hol-row2 select,.hol-notes input{font:inherit;font-size:14px;font-weight:400;color:var(--ink);border:1px solid #ddd9d4;border-radius:8px;padding:8px 10px}
+.hol-stages{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px}
+.hol-st-h,.hol-st{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start;padding:9px 12px}
+.hol-st-h{background:#f6f4f1;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.04em}
+.hol-st{border-top:1px solid #eeebe7}
+.hol-st-n b{display:block;font-size:13.5px}.hol-st-n small{display:block;color:#888;font-size:11.5px;line-height:1.35;margin-top:2px}
+.hol-st label{display:flex;flex-direction:column;gap:3px;min-width:0}
+.hol-st input{font:inherit;font-size:13.5px;border:1px solid #ddd9d4;border-radius:8px;padding:6px 8px;width:100%;min-width:0}
+.hol-st input.ai{background:#f3fbf5;border-color:#9ad3ad}
+.hol-q{font-size:11px;color:#888;font-style:italic;line-height:1.3;overflow-wrap:anywhere}.hol-q:empty{display:none}
+.hol-notes{margin-bottom:10px}
+.hol-remind{font-size:13px;margin:4px 0 8px}
+.hol-src{margin:4px 0 0}.hol-src:empty{display:none}
+.hol-del{margin-left:auto;color:#b23b2e}
+@media(max-width:640px){.hol-st-h{display:none}.hol-st{grid-template-columns:1fr 1fr}.hol-st-n{grid-column:1 / -1}.hol-row2{grid-template-columns:1fr}}
+
+/* ── Supplier holidays: supplier portal ───────────────────────────────── */
+.seg-links{display:flex;background:#eceae6;border-radius:10px;padding:4px}
+.seg-links a{padding:6px 14px;border-radius:7px;color:#555;text-decoration:none;font-weight:600}
+.seg-links a.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.hol-confirm{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;border:1px solid #f0c9a4;background:#fff7ec;border-radius:14px;padding:14px 18px;margin:0 0 16px}
+.hol-confirm>div{display:flex;gap:12px;align-items:flex-start;color:#8a5a00}
+.hol-confirm b{display:block;color:var(--ink)}.hol-confirm small{display:block;color:#7a6a58;margin-top:2px}
+.hol-confirm form{margin:0}
+.hol-confirm.ok{border-color:#b9e4c6;background:#f1faf4}.hol-confirm.ok>div{color:#2f8a4c}
+.hol-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
+@media(max-width:960px){.hol-layout{grid-template-columns:1fr}}
+.hol-list .head-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.hol-list .actions{display:flex;gap:8px}
+.hol-card{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:12px}
+.hol-card-h{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.hol-card-h b{font-size:15px}.hol-card-a{margin-left:auto}
+.hol-dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin:10px 0 0}
+@media(max-width:640px){.hol-dl{grid-template-columns:1fr}}
+.hol-dl dt{font-size:12px;color:#888;font-weight:600}
+.hol-dl dd{margin:2px 0 0;font-size:13.5px;display:flex;flex-direction:column}
+.hol-help h2{font-size:1rem;margin:0 0 8px}.hol-help h3{font-size:.9rem;margin:14px 0 6px}
+.hol-help ol{margin:0;padding-left:20px;line-height:1.5}
+.hol-help ol li{margin-bottom:8px;font-size:13.5px}.hol-help ol li b{display:block}
+.hol-defs{list-style:none;margin:0;padding:0}
+.hol-defs li{font-size:13px;margin-bottom:7px}.hol-defs li b{display:block}.hol-defs li span{color:#666}
+.hol-banner{display:flex;align-items:center;gap:12px;border:1px solid #f0c9a4;background:#fff7ec;border-radius:14px;padding:12px 16px;margin:0 0 16px;text-decoration:none;color:var(--ink)}
+.hol-banner>span:nth-child(2){flex:1}.hol-banner b{display:block}.hol-banner small{display:block;color:#7a6a58}
+.hol-banner svg{color:#b7791f;flex:0 0 auto}
+.hb-lab{overflow:visible;z-index:2}
+.hb-lab>span{position:absolute;left:6px;top:0;width:calc(var(--n) * 100% + (var(--n) - 1) * 1px - 14px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+table.cal td{overflow:visible}
+table.cal .cal-acts{overflow:hidden;min-width:0}
+.hlanes{position:relative}
+table.cal td:last-child .hlanes{margin-right:-4px}table.cal td:first-child .hlanes{margin-left:-4px}
+.hol-dlg [hidden]{display:none!important}
+.hol-dlg>.rp-top{padding:18px 22px 12px;border-bottom:1px solid #eeebe7;position:sticky;top:0;background:#fff;z-index:5}
+.hol-dlg .hol-step{padding:16px 22px 22px}
+.hol-dlg form.hol-step{display:block;gap:0}
+.hol-dlg .rp-actions{margin-top:12px}
+.hol-sent{white-space:nowrap}

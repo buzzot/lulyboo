@@ -823,3 +823,32 @@ alter table public.plan_orders add column if not exists carton_gw_kg     numeric
 -- Cost per piece on PO lines (run once)
 alter table public.plan_orders add column if not exists unit_price numeric;
 alter table public.plan_orders add column if not exists currency   text;
+
+-- Supplier holidays (CNY etc.) shown on the CRM calendar; suppliers confirm their schedule in the portal (run once)
+create table if not exists public.supplier_holidays (
+  id                  uuid primary key default gen_random_uuid(),
+  supplier_id         uuid not null references public.suppliers(id) on delete cascade,
+  year                int,
+  name                text not null default 'Holiday',
+  order_cutoff        date,          -- last day to order for shipment before the holiday
+  order_cutoff_after  date,          -- order deadline for the first shipment after
+  last_ship           date,          -- last shipment before
+  first_ship          date,          -- first shipment after
+  factory_from        date,
+  factory_to          date,
+  office_from         date,
+  office_to           date,
+  notes               text,
+  source              text not null default 'lulyboo',   -- lulyboo · supplier
+  file_path           text,
+  file_name           text,
+  file_mime           text,
+  reminder_task_ids   jsonb default '[]',
+  created_by          text,
+  created_at          timestamptz default now(),
+  updated_at          timestamptz default now()
+);
+create index if not exists supplier_holidays_sup_idx on public.supplier_holidays (supplier_id, year);
+alter table public.supplier_holidays enable row level security;
+alter table public.suppliers add column if not exists holidays_confirmed_year int;
+alter table public.suppliers add column if not exists holidays_confirmed_at   timestamptz;

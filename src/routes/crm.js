@@ -10,6 +10,10 @@ const { HttpError, parseForm, readBody, flash, takeFlash } = require('../lib/htt
 const { page, adminNav } = require('../views/layout');
 const { guard } = require('./admin');
 const C = require('../crm');
+const H = require('../holidays');
+const HV = require('../views/holidays');
+const HOL_COLORS = [['#c2477f', '#f6d9e6', '#fbecf2', '#8e2558'], ['#2c6fb0', '#d8e6f4', '#ecf3fa', '#1f4f7f'], ['#2f8a63', '#d5eee0', '#ebf7f0', '#1f6146'], ['#b7791f', '#f5e3c4', '#fbf2e2', '#7d520f'], ['#7a52c7', '#e5dcf6', '#f2edfb', '#53358f'], ['#1f9bb0', '#d1edf2', '#e9f7fa', '#146a79'], ['#d0532f', '#f6dacf', '#fbede8', '#8f3418'], ['#5d6b7a', '#e1e5ea', '#f1f3f5', '#3b4652']];
+const fmtShort = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const tg = require('../telegram');
 
 const REMIND = [[0, 'At the time'], [15, '15 min before'], [30, '30 min before'], [60, '1 hour before'], [120, '2 hours before'], [1440, '1 day before']];
@@ -72,7 +76,7 @@ module.exports = function crmRoutes(router, { db, config }) {
 
   // Used by the supplier page: this supplier's open items + a form to schedule one.
   router.crmWidget = async (supplierId, back) => {
-    const [items, suppliers, names] = await Promise.all([C.openItems(db, { supplierId }), db.list('suppliers', { select: 'id,name', order: 'name.asc' }), C.supplierNames(db)]);
+    const [items, suppliers, names] = await Promise.all([C.openItems(db, { supplierId }), db.list('suppliers', { order: 'name.asc' }), C.supplierNames(db)]);
     const refs = await requestRefs(db);
     const today = C.localNow().date;
     return html`<section class="card" id="next-actions"><div class="head-row"><h2>Next actions</h2><a class="btn small ghost" href="/admin/crm/calendar">Calendar</a></div>
@@ -157,6 +161,13 @@ module.exports = function crmRoutes(router, { db, config }) {
       db.list('info_requests', { select: 'id,ref' }),
     ]);
     const reqByRef = Object.fromEntries(reqRows.map((r) => [r.ref, r.id]));
+    // supplier holidays: closures as bands across days, cut-offs as one-day flags
+    let holidays = []; let holMissing = false;
+    try { holidays = await db.list('supplier_holidays', { order: 'factory_from.asc' }); } catch (e) { if (/supplier_holidays|PGRST20[45]|relation/i.test(e.message)) holMissing = true; else throw e; }
+    const holSup = [...new Set(holidays.map((h) => h.supplier_id))];
+    const holColor = Object.fromEntries(holSup.map((id, i) => [id, HOL_COLORS[i % HOL_COLORS.length]]));
+    const holEv = holidays.flatMap((h) => H.events(h).map((e) => ({ ...e, h })));
+    const holOn = (date) => holEv.filter((e) => e.from <= date && e.to >= date);
     const entries = []; // {date, time, kind: 'open'|'done'|'log', ...}
     for (const x of tasks) if (x.due_date <= gridEnd) entries.push({ date: x.due_date, time: x.due_time, state: x.done ? 'done' : 'open', raw: { kind: 'task', ...x }, label: x.title, type: x.type, supplier_id: x.supplier_id });
     for (const a of legacy) if (a.follow_up_date <= gridEnd) entries.push({ date: a.follow_up_date, state: 'open', raw: { kind: 'act', id: a.id, supplier_id: a.supplier_id, title: a.summary, type: 'Follow-up', due_date: a.follow_up_date, due_time: null }, label: a.summary, type: 'Follow-up', supplier_id: a.supplier_id });
@@ -166,14 +177,28 @@ module.exports = function crmRoutes(router, { db, config }) {
     for (const l of byDate.values()) l.sort((a, b) => `${a.time || '99'}`.localeCompare(`${b.time || '99'}`));
 
     const weeks = [];
+    const holPiece = (sg, date) => {
+      const [c, bg1, bg2, fg] = holColor[sg.h.supplier_id];
+      const label = sg.kind === 'flag' ? `${sg.ic} ${sg.en}` : `${sg.en}${sg.from < date ? ' (cont.)' : ` · ${fmtShort(sg.from)}–${fmtShort(sg.to)}`}`;
+      const first = date === sg.from || sg.a === 0 && date === C.addDays(gridStart, sg.w * 7);
+      const n = first ? sg.b - (date === sg.from ? sg.a : 0) + 1 : 1; // days this piece's label may run across
+      return html`<button type="button" class="hb hb-${sg.kind} ${date === sg.from ? 'hb-s' : ''} ${date === sg.to ? 'hb-e' : ''} ${n > 1 ? 'hb-lab' : ''}" data-n="${n}" style="--c:${c};--b1:${bg1};--b2:${bg2};--f:${fg}" data-sup="${sg.h.supplier_id}" data-hol-edit="${HV.editData(sg.h)}"
+        title="${`${names[sg.h.supplier_id] || 'Supplier'} · ${sg.h.name}: ${sg.en} ${sg.from === sg.to ? fmtShort(sg.from) : `${fmtShort(sg.from)} – ${fmtShort(sg.to)}`}`}">${first ? html`<span style="${n > 1 ? `--n:${n}` : ''}">${names[sg.h.supplier_id] || 'Supplier'} · ${label}</span>` : raw('&nbsp;')}</button>`;
+    };
     for (let w = 0; w < 6; w++) {
+      const ws = C.addDays(gridStart, w * 7); const we = C.addDays(ws, 6);
+      const segs = holEv.filter((e) => e.from <= we && e.to >= ws).map((e) => ({ ...e, w, a: e.from < ws ? 0 : Math.round((Date.parse(e.from) - Date.parse(ws)) / 864e5), b: e.to > we ? 6 : Math.round((Date.parse(e.to) - Date.parse(ws)) / 864e5) }))
+        .sort((x, y) => (y.b - y.a) - (x.b - x.a) || x.a - y.a);
+      const lanes = [];
+      for (const sg of segs) { let l = 0; while ((lanes[l] || []).some((o) => !(sg.b < o.a || sg.a > o.b))) l++; (lanes[l] = lanes[l] || []).push(sg); sg.l = l; }
       const cells = [];
       for (let d = 0; d < 7; d++) {
         const date = C.addDays(gridStart, w * 7 + d);
         const list = byDate.get(date) || [];
+        const holHtml = lanes.length ? html`<div class="hlanes">${lanes.map((ln) => { const sg = ln.find((x) => x.a <= d && x.b >= d); return sg ? holPiece(sg, date) : html`<span class="hb-sp"></span>`; })}</div>` : '';
         const chips = list.slice(0, 3).map((e) => html`<a class="chip ${tyClass(e.type)} ${e.state}" href="/admin/crm/calendar?m=${month}&day=${date}#day" title="${e.type}: ${e.label}${names[e.supplier_id] ? ' — ' + names[e.supplier_id] : ''}">${e.time ? e.time + ' ' : ''}${e.label}${names[e.supplier_id] ? ' · ' + names[e.supplier_id] : ''}</a>`);
         cells.push(html`<td class="${date.slice(0, 7) !== month ? 'out' : ''} ${date === today ? 'today' : ''} ${date === day ? 'sel' : ''}">
-          <a class="dnum" href="/admin/crm/calendar?m=${month}&day=${date}">${Number(date.slice(8))}</a>${chips}${list.length > 3 ? html`<a class="more" href="/admin/crm/calendar?m=${month}&day=${date}">+${list.length - 3} more</a>` : ''}</td>`);
+          <a class="dnum" href="/admin/crm/calendar?m=${month}&day=${date}">${Number(date.slice(8))}</a>${holHtml}<div class="cal-acts">${chips}</div>${list.length > 3 ? html`<a class="more cal-acts" href="/admin/crm/calendar?m=${month}&day=${date}">+${list.length - 3} more</a>` : ''}</td>`);
       }
       weeks.push(html`<tr>${cells}</tr>`);
     }
@@ -185,12 +210,40 @@ module.exports = function crmRoutes(router, { db, config }) {
       body: html`<div class="head-row"><h1>CRM</h1>${tabs('cal')}</div>
       <div class="cal-nav"><a class="btn small ghost" href="/admin/crm/calendar?m=${prev}">←</a><b>${monthLabel}</b><a class="btn small ghost" href="/admin/crm/calendar?m=${next}">→</a><a class="btn small ghost" href="/admin/crm/calendar">Today</a>
         <span class="legend">${C.TASK_TYPES.map((x) => html`<span class="chip ${tyClass(x)}">${x}</span>`)}<span class="chip log">Logged activity</span></span></div>
+      ${holMissing ? html`<p class="flash warn">Run the supplier holidays SQL in Supabase to show supplier holidays (supabase/schema.sql, "Supplier holidays").</p>` : ''}
+      <div class="cal-filters" data-cal-filters>
+        <b>Show</b>
+        <button type="button" class="cf on" data-cal-toggle="act">CRM activities</button>
+        <button type="button" class="cf on" data-cal-toggle="hol">🏮 Supplier holidays</button>
+        ${holSup.length ? html`<span class="cf-sep"></span>${holSup.map((id) => html`<button type="button" class="cf sup on" data-cal-sup="${id}" style="--c:${holColor[id][0]}"><i></i>${names[id] || 'Supplier'}</button>`)}` : ''}
+        <button type="button" class="btn small cf-add" data-hol-open>+ Supplier holidays</button>
+      </div>
       <div class="table-wrap"><table class="cal"><thead><tr>${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => html`<th>${d}</th>`)}</tr></thead><tbody>${weeks}</tbody></table></div>
+      ${(() => {
+        const ty = H.targetYear(today);
+        const up = holEv.filter((e) => e.from >= today && e.from <= C.addDays(today, 120)).sort((a, b) => a.from.localeCompare(b.from)).slice(0, 8);
+        const active = suppliers;
+        const done = active.filter((x) => Number(x.holidays_confirmed_year) === ty);
+        const todo = active.filter((x) => Number(x.holidays_confirmed_year) !== ty);
+        return html`<div class="hol-side">
+          <section class="card"><h2>Supplier holidays · coming up</h2>
+            ${up.length ? html`<ul class="hol-up">${up.map((e) => { const days = Math.round((Date.parse(e.from) - Date.parse(today)) / 864e5); return html`<li data-sup="${e.h.supplier_id}"><div class="d"><b>${fmtShort(e.from)}</b><small>${days ? `${days} d` : 'today'}</small></div>
+              <div><div class="${e.kind === 'flag' && e.field?.startsWith('order') && days <= 30 ? 'soon' : ''}">${e.kind === 'flag' ? `${e.ic} ${e.en}` : `${e.kind === 'factory' ? '🏭 Factory' : '🏢 Office'} closed until ${fmtShort(e.to)}`}</div><div class="sub"><i style="background:${holColor[e.h.supplier_id][0]}"></i>${names[e.h.supplier_id] || 'Supplier'} · ${e.h.name}</div></div></li>`; })}</ul>` : html`<p class="muted">No supplier deadlines in the next 4 months.${holidays.length ? '' : ' Add a supplier holiday notice to see them here.'}</p>`}
+          </section>
+          <section class="card"><h2>${ty} schedules confirmed by suppliers</h2>
+            <p><b>${done.length}</b> of ${active.length} suppliers${done.length ? html` · ${done.map((x) => x.name).slice(0, 4).join(', ')}${done.length > 4 ? '…' : ''}` : ''}</p>
+            ${todo.length ? html`<form method="post" action="/admin/crm/holidays/remind" class="hol-remind-f"><input type="hidden" name="year" value="${ty}"><input type="hidden" name="back" value="${back}">
+              <span class="sub">Not yet: ${todo.slice(0, 5).map((x) => x.name).join(', ')}${todo.length > 5 ? ` +${todo.length - 5}` : ''}</span><button class="btn small ghost" data-confirm="${`Email ${todo.length} supplier${todo.length === 1 ? '' : 's'} asking them to add and confirm their ${ty} holidays in the portal?`}">Email reminder</button></form>` : ''}
+          </section></div>`;
+      })()}
       <section class="card" id="day"><h2>${C.dayName(day)}</h2>
+        ${holOn(day).length ? html`<ul class="hol-day">${holOn(day).map((e) => html`<li data-sup="${e.h.supplier_id}"><i style="background:${holColor[e.h.supplier_id][0]}"></i><b>${names[e.h.supplier_id] || 'Supplier'}</b> · ${e.h.name}: ${e.kind === 'flag' ? `${e.ic} ${e.en}` : `${e.en} ${fmtShort(e.from)} – ${fmtShort(e.to)}`}
+          <button type="button" class="link small" data-hol-edit="${HV.editData(e.h)}">Edit</button>${e.h.file_name ? html` · <a class="small" href="/admin/crm/holidays/${e.h.id}/file" target="_blank" rel="noopener">Notice</a>` : ''}</li>`)}</ul>` : ''}
         ${dayList.length ? html`<ul class="tasks">${dayList.map((e) => e.raw ? itemRow(e.raw, { names, today, back }) : html`<li class="task log"><div class="t-main"><span class="tag ${tyClass(e.type)}">${e.type}</span> <span class="muted">logged</span><div>${e.label}</div>
           <div class="sub">${e.supplier_id ? html`<a href="/admin/suppliers/${e.supplier_id}">${names[e.supplier_id]}</a>` : 'General'}${(() => { const ref = (String(e.label).match(/\bLB-\d{3,7}\b/) || [])[0]; return ref && reqByRef[ref] ? html` · <a href="/admin/requests/${reqByRef[ref]}">Open request ${ref}</a>` : ''; })()}</div></div></li>`)}</ul>` : html`<p class="muted">Nothing on this day.</p>`}
         ${dayList.some((e) => e.state === 'done') ? html`<p class="muted small">Completed tasks are shown struck through in the calendar.</p>` : ''}
-        <h3>Schedule something on this day</h3>${taskForm({ suppliers, date: day, back })}</section>`,
+        <h3>Schedule something on this day</h3>${taskForm({ suppliers, date: day, back })}</section>
+      ${HV.holidayDialog({ action: '/admin/crm/holidays', readUrl: '/admin/crm/holidays/read', suppliers, deleteBase: '/admin/crm/holidays', back, remind: true })}`,
     }));
   }));
 

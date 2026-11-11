@@ -26,6 +26,7 @@ function nav(active) {
       { href: `${b}/import`, icon: 'upload', label: t('Bulk upload', '批量上传'), active: active === 'import' },
       { href: `${b}/projects`, icon: 'clipboard', label: t('Development projects', '开发项目'), active: active === 'projects' },
       { href: `${b}/samples`, icon: 'truck', label: t('Samples', '样品'), active: active === 'samples' },
+      { href: `${b}/holidays`, icon: 'calendar', label: t('Holidays', '假期安排'), active: active === 'holidays' },
       { href: `${b}/profile`, icon: 'building', label: t('Company', '公司信息'), active: active === 'profile' },
       { href: `${b}/account`, icon: 'user', label: t('Account', '账号'), active: active === 'account' },
       { href: '/logout', out: true, label: t('Sign out', '退出') },
@@ -90,6 +91,7 @@ function supplierRoutes(router, { db, config }) {
           <p class="muted">${t('Submit your products and prices to Lulyboo.', '向 Lulyboo 提交您的产品和报价。')}</p></div>
         <div class="actions"><a class="btn ghost" href="${req.base}/import">${icon('upload', 16)}${t('Bulk upload', '批量上传')}</a><a class="btn" href="${req.base}/products/new">${icon('plus', 16)}${t('Add product', '新增产品')}</a></div>
       </div>
+      ${(() => { const H = require('../holidays'); const y = H.targetYear(); return Number(req.supplier.holidays_confirmed_year) === y ? '' : html`<a class="hol-banner" href="${req.base}/holidays?year=${y}">${icon('calendar', 18)}<span><b>${t(`Please add and confirm your ${y} holiday schedule`, `请填写并确认 ${y} 年假期安排`)}</b><small>${t('Order cut-off, last shipment, factory and office closing dates — upload your notice and AI fills them in.', '下单截止、最后出货、工厂和办公室放假日期 — 上传通知，AI 自动识别。')}</small></span><span class="btn small">${t('Open', '打开')}</span></a>`; })()}
       <div class="stats-grid">
         <div class="stat-card"><span class="stat-ico">${icon('package', 18)}</span><div><b>${rows.length}</b><small>${t('Total products', '产品总数')}</small></div></div>
         <div class="stat-card"><span class="stat-ico amber">${icon('filePen', 18)}</span><div><b>${count('draft')}</b><small>${t('Drafts', '草稿')}</small></div></div>

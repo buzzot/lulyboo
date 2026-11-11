@@ -1627,7 +1627,7 @@ test('samples: request, supplier confirms and ships, carrier tracking moves stat
   const pview = await req(base, 'GET', `/portal/samples/${s0.id}`, { cookie: supCookie });
   assert.equal(pview.status, 200); assert.doesNotMatch(pview.text, /SECRET-SMP/); assert.match(pview.text, /Pink \+ mint/);
   assert.equal((await req(base, 'GET', `/portal/samples/${s0.id}`, { cookie: otherCookie })).status, 404);
-  assert.doesNotMatch((await req(base, 'GET', '/portal/samples', { cookie: supCookie })).text, /nav-badge[^>]*>1</, 'badge clears after opening');
+  assert.doesNotMatch((await req(base, 'GET', '/portal/samples', { cookie: supCookie })).text, /href="\/portal\/samples"[^>]*>(?:(?!<\/a>).)*nav-badge/, 'badge clears after opening');
 
   // Confirm with a fee → admin sees "Pay sample fee"
   await req(base, 'POST', `/portal/samples/${s0.id}/confirm`, { cookie: supCookie, form: { sample_fee: '30', currency: 'USD', freight_by: 'supplier', due_ship_date: '2026-11-06' } });
@@ -2636,4 +2636,79 @@ test('volume from packing written in the product description; line pcs/carton ke
   assert.equal(o.cartons, 223); assert.equal(o.cbm, 18.73); assert.equal(o.gross_kg, 2787.5); assert.equal(o.cbm_estimated, true);   // 8028/36 → 223 ctns × 0.084 m³
   const prod = db.tables.products.find((x) => x.id === p.id);
   assert.equal(prod.carton_l_cm, 60); assert.equal(prod.units_per_carton, 36); assert.equal(prod.carton_gw_kg, 12.5);
+});
+
+test('supplier holidays: AI read, save, calendar bands, portal page, confirm, reminder, delete', async (t) => {
+  const { hashPassword } = require('../src/auth');
+  const H = require('../src/holidays');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch;
+  let sent = null;
+  global.fetch = async (url, opts) => {
+    if (/anthropic/.test(String(url))) {
+      sent = JSON.parse(opts.body);
+      return new Response(JSON.stringify({ model: 'claude-test', usage: { input_tokens: 10, output_tokens: 10 }, content: [{ type: 'tool_use', name: 'record_holidays', input: { supplier_name: 'Melikey Silicone Co., Ltd', holidays: [{ name: 'Chinese New Year 2027', order_cutoff: '2026-12-01', last_ship: '2027-01-20', factory_from: '2027-01-25', factory_to: '2027-02-21', office_from: '2027-02-01', office_to: '2027-02-14', quotes: { factory_from: 'Jan 25' } }] } }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  process.env.ANTHROPIC_API_KEY = 'test';
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const sup = await db.insert('suppliers', { name: 'Melikey Silicone', email: 'm@melikey.cn' });
+  await db.insert('supplier_users', { supplier_id: sup.id, email: 'm@melikey.cn', name: 'Amy', status: 'active', password_hash: await hashPassword('correct horse battery') });
+  const supCookie = (await req(base, 'POST', '/login', { form: { email: 'm@melikey.cn', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
+
+  // Lulyboo: AI reads a pasted email and matches the supplier
+  const rd = await req(base, 'POST', '/admin/crm/holidays/read', { cookie: admin, form: { text: 'Factory holiday: Jan 25 – Feb 21, 2027', sent: '2026-11-01' } });
+  const out = JSON.parse(rd.text);
+  assert.equal(out.ok, true); assert.equal(out.supplierId, sup.id); assert.equal(out.holidays[0].factory_from, '2027-01-25'); assert.equal(out.holidays[0].quotes.factory_from, 'Jan 25');
+  assert.match(JSON.stringify(sent.messages), /sent on 2026-11-01/);
+
+  // Save with a reminder → CRM follow-up 7 days before the order cut-off
+  const sv = await req(base, 'POST', '/admin/crm/holidays', { cookie: admin, form: { supplier_id: sup.id, ...out.holidays[0], quotes: '', remind: '1' } });
+  assert.equal(sv.status, 303); assert.match(sv.location, /m=2027-01/);
+  const h = db.tables.supplier_holidays[0];
+  assert.equal(h.year, 2027); assert.equal(h.source, 'lulyboo');
+  assert.equal(db.tables.crm_tasks.filter((x) => /Order cut-off 2026-12-01/.test(x.title)).length, 1);
+  assert.equal(db.tables.crm_tasks.find((x) => /Order cut-off/.test(x.title)).due_date, '2026-11-24');
+  assert.equal((await req(base, 'POST', '/admin/crm/holidays', { cookie: admin, form: { supplier_id: sup.id, name: 'Empty' } })).status, 303);
+  assert.equal(db.tables.supplier_holidays.length, 1, 'no dates → not saved');
+
+  // Calendar shows the closure bands and the filter
+  const cal = await req(base, 'GET', '/admin/crm/calendar?m=2027-01', { cookie: admin });
+  assert.equal(cal.status, 200);
+  assert.match(cal.text, /hb hb-factory/); assert.match(cal.text, /data-cal-toggle="hol"/); assert.match(cal.text, /data-hol-dlg/);
+
+  // Supplier portal: badge + page, sees own schedule, edits it, confirms
+  const pg = await req(base, 'GET', '/portal/holidays?year=2027', { cookie: supCookie });
+  assert.equal(pg.status, 200); assert.match(pg.text, /Chinese New Year 2027/); assert.match(pg.text, /hol-help/);
+  const year = H.targetYear();
+  const dash = await req(base, 'GET', '/portal', { cookie: supCookie });
+  assert.match(dash.text, /hol-banner/);
+  const cf = await req(base, 'POST', '/portal/holidays/confirm', { cookie: supCookie, form: { year: String(year) } });
+  assert.equal(cf.status, 303);
+  assert.equal(db.tables.suppliers.find((s) => s.id === sup.id).holidays_confirmed_year, year);
+  assert.doesNotMatch((await req(base, 'GET', '/portal', { cookie: supCookie })).text, /hol-banner/);
+  if (year === 2027) {
+    await req(base, 'POST', '/portal/holidays', { cookie: supCookie, form: { id: h.id, name: 'CNY 2027', factory_from: '2027-01-26', factory_to: '2027-02-20' } });
+    assert.equal(db.tables.supplier_holidays[0].factory_from, '2027-01-26');
+    assert.equal(db.tables.suppliers.find((s) => s.id === sup.id).holidays_confirmed_year, null, 'change → confirm again');
+  }
+  // Another supplier cannot edit it
+  const other = await db.insert('suppliers', { name: 'Other' });
+  await db.insert('supplier_users', { supplier_id: other.id, email: 'o@o.cn', name: 'O', status: 'active', password_hash: await hashPassword('correct horse battery') });
+  const oc = (await req(base, 'POST', '/login', { form: { email: 'o@o.cn', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
+  assert.equal((await req(base, 'POST', '/portal/holidays', { cookie: oc, form: { id: h.id, name: 'x', factory_from: '2027-01-01' } })).status, 404);
+  assert.doesNotMatch((await req(base, 'GET', '/portal/holidays?year=2027', { cookie: oc })).text, /class="hol-card"/);
+
+  // Reminder email to suppliers who have not confirmed
+  const rm = await req(base, 'POST', '/admin/crm/holidays/remind', { cookie: admin, form: { year: String(year) } });
+  assert.equal(rm.status, 303);
+
+  // Delete removes the open reminder tasks too
+  await req(base, 'POST', `/admin/crm/holidays/${h.id}/delete`, { cookie: admin, form: {} });
+  assert.equal(db.tables.supplier_holidays.length, 0);
+  assert.equal(db.tables.crm_tasks.filter((x) => /Order cut-off/.test(x.title) && !x.done).length, 0);
 });

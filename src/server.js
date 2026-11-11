@@ -60,6 +60,7 @@ function createApp({ db, config }) {
   require('./routes/forwarders')(router, { db, config });
   require('./routes/orders')(router, { db, config });
   require('./routes/crm')(router, { db, config });
+  require('./routes/holidays')(router, { db, config });
   require('./routes/api')(router, { db, config });
   require('./routes/staff')(router, { db, config });
 

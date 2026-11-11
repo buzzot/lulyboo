@@ -180,7 +180,9 @@ async function readWaybill(buffer, mime) {
 
 async function supplierBadges(db, supplierId) {
   const [projects, samples] = await Promise.all([P.newProjectCount(db, supplierId), newSampleCount(db, supplierId)]);
-  return { '/portal/projects': projects, '/portal/samples': samples };
+  let hol = 0;
+  try { const s = await db.get('suppliers', supplierId); hol = Number(s?.holidays_confirmed_year) === require('./holidays').targetYear() ? 0 : 1; } catch { hol = 0; }
+  return { '/portal/projects': projects, '/portal/samples': samples, '/portal/holidays': hol };
 }
 
 // ── Carrier notification emails (UPS / FedEx / DHL alerts forwarded to samples@<inbound domain>)

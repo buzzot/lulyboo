@@ -1454,3 +1454,110 @@
   });
   document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-aifill-open]')) setTimeout(function () { drop.scrollIntoView({ block: 'center' }); drop.focus(); }, 50); });
 })();
+
+// Supplier holidays popup (CRM calendar + supplier portal): read a notice with AI or type the dates, check, save.
+(function () {
+  var dlg = document.querySelector('[data-hol-dlg]'); if (!dlg) return;
+  var L = function (en, zh) { return '<span class="i-en">' + en + '</span><span class="i-zh" lang="zh-CN">' + zh + '</span>'; };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var bi = function (s) { var m = String(s || '').match(/^⟪([^⟫]*)⟫⟦([^⟧]*)⟧$/); return m ? L(esc(m[1]), esc(m[2])) : esc(s); };
+  var stepRead = dlg.querySelector('[data-hol-step="read"]'), form = dlg.querySelector('[data-hol-step="form"]');
+  var status = dlg.querySelector('[data-hol-status]'), fileIn = dlg.querySelector('[data-hol-file]'), drop = dlg.querySelector('[data-hol-drop]');
+  var pick = dlg.querySelector('[data-hol-pick]'), found = [], token = '';
+  var F = ['order_cutoff', 'order_cutoff_after', 'last_ship', 'first_ship', 'factory_from', 'factory_to', 'office_from', 'office_to'];
+  function field(k) { return form.querySelector('[data-hf="' + k + '"]'); }
+  function show(step) { stepRead.hidden = step !== 'read'; form.hidden = step !== 'form'; }
+  function title(en, zh) { dlg.querySelector('[data-hol-title]').innerHTML = L(en, zh); }
+  function fill(h, quotes) {
+    ['id', 'name', 'notes', 'supplier_id'].forEach(function (k) { var f = field(k); if (f && h[k] !== undefined) f.value = h[k] || ''; });
+    F.forEach(function (k) {
+      var f = field(k); if (!f) return; f.value = h[k] || '';
+      f.classList.toggle('ai', !!(quotes && h[k]));
+      var q = form.querySelector('[data-q="' + k + '"]'); if (q) q.textContent = quotes && quotes[k] ? '“' + quotes[k] + '”' : '';
+    });
+  }
+  function open(mode, data) {
+    form.reset(); found = []; token = ''; status.textContent = ''; status.classList.remove('bad');
+    dlg.querySelector('[data-hol-text]').value = ''; field('file_token').value = ''; field('id').value = '';
+    dlg.querySelector('[data-hol-pickwrap]').hidden = true; dlg.querySelector('[data-hol-src]').textContent = '';
+    form.querySelectorAll('.hol-q').forEach(function (q) { q.textContent = ''; });
+    var del = dlg.querySelector('[data-hol-delete]'); del.hidden = !data;
+    if (data) { title('Edit holiday', '编辑假期'); fill(data, null); if (data.file) dlg.querySelector('[data-hol-src]').textContent = 'Notice: ' + data.file; show('form'); }
+    else if (mode === 'manual') { title('Add holiday', '添加假期'); show('form'); }
+    else { title('Add holiday schedule', '添加假期安排'); show('read'); }
+    if (dlg.showModal) dlg.showModal();
+    setTimeout(function () { var f = data || mode === 'manual' ? field('name') : drop; if (f) f.focus(); }, 30);
+  }
+  document.addEventListener('click', function (e) {
+    var o = e.target.closest && e.target.closest('[data-hol-open]');
+    if (o) { open(o.getAttribute('data-hol-open')); return; }
+    var ed = e.target.closest && e.target.closest('[data-hol-edit]');
+    if (ed) { e.preventDefault(); try { open('edit', JSON.parse(ed.getAttribute('data-hol-edit'))); } catch (x) { /* bad data */ } }
+  });
+  dlg.addEventListener('click', function (e) {
+    if (e.target.closest('[data-hol-close]') || e.target === dlg) { dlg.close(); return; }
+    if (e.target.closest('[data-hol-manual]')) { title('Add holiday', '添加假期'); show('form'); field('name').focus(); return; }
+    if (e.target.closest('[data-hol-read]')) { send(null); return; }
+    if (e.target.closest('[data-hol-delete]')) {
+      var id = field('id').value; if (!id) return;
+      if (!confirm(document.documentElement.lang === 'zh-CN' ? '删除此假期？' : 'Delete this holiday?')) return;
+      var f = document.createElement('form'); f.method = 'post'; f.action = dlg.getAttribute('data-delete-base') + '/' + encodeURIComponent(id) + '/delete';
+      var b = form.querySelector('[name="back"]'); if (b && b.value) { var i = document.createElement('input'); i.type = 'hidden'; i.name = 'back'; i.value = b.value; f.appendChild(i); }
+      document.body.appendChild(f); f.submit();
+    }
+  });
+  function send(file) {
+    var text = dlg.querySelector('[data-hol-text]').value.trim();
+    if (!file && !text) { status.innerHTML = L('Choose a file or paste the email text first.', '请先选择文件或粘贴邮件内容。'); status.classList.add('bad'); return; }
+    var fd = new FormData(); if (file) fd.append('file', file); if (text) fd.append('text', text);
+    var sent = dlg.querySelector('[data-hol-sent]').value; if (sent) fd.append('sent', sent);
+    drop.classList.add('busy'); status.classList.remove('bad'); status.innerHTML = L('Reading with AI…', 'AI 识别中…');
+    fetch(dlg.getAttribute('data-read'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      drop.classList.remove('busy');
+      if (!j.ok) throw new Error(j.error || 'Could not read it');
+      found = j.holidays; token = j.fileToken || '';
+      pick.innerHTML = found.map(function (h, i) { return '<option value="' + i + '">' + esc(h.name) + '</option>'; }).join('');
+      dlg.querySelector('[data-hol-pickwrap]').hidden = found.length < 2;
+      fill(found[0], found[0].quotes); field('file_token').value = token;
+      var sup = field('supplier_id'); if (sup && j.supplierId) sup.value = j.supplierId;
+      dlg.querySelector('[data-hol-src]').innerHTML = L('Green dates were read by AI — check each one. Quotes show where it found them.', '绿色日期由 AI 识别，请逐一核对。引号内为原文。') + (j.supplierName && sup && !j.supplierId ? ' · AI saw: ' + esc(j.supplierName) : '');
+      title('Check what AI read', '核对 AI 识别结果'); show('form');
+    }).catch(function (x) { drop.classList.remove('busy'); status.innerHTML = bi(x.message); status.classList.add('bad'); });
+  }
+  pick.addEventListener('change', function () { var h = found[+pick.value]; if (h) { fill(h, h.quotes); field('file_token').value = token; } });
+  fileIn.addEventListener('change', function () { if (fileIn.files[0]) send(fileIn.files[0]); fileIn.value = ''; });
+  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) send(f); });
+  form.addEventListener('input', function (e) { if (e.target.classList.contains('ai')) e.target.classList.remove('ai'); });
+  form.addEventListener('submit', function (e) {
+    if (!F.some(function (k) { var f = field(k); return f && f.value; })) { e.preventDefault(); dlg.querySelector('[data-hol-src]').innerHTML = L('Enter at least one date.', '请至少填写一个日期。'); }
+  });
+})();
+
+// CRM calendar filters: CRM activities · supplier holidays · per supplier (remembered in this browser)
+(function () {
+  var bar = document.querySelector('[data-cal-filters]'); if (!bar) return;
+  var KEY = 'lb-cal-filters', st = {};
+  try { st = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (x) { st = {}; }
+  var apply = function () {
+    document.body.classList.toggle('cal-no-act', st.act === false);
+    document.body.classList.toggle('cal-no-hol', st.hol === false);
+    bar.querySelectorAll('[data-cal-toggle]').forEach(function (b) { var k = b.getAttribute('data-cal-toggle'); b.classList.toggle('on', st[k] !== false); b.setAttribute('aria-pressed', st[k] !== false); });
+    bar.querySelectorAll('[data-cal-sup]').forEach(function (b) {
+      var id = b.getAttribute('data-cal-sup'), on = !(st.off || []).includes(id);
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+      document.querySelectorAll('[data-sup="' + id + '"]').forEach(function (el) { el.classList.toggle('sup-off', !on); });
+    });
+  };
+  bar.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-cal-toggle]'), s = e.target.closest('[data-cal-sup]');
+    if (t) { var k = t.getAttribute('data-cal-toggle'); st[k] = st[k] === false; }
+    else if (s) { var id = s.getAttribute('data-cal-sup'); st.off = st.off || []; var i = st.off.indexOf(id); if (i >= 0) st.off.splice(i, 1); else st.off.push(id); }
+    else return;
+    try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (x) { /* private mode */ }
+    apply();
+  });
+  apply();
+})();

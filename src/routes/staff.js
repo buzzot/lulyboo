@@ -23,11 +23,16 @@ module.exports = function staffRoutes(router, { db, config }) {
     const token = crypto.randomBytes(24).toString('base64url');
     await db.update('staff_users', { id: user.id }, { invite_hash: A.sha256(token), invite_expires: new Date(Date.now() + INVITE_DAYS * 86400_000).toISOString() });
     const link = `${config.publicUrl}/admin/invite/${token}`;
-    let emailed = false;
-    if (send && emailConfigured()) { await sendEmail(config, { to: user.email, ...staffInviteEmail({ link, name: user.name, reset }) }); emailed = true; }
-    return { link, emailed };
+    let emailed = false; let failed = '';
+    if (send && emailConfigured()) {
+      try { await sendEmail(config, { to: user.email, ...staffInviteEmail({ link, name: user.name, reset }) }); emailed = true; }
+      catch (e) { failed = e.provider?.reason || String(e.message || 'unknown error').replace(/⟪(.*?)⟫⟦.*?⟧/, '$1'); console.error('Staff invite email failed', user.email, failed); }
+    }
+    return { link, emailed, failed };
   }
-  const linkNote = ({ link, emailed }, email) => emailed ? `Link emailed to ${email}.` : `Email is not set up here. Send this link to the user yourself (valid ${INVITE_DAYS} days): ${link}`;
+  const linkNote = ({ link, emailed, failed }, email) => (emailed ? `Link emailed to ${email}.`
+    : failed ? `The email could not be sent (${failed}). Send this link to the user yourself (valid ${INVITE_DAYS} days): ${link}`
+      : `Email is not set up here. Send this link to the user yourself (valid ${INVITE_DAYS} days): ${link}`);
 
   // ── Users (Admin only; enforced by the permission check in guard)
   const rolePill = (r) => html`<span class="role-pill r-${r}">${ST.ROLES[r] || r}</span>`;
@@ -78,7 +83,8 @@ module.exports = function staffRoutes(router, { db, config }) {
     const u = await db.insert('staff_users', row);
     await ST.audit(config, 'Added user', `${username} (${ST.ROLES[role]})`);
     if (temp) return back('ok', `${name} added with a temporary password. They must change it at first login.`);
-    return back('ok', `${name} added. ${linkNote(await issueLink(u, { send: true }), email)}`);
+    const out = await issueLink(u, { send: true });
+    return back(out.emailed ? 'ok' : 'warn', `${name} added. ${linkNote(out, email)}`);
   }));
 
   router.get('/admin/users/:id', G(async (req, res) => {
@@ -144,7 +150,7 @@ module.exports = function staffRoutes(router, { db, config }) {
     if (!u) throw new HttpError(404, 'User not found');
     const out = await issueLink(u, { send: true, reset: u.status !== 'invited' });
     await ST.audit(config, u.status === 'invited' ? 'Sent invitation' : 'Sent password reset link', u.username);
-    flash(res, 'ok', linkNote(out, u.email));
+    flash(res, out.emailed ? 'ok' : 'warn', linkNote(out, u.email));
     res.redirect(`/admin/users/${u.id}`);
   }));
 
