@@ -2539,3 +2539,24 @@ test('orders: delete a line or a whole PO from the PO page (with confirm)', asyn
   assert.equal(r2.location, '/admin/orders');
   assert.deepEqual(db.tables.plan_orders.map((o) => o.po), ['PO900020']);
 });
+
+test('carrier refresh: what COSCO answered is shown in the Carrier APIs box; lanes without a city id are still tried', async (t) => {
+  const SC = require('../src/schedules');
+  process.env.COSCO_API_KEY = 'k'; process.env.COSCO_SECRET_KEY = 's';
+  const realFetch = global.fetch; const bodies = [];
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('coscoshipping')) { const b = JSON.parse(opts.body.toString()); bodies.push(b); return new Response(JSON.stringify(b.originCityUuid ? { code: '0', data: { content: { data: [] } } } : { code: '500', message: 'city not found' }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.COSCO_API_KEY; delete process.env.COSCO_SECRET_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  await req(base, 'POST', '/admin/logistics/schedules/refresh', { cookie, form: {} });
+  assert.equal(bodies.length, 8);                                                        // every lane tried
+  assert.ok(bodies.some((b) => b.originCity.startsWith('Ningbo') && !b.originCityUuid));
+  assert.equal(SC.LAST_RUN.COSCO.lanes, 8);
+  const page = (await req(base, 'GET', '/admin/logistics/schedules', { cookie })).text;
+  assert.match(page, /Last check[\s\S]*8 lanes · 0 sailings · 6 failed/);
+  assert.match(page, /What COSCO answered[\s\S]*Ningbo→Long Beach: COSCO error 500: city not found \(no city id for Ningbo, Long Beach\)/);
+});

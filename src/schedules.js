@@ -208,10 +208,12 @@ function parseCosco(json, { origin, destination }) {
 }
 async function fetchCosco(src, origin, destination, { from }) {
   const ids = coscoCityIds();
+  // City ids are COSCO's internal numbers; without one we still try with the city name (the gateway may resolve it).
+  const q = { pickup: 'B', delivery: 'B', estimateDate: 'D', fromDate: from, dateLength: 8, originCity: COSCO_CITY[origin], destinationCity: COSCO_CITY[destination] };
+  if (ids[origin]) q.originCityUuid = ids[origin];
+  if (ids[destination]) q.destinationCityUuid = ids[destination];
+  const body = Buffer.from(JSON.stringify(q));
   const miss = [origin, destination].filter((c) => !ids[c]);
-  if (miss.length) throw new Error(`COSCO city id missing for ${miss.map((c) => PORT[c]?.name || c).join(', ')}: add it to COSCO_CITY_IDS`);
-  const body = Buffer.from(JSON.stringify({ pickup: 'B', delivery: 'B', estimateDate: 'D', fromDate: from, dateLength: 8,
-    originCity: COSCO_CITY[origin], originCityUuid: ids[origin], destinationCity: COSCO_CITY[destination], destinationCityUuid: ids[destination] }));
   const u = new URL(src.url);
   const tryMode = async (mode) => {
     const line = `POST ${mode === 'url' ? u.href : u.pathname + u.search} HTTP/1.1`;
@@ -223,8 +225,10 @@ async function fetchCosco(src, origin, destination, { from }) {
   const txt = await res.text();
   if (!res.ok) throw new Error(`COSCO ${res.status}: ${txt.slice(0, 200)}`);
   let j; try { j = JSON.parse(txt); } catch { throw new Error('COSCO: answer was not JSON'); }
-  if (j.code && Number(j.code) !== 0) throw new Error(`COSCO error ${j.code}: ${String(j.message || '').slice(0, 160)}`);
-  return parseCosco(j, { origin, destination });
+  if (j.code && Number(j.code) !== 0) throw new Error(`COSCO error ${j.code}: ${String(j.message || '').slice(0, 160)}${miss.length ? ` (no city id for ${miss.map((c) => PORT[c]?.name || c).join(', ')})` : ''}`);
+  const rows = parseCosco(j, { origin, destination });
+  if (!rows.length) rows.note = `COSCO answered without sailings${miss.length ? ` — no city id for ${miss.map((c) => PORT[c]?.name || c).join(', ')}` : ''}: ${txt.replace(/\s+/g, ' ').slice(0, 160)}`;
+  return rows;
 }
 
 async function fetchLane(src, origin, destination, { from, to }) {
@@ -265,6 +269,9 @@ async function upsert(db, rows, { source, sourceName = null, batch = null }) {
   return { added, updated };
 }
 
+/** Result of the last refresh per carrier (since the server started), shown in the Carrier APIs box. */
+const LAST_RUN = {};
+
 /** Weekly refresh of every configured carrier API for every lane. */
 async function runRefresh({ db, force = false, days = 75 }) {
   const srcs = apiSources().filter((s) => s.configured);
@@ -275,14 +282,19 @@ async function runRefresh({ db, force = false, days = 75 }) {
   const recent = force ? [] : await db.list('sailings', { filters: { source: 'api', fetched_at: ['gte', new Date(Date.now() - 6.5 * 864e5).toISOString()] }, select: 'carrier,origin,destination' }).catch(() => []);
   const fresh = new Set(recent.map((r) => `${r.carrier}|${r.origin}|${r.destination}`));
   for (const src of srcs) {
+    const run = { at: new Date().toISOString(), lanes: 0, sailings: 0, errors: [], notes: [] };
     for (const o of ORIGINS) for (const d of DESTS) {
       if (fresh.has(`${src.name}|${o.code}|${d.code}`)) continue;
+      run.lanes++;
       try {
-        const rows = (await fetchLane(src, o.code, d.code, { from, to })).filter((r) => r.origin === o.code && r.destination === d.code);
+        const got = await fetchLane(src, o.code, d.code, { from, to });
+        const rows = got.filter((r) => r.origin === o.code && r.destination === d.code);
+        if (!rows.length && got.note) run.notes.push(`${o.name}→${d.name}: ${got.note}`);
         const u = await upsert(db, rows, { source: 'api', sourceName: `${src.name} API` });
-        out.fetched++; out.added += u.added; out.updated += u.updated;
-      } catch (e) { out.errors.push(`${src.name} ${o.name}→${d.name}: ${e.message}`); }
+        out.fetched++; out.added += u.added; out.updated += u.updated; run.sailings += rows.length;
+      } catch (e) { out.errors.push(`${src.name} ${o.name}→${d.name}: ${e.message}`); run.errors.push(`${o.name}→${d.name}: ${e.message}`); }
     }
+    if (run.lanes) LAST_RUN[src.name] = run;
   }
   if (out.errors.length) console.error('Schedule refresh:', out.errors.slice(0, 5).join(' | '));
   return out;
@@ -388,4 +400,5 @@ async function handleScheduleEmail({ db, config, from, subject = '', text = '', 
   return { ok: true, batch, added, updated, results };
 }
 
-module.exports = { parseCosco, coscoHeaders, parseMaersk, ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };
+module.exports = {
+  LAST_RUN, parseCosco, coscoHeaders, parseMaersk, ORIGINS, DESTS, PORT, portCode, carrierName, apiSources, parseDcsa, fetchLane, upsert, runRefresh, importSchedule, handleScheduleEmail, cleanRow, keyOf, TOOL, SHEET_FILE };

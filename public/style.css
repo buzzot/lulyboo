@@ -1668,3 +1668,7 @@ img.ph{object-fit:cover;padding:0}
 @media(max-width:1100px){.cp-kpis:has(> :nth-child(5)){grid-template-columns:repeat(3,minmax(0,1fr))}}
 .cp-dup{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .or-acts{white-space:nowrap}.or-acts .icon-btn{margin-left:6px}
+.sl-run{flex-basis:100%;font-size:12.5px;color:#666;margin:4px 0 0 22px}
+.sl-run.bad{color:#b23b2e}
+.sl-run summary{cursor:pointer;color:inherit;font-weight:600}
+.sl-run ul{margin:6px 0 0;padding-left:16px}.sl-run code{white-space:normal;word-break:break-word;font-size:11.5px}
