@@ -83,7 +83,7 @@ const TOOL = {
             cartons: { type: 'number' },
             cbm: { type: 'number', description: 'Total goods volume in m³ for this line' },
             gross_kg: { type: 'number', description: 'Total gross weight in kg' },
-            unit_price: { type: 'number', description: 'Unit price / unit cost per piece, if shown' },
+            unit_price: { type: 'number', description: 'Price per piece, from a Cost / Unit price / Price column (not the line amount)' },
             currency: { type: 'string', description: 'Currency of the unit price, e.g. USD' },
             units_per_carton: { type: 'number', description: 'Packing: pieces per export carton (master carton), from a packing list or PO packing spec' },
             carton_l_cm: { type: 'number', description: 'Export carton length in cm (convert mm/inches to cm)' },
@@ -144,12 +144,14 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
 }
 
 // ── match against what is already saved ─────────────────────────────────────
-const normPo = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+/** PO numbers compared without punctuation and without a leading "PO": "PO 900018" = "PO900018" = "900018". */
+const normPo = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^PO(?=\d)/, '');
 const normSku = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const normProd = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const PACK = ['units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg'];
-const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes'];
-const LABEL = { qty: 'Qty', cbm: 'CBM', cartons: 'Cartons', gross_kg: 'Weight', units_per_carton: 'Pcs/carton', carton_l_cm: 'Carton L', carton_w_cm: 'Carton W', carton_h_cm: 'Carton H', carton_gw_kg: 'Carton kg', ready_date: 'Ready', inspection_date: 'Inspection', production_status: 'Status', pending_from_us: 'Pending', port: 'Port' };
+const PRICE = ['unit_price', 'currency'];
+const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes'];
+const LABEL = { unit_price: 'Cost', qty: 'Qty', cbm: 'CBM', cartons: 'Cartons', gross_kg: 'Weight', units_per_carton: 'Pcs/carton', carton_l_cm: 'Carton L', carton_w_cm: 'Carton W', carton_h_cm: 'Carton H', carton_gw_kg: 'Carton kg', ready_date: 'Ready', inspection_date: 'Inspection', production_status: 'Status', pending_from_us: 'Pending', port: 'Port' };
 
 /** For each incoming line: the existing rows it updates and what changes. */
 function diff(incoming, existing) {
@@ -163,10 +165,12 @@ function diff(incoming, existing) {
       const bySku = o.sku ? named.filter((e) => e.sku && normSku(e.sku) === normSku(o.sku)) : [];
       const byName = named.filter((e) => { const a = normProd(e.product), b = normProd(o.product); return a.length > 3 && b.length > 3 && (a.includes(b) || b.includes(a)); });
       targets = bySku.length === 1 ? bySku : byName.length === 1 ? byName : [];
-      fuzzy = targets.length > 0;
+      // keep the name we have, unless ours is just the same name with the item number in front ("BSTS 001 - Silicone straps")
+      fuzzy = targets.length > 0 && !targets.every((t) => normProd(cleanName(t.product, t.sku || o.sku)) === normProd(o.product));
     }
     if (!targets.length) return { ...o, change: 'new', changes: [] };
     const changes = [];
+    if (o.product && !fuzzy && targets[0].product && targets[0].product !== o.product) changes.push({ field: 'Product', from: targets[0].product, to: o.product });
     for (const k of Object.keys(LABEL)) {
       const nv = o[k]; if (nv === null || nv === undefined || nv === '') continue;
       const ov = targets[0][k];
@@ -182,14 +186,24 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
   const d = diff(lines, existing);
   const now = new Date().toISOString();
   let added = 0; let updated = 0;
+  // columns added later (cost, packing): if the database doesn't have them yet, save without them
+  let skip = [];
+  const strip = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !skip.includes(k)));
+  const write = async (fn, row) => {
+    try { return await fn(strip(row)); }
+    catch (e) { if (!skip.length && /column|PGRST204/i.test(e.message || '')) { skip = [...PACK, ...PRICE]; return fn(strip(row)); } throw e; }
+  };
   for (const o of d) {
     const vals = {};
     for (const k of FIELDS) if (o[k] !== null && o[k] !== undefined && o[k] !== '') vals[k] = o[k];
-    if (o.change === 'new') { await db.insert('plan_orders', { supplier_id: supplierId, po: o.po, ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++; }
+    if (o.change === 'new') {
+      const twin = existing.find((e) => normPo(e.po) === normPo(o.po));   // keep the PO number as we already write it ("PO900018", not "900018")
+      await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: twin ? twin.po : o.po, ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
+    }
     else if (o.change === 'updated') {
-      const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK].includes(k)));
+      const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE].includes(k)));
       if (keep.cbm !== undefined) keep.cbm_estimated = !!o.cbm_estimated;
-      for (const id of o.targetIds) await db.update('plan_orders', { id }, { ...keep, updated_at: now, source_name: sourceName }); updated++;
+      for (const id of o.targetIds) await write((r) => db.update('plan_orders', { id }, r), { ...keep, updated_at: now, source_name: sourceName }); updated++;
     }
   }
   const pos = [...new Set(lines.map((o) => normPo(o.po)))];
@@ -294,7 +308,12 @@ async function addToCatalog(db, supplierId, lines, { source = 'po' } = {}) {
   const names = [];
   const stored = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
   for (const line of lines) {
-    if (!line.product || catalogMatch(line, prods)) continue;
+    if (!line.product) continue;
+    const have = catalogMatch(line, prods);
+    if (have) {
+      if (num(line.unit_price) && !num(have.unit_price)) { await db.update('products', { id: have.id }, { unit_price: num(line.unit_price), currency: (line.currency || have.currency || 'USD').toUpperCase().slice(0, 8), updated_at: new Date().toISOString() }).catch(() => null); have.unit_price = num(line.unit_price); }
+      continue;
+    }
     const saved = stored.find((x) => normPo(x.po) === normPo(line.po) && normProd(x.product) === normProd(line.product));
     const o = { ...(saved || {}), ...Object.fromEntries(Object.entries(line).filter(([, v]) => v !== null && v !== undefined && v !== '')) };
     const port = o.port && SC.PORT[o.port] ? SC.PORT[o.port].name : o.port_text || null;
@@ -381,4 +400,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, fillVolumes, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, fillVolumes, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

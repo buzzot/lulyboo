@@ -2458,3 +2458,36 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const after = db.tables.plan_orders.find((o) => o.id === next.id);
   assert.equal(after.cartons, 40); assert.equal(after.cbm, 2.5);
 });
+
+test('PO re-import: "900018" = "PO900018", item-code names cleaned, cost stored and passed to products', async (t) => {
+  const PL = require('../src/planning');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  assert.equal(PL.normPo('PO 900018'), PL.normPo('900018')); assert.notEqual(PL.normPo('PO900018'), PL.normPo('PO900019'));
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean Silicone Product' });
+  await db.insert('products', { supplier_id: k.id, product_name: 'Flower rattle & teether', supplier_sku: 'FRT 001' });   // exists, no cost yet
+  for (const [sku, name, qty] of [['BSTS 001', 'BSTS 001 - Silicone straps set of three', 5000], ['FRT 001', 'FRT 001 - Flower rattle & teether', 5040]]) await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', sku, product: name, qty, ready_date: '2026-10-30', port: 'CNYTN' });
+  const read = [{ po: '900018', product: 'Silicone straps set of three', sku: 'BSTS 001', qty: 5000, unit_price: 0.85, currency: 'USD', ready_date: '2026-10-30' },
+    { po: '900018', product: 'Flower rattle & teether', sku: 'FRT 001', qty: 5040, unit_price: 0.96, currency: 'USD', ready_date: '2026-10-30' }];
+  const d = PL.diff(read, db.tables.plan_orders);
+  assert.deepEqual(d.map((x) => x.change), ['updated', 'updated']);
+  const r = await PL.save(db, k.id, read, { batch: 't', sourceName: 'PO900018_Kean Signed.pdf' });
+  assert.equal(r.added, 0); assert.equal(r.updated, 2);
+  const ls = db.tables.plan_orders.filter((o) => o.supplier_id === k.id);
+  assert.equal(ls.length, 2); assert.ok(ls.every((o) => o.po === 'PO900018'));
+  assert.deepEqual(ls.map((o) => o.product).sort(), ['Flower rattle & teether', 'Silicone straps set of three']);
+  assert.deepEqual(ls.map((o) => o.unit_price).sort(), [0.85, 0.96]);
+  const straps = db.tables.products.find((p) => p.supplier_sku === 'BSTS 001');
+  assert.equal(straps.product_name, 'Silicone straps set of three'); assert.equal(straps.unit_price, 0.85);
+  assert.equal(db.tables.products.find((p) => p.supplier_sku === 'FRT 001').unit_price, 0.96);           // existing product got its cost
+  const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
+  assert.match(po.text, /\$0\.85/); assert.match(po.text, /\$4,250\.00/); assert.match(po.text, /PO value[\s\S]*\$9,088\.40/);
+  // a database without the new columns still saves the lines
+  const upd = db.update.bind(db); let fails = 0;
+  db.update = async (tbl, w, row) => { if (tbl === 'plan_orders' && 'unit_price' in row) { fails++; throw new Error("Could not find the 'unit_price' column of 'plan_orders' in the schema cache"); } return upd(tbl, w, row); };
+  const r2 = await PL.save(db, k.id, [{ ...read[0], unit_price: 0.88 }], { batch: 't2', sourceName: 'x' });
+  db.update = upd;
+  assert.equal(r2.updated, 1); assert.equal(fails, 1);
+});

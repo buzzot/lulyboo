@@ -20,7 +20,7 @@ const n1 = (v) => (v === null || v === undefined || v === '' ? '—' : Math.roun
 const cbmText = (v) => (v ? `${n1(v)} m³` : 'CBM ?');
 const BASE = '/admin/logistics/planning';
 
-const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', units_per_carton: o.units_per_carton ?? '', carton_size: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => x) ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)}` : '', carton_gw_kg: o.carton_gw_kg ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
+const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', unit_price: o.unit_price ?? '', units_per_carton: o.units_per_carton ?? '', carton_size: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => x) ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)}` : '', carton_gw_kg: o.carton_gw_kg ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
 const editBtn = (o, cls = 'cp-edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="Edit ${o.po}" title="Edit">✎</button>`;
 /** The order-line edit popup (posts to /admin/logistics/planning/:id/edit; app.js fills it). */
 const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labelledby="cp-dlg-t"><form method="post" data-edit-form>
@@ -32,6 +32,7 @@ const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labe
             <label>CBM<input name="cbm" data-f="cbm" inputmode="decimal" placeholder="m³"></label>
             <label>Quantity<input name="qty" data-f="qty" inputmode="numeric"></label>
             <label class="wide">Product<input name="product" data-f="product"></label>
+            <label>Cost / pc (${'$'})<input name="unit_price" data-f="unit_price" inputmode="decimal"></label>
             <label>Pcs / carton<input name="units_per_carton" data-f="units_per_carton" inputmode="numeric"></label>
             <label>Carton L×W×H cm<input name="carton_size" data-f="carton_size" placeholder="60×40×35"></label>
             <label>Carton gross kg<input name="carton_gw_kg" data-f="carton_gw_kg" inputmode="decimal"></label>
@@ -266,19 +267,20 @@ function planningRoutes(router, { db, config }) {
         <form method="post" action="${BASE}/save" data-busy class="card">
           <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
           <input type="hidden" name="source" value="${docs.map((f) => f.name).join(', ') || 'Pasted text'}">
-          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
+          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
           <tbody>${d.map((o, i) => html`<tr class="${o.change}">
             <td><input type="checkbox" name="r${i}_on" value="1" ${o.change === 'same' ? '' : raw('checked')} aria-label="Save line ${i + 1}"><input type="hidden" name="r${i}_json" value="${JSON.stringify(o)}"></td>
             <td><input name="r${i}_po" value="${o.po}" class="w-po"></td>
             <td><input name="r${i}_product" value="${o.product || ''}" class="w-prod" placeholder="(whole PO)"></td>
             <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric"></td>
+            <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece"></td>
             <td class="r"><input name="r${i}_cbm" value="${o.cbm ?? ''}" class="w-num ${o.cbm_estimated ? 'est' : ''}" inputmode="decimal" title="${o.cbm_estimated ? 'Estimated from carton size' : ''}"></td>
             <td><input type="date" name="r${i}_ready" value="${o.ready_date || ''}"></td>
             <td><input name="r${i}_status" value="${o.production_status || ''}" class="w-st"></td>
             <td><input name="r${i}_pending" value="${o.pending_from_us || ''}" class="w-st"></td>
             <td><select name="r${i}_port">${portOpts(o.port)}</select></td>
             <td>${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
-          <p class="sub">Lines with no product update every line of that PO (ready date, status). Orange CBM is estimated from the carton size in your catalog.</p>
+          <p class="sub">Lines with no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
           <button class="btn">Save checked lines</button>
         </form>`,
     }));
@@ -301,7 +303,7 @@ function planningRoutes(router, { db, config }) {
       const num = (v) => { const x = Number(String(v || '').replace(/[^0-9.\-]/g, '')); return String(v || '').trim() && Number.isFinite(x) ? x : null; };
       const cbm = num(fields[`r${i}_cbm`]);
       lines.push({ ...o, po: String(fields[`r${i}_po`] || o.po || '').trim().slice(0, 60), product: String(fields[`r${i}_product`] || '').trim().slice(0, 300) || null,
-        qty: num(fields[`r${i}_qty`]), cbm, cbm_estimated: !!o.cbm_estimated && cbm === o.cbm, ready_date: PL.isoDay(fields[`r${i}_ready`]),
+        qty: num(fields[`r${i}_qty`]), unit_price: num(fields[`r${i}_price`]), currency: o.currency || (num(fields[`r${i}_price`]) ? 'USD' : null), cbm, cbm_estimated: !!o.cbm_estimated && cbm === o.cbm, ready_date: PL.isoDay(fields[`r${i}_ready`]),
         production_status: String(fields[`r${i}_status`] || '').trim().slice(0, 120) || null, pending_from_us: String(fields[`r${i}_pending`] || '').trim().slice(0, 200) || null,
         port: SC.PORT[fields[`r${i}_port`]] ? fields[`r${i}_port`] : null });
     }
@@ -321,6 +323,7 @@ function planningRoutes(router, { db, config }) {
     const shared = { port, ready_date: PL.isoDay(f.ready_date), production_status: t(f.production_status, 120), inspection_date: PL.isoDay(f.inspection_date), pending_from_us: t(f.pending_from_us, 200), shipped: f.shipped === '1' };
     const own = { product: t(f.product, 300), qty: num(f.qty), cbm: num(f.cbm), notes: t(f.notes, 1000) };
     const size = String(f.carton_size || '').match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)/);
+    if (f.unit_price !== undefined) own.unit_price = num(f.unit_price);
     if (f.units_per_carton !== undefined) {
       Object.assign(own, { units_per_carton: num(f.units_per_carton), carton_gw_kg: num(f.carton_gw_kg) });
       const [l, w, h] = size ? size.slice(1, 4).map((x) => Number(x.replace(',', '.'))) : [null, null, null];

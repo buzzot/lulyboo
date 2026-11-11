@@ -819,3 +819,7 @@ alter table public.plan_orders add column if not exists carton_l_cm      numeric
 alter table public.plan_orders add column if not exists carton_w_cm      numeric;
 alter table public.plan_orders add column if not exists carton_h_cm      numeric;
 alter table public.plan_orders add column if not exists carton_gw_kg     numeric;
+
+-- Cost per piece on PO lines (run once)
+alter table public.plan_orders add column if not exists unit_price numeric;
+alter table public.plan_orders add column if not exists currency   text;
