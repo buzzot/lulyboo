@@ -222,15 +222,25 @@ module.exports = function crmRoutes(router, { db, config }) {
       ${(() => {
         const ty = H.targetYear(today);
         const up = holEv.filter((e) => e.from >= today && e.from <= C.addDays(today, 120)).sort((a, b) => a.from.localeCompare(b.from)).slice(0, 80);
+        const upKind = (e) => (e.kind === 'flag' ? (String(e.field).startsWith('order') ? 'order' : 'ship') : e.kind);
         const upSup = [...new Set(up.map((e) => e.h.supplier_id))].map((id) => ({ id, name: names[id] || 'Supplier' })).sort((a, b) => a.name.localeCompare(b.name));
         const active = suppliers.filter((x) => x.crm_status === 'Active' && !x.archived_at);
         const done = active.filter((x) => Number(x.holidays_confirmed_year) === ty);
         const todo = active.filter((x) => Number(x.holidays_confirmed_year) !== ty);
         return html`<div class="hol-side">
-          <section class="card" data-hol-upcard><div class="hol-up-h"><h2>Supplier holidays · coming up</h2>
-              ${upSup.length > 1 ? html`<label class="hol-up-f"><span class="sr-only">Supplier</span><select data-hol-upf><option value="">All suppliers (${upSup.length})</option>${upSup.map((x) => html`<option value="${x.id}">${x.name}</option>`)}</select></label>` : ''}</div>
-            ${up.length ? html`<ul class="hol-up">${up.map((e) => { const days = Math.round((Date.parse(e.from) - Date.parse(today)) / 864e5); return html`<li data-sup="${e.h.supplier_id}"><div class="d"><b>${fmtShort(e.from)}</b><small>${days ? `${days} d` : 'today'}</small></div>
-              <div><div class="${e.kind === 'flag' && e.field?.startsWith('order') && days <= 30 ? 'soon' : ''}">${e.kind === 'flag' ? `${e.ic} ${e.en}` : `${e.kind === 'factory' ? '🏭 Factory' : '🏢 Office'} closed until ${fmtShort(e.to)}`}</div><div class="sub"><i style="background:${holColor[e.h.supplier_id][0]}"></i>${names[e.h.supplier_id] || 'Supplier'} · ${e.h.name}</div></div></li>`; })}</ul><p class="hol-up-none muted" data-hol-upnone hidden>Nothing coming up for this supplier.</p><button type="button" class="link hol-up-more" data-hol-upmore hidden></button>` : html`<p class="muted">No supplier deadlines in the next 4 months.${holidays.length ? '' : ' Add a supplier holiday notice to see them here.'}</p>`}
+          <section class="card" data-hol-upcard><h2>Supplier holidays · coming up</h2>
+            ${up.length ? html`<div class="up-bar">
+              ${[['order', '⛔', 'Order cut-off'], ['ship', '🚢', 'Shipping'], ['factory', '🏭', 'Factory'], ['office', '🏢', 'Office']].filter(([k]) => up.some((e) => upKind(e) === k)).map(([k, ic, l]) => html`<button type="button" class="cf on" data-up-kind="${k}" aria-pressed="true"><span aria-hidden="true">${ic}</span>${l}</button>`)}
+              ${upSup.length > 1 ? html`<span class="cf-sep"></span><div class="up-sup" data-up-sup>
+                <button type="button" class="cf up-sup-btn" data-up-sup-btn aria-haspopup="true" aria-expanded="false"><span data-up-sup-label>All suppliers</span><span aria-hidden="true">▾</span></button>
+                <div class="up-sup-pop" data-up-sup-pop hidden>
+                  <input type="search" placeholder="Search suppliers" data-up-sup-q autocomplete="off">
+                  <div class="up-sup-acts"><button type="button" class="link" data-up-sup-all>Select all</button><button type="button" class="link" data-up-sup-none>Clear</button></div>
+                  <ul>${upSup.map((x) => html`<li><label><input type="checkbox" value="${x.id}" checked data-up-sup-cb><i style="background:${holColor[x.id][0]}"></i><span>${x.name}</span></label></li>`)}</ul>
+                </div></div>` : ''}
+            </div>` : ''}
+            ${up.length ? html`<ul class="hol-up">${up.map((e) => { const days = Math.round((Date.parse(e.from) - Date.parse(today)) / 864e5); return html`<li data-sup="${e.h.supplier_id}" data-kind="${upKind(e)}"><div class="d"><b>${fmtShort(e.from)}</b><small>${days ? `${days} d` : 'today'}</small></div>
+              <div><div class="${e.kind === 'flag' && e.field?.startsWith('order') && days <= 30 ? 'soon' : ''}">${e.kind === 'flag' ? `${e.ic} ${e.en}` : `${e.kind === 'factory' ? '🏭 Factory' : '🏢 Office'} closed until ${fmtShort(e.to)}`}</div><div class="sub"><i style="background:${holColor[e.h.supplier_id][0]}"></i>${names[e.h.supplier_id] || 'Supplier'} · ${e.h.name}</div></div></li>`; })}</ul><p class="hol-up-none muted" data-hol-upnone hidden>Nothing matches these filters.</p><button type="button" class="link hol-up-more" data-hol-upmore hidden></button>` : html`<p class="muted">No supplier deadlines in the next 4 months.${holidays.length ? '' : ' Add a supplier holiday notice to see them here.'}</p>`}
           </section>
           <section class="card"><h2>${ty} schedules confirmed by suppliers</h2>
             <p><b>${done.length}</b> of ${active.length} active supplier${active.length === 1 ? '' : 's'}${done.length ? html` · ${done.map((x) => x.name).slice(0, 4).join(', ')}${done.length > 4 ? '…' : ''}` : ''}</p>

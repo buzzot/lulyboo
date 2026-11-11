@@ -1586,24 +1586,44 @@
   apply();
 })();
 
-// CRM calendar · "Supplier holidays · coming up": filter by supplier, show 8 at a time
+// CRM calendar · "Supplier holidays · coming up": filter by stage and suppliers (multi), show 8 at a time
 (function () {
   var card = document.querySelector('[data-hol-upcard]'); if (!card) return;
-  var sel = card.querySelector('[data-hol-upf]'), more = card.querySelector('[data-hol-upmore]'), none = card.querySelector('[data-hol-upnone]');
+  var more = card.querySelector('[data-hol-upmore]'), none = card.querySelector('[data-hol-upnone]');
   var items = Array.prototype.slice.call(card.querySelectorAll('.hol-up > li')), all = false, N = 8;
+  var kinds = Array.prototype.slice.call(card.querySelectorAll('[data-up-kind]'));
+  var cbs = Array.prototype.slice.call(card.querySelectorAll('[data-up-sup-cb]'));
+  var pop = card.querySelector('[data-up-sup-pop]'), btn = card.querySelector('[data-up-sup-btn]'), q = card.querySelector('[data-up-sup-q]');
   function apply() {
-    var id = sel ? sel.value : '', shown = 0, match = 0;
+    var onK = kinds.filter(function (b) { return b.classList.contains('on'); }).map(function (b) { return b.getAttribute('data-up-kind'); });
+    var onS = cbs.filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+    var shown = 0, match = 0;
     items.forEach(function (li) {
-      var ok = (!id || li.getAttribute('data-sup') === id) && !li.classList.contains('sup-off');
+      var ok = (!kinds.length || onK.indexOf(li.getAttribute('data-kind')) >= 0) && (!cbs.length || onS.indexOf(li.getAttribute('data-sup')) >= 0) && !li.classList.contains('sup-off');
       if (ok) match++;
       li.hidden = !ok || (!all && shown >= N); if (!li.hidden) shown++;
     });
     if (none) none.hidden = match > 0;
     if (more) { more.hidden = match <= N; more.textContent = all ? 'Show fewer' : 'Show all ' + match; }
+    if (btn) {
+      var lbl = btn.querySelector('[data-up-sup-label]');
+      lbl.textContent = onS.length === cbs.length ? 'All suppliers' : onS.length === 0 ? 'No suppliers' : onS.length === 1 ? cbs.filter(function (c) { return c.checked; })[0].parentNode.textContent.trim() : onS.length + ' suppliers';
+      btn.classList.toggle('on', onS.length !== cbs.length);
+    }
   }
-  if (sel) sel.addEventListener('change', function () { all = false; apply(); });
+  kinds.forEach(function (b) { b.addEventListener('click', function () { b.classList.toggle('on'); b.setAttribute('aria-pressed', b.classList.contains('on')); all = false; apply(); }); });
+  cbs.forEach(function (c) { c.addEventListener('change', function () { all = false; apply(); }); });
+  if (btn) {
+    var setOpen = function (o) { pop.hidden = !o; btn.setAttribute('aria-expanded', o); if (o) { q.value = ''; filterList(); q.focus(); } };
+    var filterList = function () { var w = q.value.trim().toLowerCase(); cbs.forEach(function (c) { c.closest('li').hidden = w && c.parentNode.textContent.toLowerCase().indexOf(w) < 0; }); };
+    btn.addEventListener('click', function () { setOpen(pop.hidden); });
+    q.addEventListener('input', filterList);
+    card.querySelector('[data-up-sup-all]').addEventListener('click', function () { cbs.forEach(function (c) { if (!c.closest('li').hidden) c.checked = true; }); apply(); });
+    card.querySelector('[data-up-sup-none]').addEventListener('click', function () { cbs.forEach(function (c) { c.checked = false; }); apply(); });
+    document.addEventListener('click', function (e) { if (!pop.hidden && !e.target.closest('[data-up-sup]')) setOpen(false); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) { setOpen(false); btn.focus(); } });
+  }
   if (more) more.addEventListener('click', function () { all = !all; apply(); });
-  // the supplier buttons above the calendar hide suppliers too
   var bar = document.querySelector('[data-cal-filters]'); if (bar) bar.addEventListener('click', function () { setTimeout(apply, 0); });
   apply();
 })();
