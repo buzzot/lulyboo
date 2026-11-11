@@ -773,20 +773,29 @@ module.exports = function adminRoutes(router, { db, config }) {
     const AI = require('../ai');
     if (!AI.enabled()) return res.json({ ok: false, error: 'AI is not set up (ANTHROPIC_API_KEY).' }, 400);
     const { fields, files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
-    const f = files.file && (Array.isArray(files.file) ? files.file[0] : files.file);
-    if (!f?.buffer?.length) return res.json({ ok: false, error: 'Choose a file' }, 400);
+    let f = files.file && (Array.isArray(files.file) ? files.file[0] : files.file);
+    const pasted = String(fields.text || '').trim().slice(0, 20000);
+    const packOnly = fields.scope === 'packing';
+    if (!f?.buffer?.length && pasted) f = { name: 'pasted text.txt', buffer: Buffer.from(pasted, 'utf8') };
+    if (!f?.buffer?.length) return res.json({ ok: false, error: 'Choose a file, or paste a screenshot or the text' }, 400);
     const name = String(f.name || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150);
     const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
-    if (!/^\.(pdf|png|jpe?g|webp|xlsx|xlsm|xls|csv)$/.test(ext)) return res.json({ ok: false, error: 'Use a PDF, photo (JPG/PNG), Excel or CSV file' }, 400);
+    if (!/^\.(pdf|png|jpe?g|webp|gif|xlsx|xlsm|xls|csv|txt)$/.test(ext)) return res.json({ ok: false, error: 'Use a PDF, photo or screenshot (JPG/PNG), Excel or CSV file' }, 400);
     const { PRODUCT_FIELDS, CATEGORIES, cleanProduct } = require('../fields');
     const { sheetText } = require('../import-review');
     const { parseXlsx, parseCsv, decodeText } = require('../importer');
     const supplier = await db.get('suppliers', p.supplier_id).catch(() => null);
     let table = null; let doc = null;
-    if (/\.(pdf|png|jpe?g|webp)$/.test(ext)) doc = { buffer: f.buffer, mime: { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[ext] };
+    if (/\.(pdf|png|jpe?g|webp|gif)$/.test(ext)) doc = { buffer: f.buffer, mime: { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[ext] };
+    else if (ext === '.txt') table = f.buffer.toString('utf8').slice(0, 20000);
     else { try { table = sheetText(ext === '.csv' ? parseCsv(decodeText(f.buffer)) : parseXlsx(f.buffer)); } catch { return res.json({ ok: false, error: 'This spreadsheet could not be opened' }, 400); } }
     let r;
-    try { r = await AI.extractProducts({ table, file: doc, supplierName: supplier?.name || '', categories: CATEGORIES }); }
+    const hint = [
+      packOnly ? `This is packing / measurement data for the product "${p.product_name}"${p.supplier_sku ? ` (${p.supplier_sku})` : ''}. Focus on: units per inner pack and master carton, master carton outside L x W x H, carton net and gross weight, product size and unit weight. Use the product name above if the data has none.` : '',
+      'Packing words: "case pack", "master carton", "outer carton", "export carton", "外箱" = the master carton; "inner", "inner pack", "中盒/内盒" = the inner pack; "size (units)", "qty/ctn", "pcs/ctn", "装箱数" = units per master carton. A carton weight with no net/gross label is the gross weight. Item / product dimensions (not the carton) go to product_size_cm as "L x W x H". Convert inches to cm (x 2.54) and lb to kg (x 0.4536). A CBM / volume figure is not a dimension: do not split it into L/W/H.',
+      pasted && f.name !== 'pasted text.txt' ? `Note from Lulyboo: ${pasted.slice(0, 2000)}` : '',
+    ].filter(Boolean).join('\n');
+    try { r = await AI.extractProducts({ table, file: doc, supplierName: supplier?.name || '', categories: CATEGORIES, hint }); }
     catch (e) { return res.json({ ok: false, error: `AI could not read the file: ${String(e.message).slice(0, 160)}` }, 502); }
     const keys = PRODUCT_FIELDS.filter((x) => x.group !== 'photos').map((x) => x.key);
     const norm = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -805,7 +814,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     if (best < 0) { const n = norm(p.product_name); const hits = products.map((x, i) => [i, norm(x.values.product_name)]).filter(([, m]) => n.length > 3 && m.length > 3 && (m.includes(n) || n.includes(m))); if (hits.length === 1) best = hits[0][0]; }
     if (best < 0 && products.length === 1) best = 0;
     let stored = null;
-    if (fields.keep === '1' && products.length) {
+    if (fields.keep === '1' && products.length && ext !== '.txt') {
       const id = crypto.randomUUID(); const path = `${p.supplier_id}/${id}${ext}`;
       try {
         await db.docs.upload(path, f.buffer, DOC_TYPES[ext] || 'application/octet-stream');

@@ -1445,7 +1445,8 @@
   var box = document.querySelector('[data-aifill]'); if (!box) return;
   var url = box.getAttribute('data-aifill'), drop = box.querySelector('[data-aifill-drop]'), file = box.querySelector('[data-aifill-file]');
   var status = box.querySelector('[data-aifill-status]'), dlg = document.querySelector('[data-aifill-dlg]'), rowsEl = dlg.querySelector('[data-aifill-rows]');
-  var pick = dlg.querySelector('[data-aifill-pick]'), form = document.querySelector('.product-form'), data = null;
+  var pick = dlg.querySelector('[data-aifill-pick]'), form = document.querySelector('.product-form'), data = null, scope = null;
+  var PACK = ['units_per_inner', 'units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_nw_kg', 'carton_gw_kg', 'product_size_cm', 'unit_net_weight_kg'];
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var GROUP = { product: 'Product', pricing: 'Pricing & terms', packing: 'Packing & carton', other: 'Other' };
   var el = function (k) { return form && form.elements[k]; };
@@ -1456,7 +1457,7 @@
   function rows() {
     var i = +pick.value, vals = (data.products[i] || {}).values || {}, html = '', last = '', n = 0;
     Object.keys(data.labels).forEach(function (k) {
-      if (!(k in vals) || !el(k)) return;
+      if (!(k in vals) || !el(k) || (scope && scope.indexOf(k) < 0)) return;
       var lab = data.labels[k], g = lab[2], now = cur(k), v = String(vals[k]), eq = same(now, v);
       if (g !== last) { html += '<tr class="aifill-g"><td colspan="4">' + esc(GROUP[g] || g) + '</td></tr>'; last = g; }
       var on = !eq; if (on) n++;
@@ -1464,7 +1465,7 @@
         '<td>' + esc(lab[0]) + '</td><td class="now">' + (now ? esc(now.length > 90 ? now.slice(0, 90) + '…' : now) : '<span class="sub">empty</span>') + '</td>' +
         '<td><input class="aifill-v" data-v="' + esc(k) + '" value="' + esc(v) + '"' + (v.length > 60 ? ' title="' + esc(v) + '"' : '') + '>' + (eq ? '<span class="sub"> same</span>' : now ? '<span class="aifill-tag">replaces</span>' : '') + '</td></tr>';
     });
-    rowsEl.innerHTML = html || '<tr><td colspan="4" class="sub">Nothing in this file matches the product fields.</td></tr>';
+    rowsEl.innerHTML = html || '<tr><td colspan="4" class="sub">' + (scope ? 'No carton or measurement data found in it.' : 'Nothing in this file matches the product fields.') + '</td></tr>';
     count();
   }
   function count() { var n = rowsEl.querySelectorAll('input[type=checkbox]:checked').length; dlg.querySelector('[data-aifill-count]').textContent = n + ' field' + (n === 1 ? '' : 's') + ' selected'; dlg.querySelector('[data-aifill-apply]').textContent = n ? 'Apply ' + n + ' field' + (n === 1 ? '' : 's') + ' to form' : 'Apply to form'; }
@@ -1476,18 +1477,49 @@
     dlg.querySelector('[data-aifill-ctx]').textContent = [d.docType ? 'Read as: ' + d.docType : '', d.products.length > 1 ? d.products.length + ' products in the file' + (d.best < 0 ? ' — choose which one this is' : '') : '', d.stored ? 'saved to Documents' : ''].filter(Boolean).join(' · ');
     rows(); if (dlg.showModal) dlg.showModal();
   }
-  function send(f) {
-    if (!f) return;
-    var fd = new FormData(); fd.append('file', f); if (box.querySelector('[data-aifill-keep]').checked) fd.append('keep', '1');
-    drop.classList.add('busy'); setStatus('Reading ' + f.name + ' with AI…');
+  // opts.pack: the Packing & Carton box (only packing / measurement fields are offered); opts.text: pasted text
+  function send(f, opts) {
+    opts = opts || {}; if (!f && !opts.text) return;
+    var zone = opts.pack ? opts.zone : drop, say = opts.pack ? opts.say : setStatus;
+    var fd = new FormData(); if (f) fd.append('file', f); if (opts.text) fd.append('text', opts.text);
+    if (opts.pack) fd.append('scope', 'packing');
+    if (f && !opts.pack && box.querySelector('[data-aifill-keep]').checked) fd.append('keep', '1');
+    zone.classList.add('busy'); say('Reading ' + (f ? f.name : 'the pasted text') + ' with AI…');
     fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
-      drop.classList.remove('busy');
+      zone.classList.remove('busy');
       if (!j.ok) throw new Error(j.error || 'Could not read the file');
-      if (!j.products.length) { setStatus('AI found no product details in ' + f.name + '.', true); return; }
-      setStatus(''); open(j);
-    }).catch(function (e) { drop.classList.remove('busy'); setStatus(e.message, true); });
+      if (!j.products.length) { say('AI found no ' + (opts.pack ? 'carton or measurement data' : 'product details') + ' in ' + (f ? f.name : 'the pasted text') + '.', true); return; }
+      say(''); scope = opts.pack ? PACK : null; statusTarget = opts.pack ? opts.say : setStatus; open(j);
+    }).catch(function (e) { zone.classList.remove('busy'); say(e.message, true); });
     file.value = '';
   }
+  var statusTarget = setStatus;
+  // Packing & Carton: a small drop / paste box for measurement screenshots (Amazon listing, spec sheet, packing list…)
+  (function () {
+    var pcx = form && form.querySelector('.pcx'); if (!pcx) return;
+    var z = document.createElement('div'); z.className = 'pk-ai'; z.setAttribute('data-pk-ai', '');
+    z.innerHTML = '<span class="pk-ai-ic" aria-hidden="true">✦</span>' +
+      '<textarea rows="1" class="pk-ai-in" aria-label="Paste a screenshot or the measurements" placeholder="Paste a screenshot (⌘V) or the measurements, or drop a file — AI fills pieces, carton size and weights"></textarea>' +
+      '<button type="button" class="btn ghost small" data-pk-read hidden>Read with AI</button><button type="button" class="btn ghost small" data-pk-choose>Choose file</button>' +
+      '<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xlsm,.csv" hidden><span class="pk-ai-over" aria-hidden="true">Drop it here</span>';
+    var note = document.createElement('p'); note.className = 'pk-ai-status'; note.setAttribute('role', 'status'); note.setAttribute('aria-live', 'polite');
+    pcx.parentNode.insertBefore(z, pcx); pcx.parentNode.insertBefore(note, pcx);
+    var ta = z.querySelector('textarea'), fi = z.querySelector('input[type=file]'), readBtn = z.querySelector('[data-pk-read]');
+    var say = function (t, bad) { note.textContent = t; note.classList.toggle('bad', !!bad); };
+    var go = function (f, text) { send(f, { pack: true, zone: z, say: say, text: text }); };
+    z.querySelector('[data-pk-choose]').addEventListener('click', function () { fi.click(); });
+    fi.addEventListener('change', function () { if (fi.files[0]) go(fi.files[0]); fi.value = ''; });
+    ta.addEventListener('paste', function (e) {
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      for (var i = 0; i < items.length; i++) if (items[i].kind === 'file') { var f = items[i].getAsFile(); if (f) { e.preventDefault(); go(new File([f], 'measurements-screenshot.' + ((f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')), { type: f.type }), ta.value.trim()); return; } }
+    });
+    ta.addEventListener('input', function () { readBtn.hidden = !ta.value.trim(); ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; });
+    ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ta.value.trim()) { e.preventDefault(); go(null, ta.value.trim()); } });
+    readBtn.addEventListener('click', function () { if (ta.value.trim()) go(null, ta.value.trim()); });
+    ['dragenter', 'dragover'].forEach(function (t) { z.addEventListener(t, function (e) { if ([].indexOf.call(e.dataTransfer.types || [], 'Files') < 0) return; e.preventDefault(); z.classList.add('over'); }); });
+    z.addEventListener('dragleave', function (e) { if (!z.contains(e.relatedTarget)) z.classList.remove('over'); });
+    z.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; z.classList.remove('over'); if (f) { e.preventDefault(); go(f, ta.value.trim()); } });
+  })();
   file.addEventListener('change', function () { send(file.files[0]); });
   drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
   ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
@@ -1510,7 +1542,8 @@
       done++;
     });
     dlg.close();
-    setStatus(done + ' field' + (done === 1 ? '' : 's') + ' filled from the file — check them and click Save product.' + (skipped.length ? ' Not applied (not in the list): ' + skipped.join(', ') + '.' : ''));
+    statusTarget(done + ' field' + (done === 1 ? '' : 's') + ' filled — check them and click Save product.' + (skipped.length ? ' Not applied (not in the list): ' + skipped.join(', ') + '.' : ''));
+    if (scope) { var tx = document.querySelector('[data-pk-ai] textarea'); if (tx) { tx.value = ''; tx.style.height = ''; var rb = document.querySelector('[data-pk-read]'); if (rb) rb.hidden = true; } }
     var ed = document.getElementById('edit'); if (ed) ed.open = true;
     var first = document.querySelector('.aifill-hl'); if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });

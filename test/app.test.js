@@ -2819,3 +2819,31 @@ test('navigation: section tabs for the current area and ⌘K quick search', asyn
   assert.deepEqual(JSON.parse((await req(base, 'GET', '/admin/quick?q=m', { cookie })).text).results, []);
   assert.notEqual((await req(base, 'GET', '/admin/quick?q=melikey')).status, 200, 'needs a login');
 });
+
+test('product AI fill: packing box reads pasted measurements / screenshots with packing hints', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch; let sent = null;
+  global.fetch = async (url, opts) => {
+    if (!/anthropic/.test(String(url))) return realFetch(url, opts);
+    sent = JSON.parse(opts.body);
+    return new Response(JSON.stringify({ model: 'm', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'tool_use', name: 'record_products', input: { products: [{ product_name: 'Silicone bib', product_size_cm: '15.39 x 16.51 x 10.01', units_per_carton: 36, carton_l_cm: 40.49, carton_w_cm: 30.51, carton_h_cm: 37.01, carton_gw_kg: 5.1 }] } }] }), { status: 200 });
+  };
+  process.env.ANTHROPIC_API_KEY = 'test';
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Melikey' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Silicone bib', supplier_sku: 'MLK-B1', status: 'New' });
+
+  const fd = new FormData(); fd.append('scope', 'packing'); fd.append('text', 'CASE PACK Weight (kg) 5.1 Dimensions 40.49 x 30.51 x 37.01 Size (units) 36');
+  const r = await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', headers: { cookie }, body: fd });
+  const j = await r.json();
+  assert.equal(j.ok, true);
+  assert.equal(j.products[0].values.units_per_carton, 36); assert.equal(j.products[0].values.carton_gw_kg, 5.1); assert.equal(j.best, 0);
+  const prompt = JSON.stringify(sent.messages);
+  assert.match(prompt, /packing \/ measurement data for the product \\"Silicone bib\\"/); assert.match(prompt, /case pack/); assert.match(prompt, /40\.49 x 30\.51/);
+  assert.equal(db.tables.supplier_documents?.length || 0, 0, 'pasted text is not stored as a document');
+
+  const none = await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', headers: { cookie }, body: new FormData() });
+  assert.equal(none.status, 400);
+});

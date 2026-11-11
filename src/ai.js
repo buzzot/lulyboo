@@ -278,7 +278,7 @@ async function checkListing({ fields, photos }) {
  * products in Lulyboo fields. `table` is the sheet as "R<row>: cell | cell" lines; or `file` = { buffer, mime } for PDF/images.
  * Nothing is invented: values must be in the document.
  */
-async function extractProducts({ table = null, file = null, supplierName = '', categories = [] }) {
+async function extractProducts({ table = null, file = null, supplierName = '', categories = [], hint = '' }) {
   const num = { type: 'number' }; const str = { type: 'string' }; const int = { type: 'integer' };
   const tool = { name: 'record_products', description: 'Record every product (sellable item) in the document, in Lulyboo fields.',
     input_schema: { type: 'object', properties: {
@@ -307,7 +307,7 @@ async function extractProducts({ table = null, file = null, supplierName = '', c
     const data = file.buffer.toString('base64');
     content.push(file.mime === 'application/pdf' ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } } : { type: 'image', source: { type: 'base64', media_type: file.mime, data } });
   }
-  content.push({ type: 'text', text: `${supplierName ? `Supplier: ${supplierName}\n` : ''}Read this ${table ? 'spreadsheet' : 'document'} and record every product in it.${table ? `\n\n${table}` : ''}` });
+  content.push({ type: 'text', text: `${supplierName ? `Supplier: ${supplierName}\n` : ''}Read this ${table ? 'spreadsheet' : 'document'} and record every product in it.${hint ? `\n${hint}` : ''}${table ? `\n\n${table}` : ''}` });
   const { result, model: used } = await callTool({ tool, content, maxTokens: 16000,
     system: 'You turn supplier product lists of any layout into structured product records for a US importer. Copy numbers exactly; convert units only when clear (inches→cm, lbs→kg). Translate Chinese to English. One record per sellable item (each size/colour variant with its own price is its own record). Skip freight, sample charges, totals and blank rows. Never invent values: leave a field out if the document does not state it.' });
   return { ...result, model: used };
