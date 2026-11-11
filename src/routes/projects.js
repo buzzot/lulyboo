@@ -14,6 +14,7 @@ const { currentSupplierUser } = require('../auth');
 const ST = require('../staff');
 const F = require('../fields');
 const P = require('../projects');
+const DM = require('../dev-manual');
 
 const num = (x) => { if (x === undefined || x === null || String(x).trim() === '') return null; const n = Number(String(x).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
 const int = (x) => { const n = num(x); return n === null ? null : Math.round(n); };
@@ -53,16 +54,26 @@ const kindIcon = (k) => ({ drawing: '📐', image: '🖼️', spec: '📄', cert
 // Click a previewable tile to open it in a popup (public/app.js [data-preview]); others download.
 // Email messages: what the writer asked or promised, and the original email folded away.
 const emailExtras = (x) => {
-  if (x.source !== 'email' || !x.email) return '';
+  if (!['email', 'manual'].includes(x.source) || !x.email) return '';
   const e = x.email; const q = e.questions || []; const c = e.commitments || [];
+  const orig = x.source === 'manual' ? (e.summarized && e.text ? html`<details class="em-orig"><summary>Original message${e.language && e.language !== 'English' ? ` (${e.language})` : ''}</summary><pre>${e.text}</pre></details>` : '') : null;
+  const saved = e.quote_id ? html`<p class="mq-saved">✓ Saved as latest quote${e.quote_line ? ` · ${e.quote_line}` : ''}</p>` : '';
+  if (orig !== null) return html`${q.length || c.length ? html`<ul class="em-points">${q.map((v) => html`<li><span class="em-tag q">Question</span>${v}</li>`)}${c.map((v) => html`<li><span class="em-tag c">Commitment</span>${v}</li>`)}</ul>` : ''}${orig}${saved}`;
   return html`${q.length || c.length ? html`<ul class="em-points">${q.map((v) => html`<li><span class="em-tag q">Question</span>${v}</li>`)}${c.map((v) => html`<li><span class="em-tag c">Commitment</span>${v}</li>`)}</ul>` : ''}
     ${e.text ? html`<details class="em-orig"><summary>Original email${e.language && e.language !== 'English' ? ` (${e.language})` : ''}</summary><div class="em-meta">${e.from || ''}${e.subject ? html` · ${e.subject}` : ''}</div><pre>${e.text}</pre></details>` : ''}`;
 };
-const attLinks = (list, hrefOf) => (list?.length ? html`<ul class="att-tiles">${list.map((a, i) => {
+const attLinks = (list, hrefOf) => {
+  if (!list?.length) return '';
+  if (!list.some((a) => a.cat)) return attTiles(list.map((a, i) => [a, i]), hrefOf);
+  const groups = [...DM.CAT_ORDER, null].map((c) => [c, list.map((a, i) => [a, i]).filter(([a]) => (c ? a.cat === c : !DM.CATS[a.cat]))]).filter(([, l]) => l.length);
+  return html`<div class="att-groups">${groups.map(([c, l]) => html`<div class="att-group"><h4>${c ? html`<span aria-hidden="true">${DM.CATS[c][2]}</span> ${t(DM.CATS[c][0], DM.CATS[c][1])}` : t('Other files', '其他文件')}</h4>${attTiles(l, hrefOf)}</div>`)}</div>`;
+};
+const attTiles = (pairs, hrefOf) => html`<ul class="att-tiles">${pairs.map(([a, i]) => {
   const href = hrefOf(i); const ext = P.extOf(a.name).slice(1).toUpperCase() || 'FILE'; const img = THUMB_OK.test(a.name); const prev = P.INLINE_OK.test(a.name);
   const face = img ? html`<img src="${href}?inline=1" alt="" loading="lazy">` : html`<span class="att-ic">${kindIcon(P.guessKind(a.name))}</span><span class="att-ext">${ext}</span>`;
   return html`<li class="att-tile">${prev ? html`<button type="button" class="att-face" data-preview="${href}?inline=1" data-type="${img ? 'image' : 'doc'}" data-dl="${href}" aria-label="${ext} attachment">${face}<span class="att-zoom" aria-hidden="true">${icon('search', 14)}</span></button>` : html`<a class="att-face" href="${href}" aria-label="Download ${ext} attachment">${face}</a>`}
-    <div class="att-meta"><span>${ext} · ${bytes(a.size)}</span><a class="att-dl" href="${href}" title="Download · 下载" aria-label="Download">${icon('download', 15)}</a></div></li>`; })}</ul>` : '');
+    <div class="att-meta"><span>${ext} · ${bytes(a.size)}</span><a class="att-dl" href="${href}" title="Download · 下载" aria-label="Download">${icon('download', 15)}</a></div></li>`; })}</ul>`;
+const via = (x) => (x.source === 'manual' ? (DM.CHANNELS[x.email?.channel] || DM.CHANNELS.other) : null);
 
 function quoteCards(q, project, { admin = false } = {}) {
   if (!q) return html`<p class="d-empty">${admin ? 'No quote yet.' : t('You have not submitted a quote yet.', '您尚未提交报价。')}</p>`;
@@ -77,6 +88,47 @@ function quoteCards(q, project, { admin = false } = {}) {
     ${row('Payment terms', '付款条款', q.payment_terms)}${row('Material quoted', '报价材质', q.material_notes)}
     ${(q.custom || []).map((c) => row(c.label, c.label, c.value))}
   </dl>${q.notes ? html`<p class="pd-desc">${q.notes}</p>` : ''}`;
+}
+
+const nowLocal = () => { try { return new Date().toLocaleString('sv-SE', { timeZone: process.env.BUSINESS_TZ || 'America/Los_Angeles' }).slice(0, 16).replace(' ', 'T'); } catch { return new Date().toISOString().slice(0, 16); } };
+/** Lulyboo records a supplier reply that came another way: who, when, how, the message and categorised files. */
+function manualForm(p, inv, contacts, open) {
+  const zone = (c) => { const [en, , ic, hint] = DM.CATS[c]; return html`<div class="mrz" data-filebox data-mrz><div class="mdrop-box"><input type="file" name="f_${c}" multiple accept="${FILE_ACCEPT}" aria-label="${en}">
+    <span class="mrz-h"><span class="mrz-ic" aria-hidden="true">${ic}</span><span><b>${en}</b><small>${hint}</small></span></span><span class="mrz-add" data-main>+ Drop, choose${c === 'image' ? ' or paste ⌘V' : ''}</span></div>
+    <ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>`; };
+  const people = contacts.filter((u) => u.status !== 'disabled');
+  return html`<form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/log" class="mr-form mt" data-rpane="log" data-mr-form ${open ? '' : raw('hidden')}>
+    <div class="mr-row">
+      <label class="mr-f">From<select name="from" data-mr-from>${people.map((u) => html`<option value="${u.name || u.email}">${u.name ? `${u.name} · ${u.email}` : u.email}</option>`)}<option value="">${people.length ? 'Other person…' : 'Someone at the factory'}</option></select><input name="from_other" placeholder="Name" data-mr-other ${people.length ? raw('hidden') : ''}></label>
+      <label class="mr-f">Received<input type="datetime-local" name="received" value="${nowLocal()}" data-mr-when><input type="hidden" name="received_iso" data-mr-iso></label>
+      <label class="mr-f">Came by<select name="channel">${Object.entries(DM.CHANNELS).map(([k, v]) => html`<option value="${k}">${v[2]} ${v[0]}</option>`)}</select></label>
+    </div>
+    <label class="mr-f">Message<textarea name="body" rows="5" placeholder="Paste what the supplier wrote, or your call notes. Chinese is fine."></textarea></label>
+    <div class="mr-zones">${DM.CAT_ORDER.map(zone)}</div>
+    <div class="mr-opts">
+      <label class="chk"><input type="checkbox" name="ai" value="1" checked> Summarize with AI <span class="sub">— bullet points, questions and commitments, same as emails</span></label>
+      <label class="chk"><input type="checkbox" name="quote" value="1" checked> Read the price and save it as the latest quote <span class="sub">— from the Pricing files or the message; you check the numbers first</span></label>
+    </div>
+    <div class="form-actions mr-act"><button class="btn">Add to conversation</button><span class="sub">Nothing is emailed — this only records the supplier's reply</span></div>
+  </form>`;
+}
+/** AI-read quote from a manual reply, shown as a form to check before it becomes the latest quote. */
+function quoteCheck(p, inv, msg) {
+  const q = msg.email.quote_draft; const tiers = [0, 1, 2].map((i) => q.tiers?.[i] || {});
+  const inp = (name, label, v, attrs = '') => html`<label class="mr-f">${label}<input name="${name}" value="${v ?? ''}" ${raw(attrs)}></label>`;
+  return html`<section class="mq-card" id="quote-check"><div class="head-row"><h3>💲 Check the quote AI read from ${msg.author || 'the supplier'}'s reply</h3><span class="sub">Nothing is saved until you click Save</span></div>
+    <form method="post" action="/admin/projects/${p.id}/suppliers/${inv.id}/quote" class="mq-form"><input type="hidden" name="msg" value="${msg.id}">
+      <div class="mq-tiers">${tiers.map((t, i) => html`<div class="mq-tier"><span>Tier ${i + 1}</span>${inp(`qty${i}`, 'Qty', t.qty, 'inputmode="numeric"')}${inp(`price${i}`, 'Unit price', t.price, 'inputmode="decimal"')}</div>`)}</div>
+      <div class="mq-grid">
+        <label class="mr-f">Currency<select name="currency">${F.CURRENCIES.map((c) => html`<option ${c === q.currency ? raw('selected') : ''}>${c}</option>`)}</select></label>
+        <label class="mr-f">Incoterm<select name="incoterm"><option value="">—</option>${F.INCOTERMS.map((c) => html`<option ${c === q.incoterm ? raw('selected') : ''}>${c}</option>`)}</select></label>
+        ${inp('tooling_cost', 'Tooling / molds', q.tooling_cost, 'inputmode="decimal"')}${inp('tooling_lead_days', 'Tooling days', q.tooling_lead_days, 'inputmode="numeric"')}
+        ${inp('moq', 'MOQ', q.moq, 'inputmode="numeric"')}${inp('sample_cost', 'Sample cost', q.sample_cost, 'inputmode="decimal"')}${inp('sample_lead_days', 'Sample days', q.sample_lead_days, 'inputmode="numeric"')}${inp('production_lead_days', 'Production days', q.production_lead_days, 'inputmode="numeric"')}
+        ${inp('payment_terms', 'Payment terms', q.payment_terms)}${inp('material_notes', 'Material quoted', q.material_notes)}<label class="mr-f">Valid until<input type="date" name="validity_date" value="${q.validity_date || ''}"></label>
+      </div>
+      <label class="mr-f">Notes<textarea name="notes" rows="2">${q.notes || ''}</textarea></label>
+      <div class="form-actions"><button class="btn">Save as latest quote</button><a class="btn ghost" href="/admin/projects/${p.id}/suppliers/${inv.id}">Not now</a></div>
+    </form></section>`;
 }
 
 module.exports = function projectRoutes(router, { db, config }) {
@@ -349,14 +401,19 @@ module.exports = function projectRoutes(router, { db, config }) {
     const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId);
     const smps = await db.list('samples', { filters: { invitation_id: inv.id }, order: 'created_at.desc' }).catch(() => []);
     const [s, msgs, quotes] = await Promise.all([db.get('suppliers', inv.supplier_id), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), db.list('dev_quotes', { filters: { invitation_id: inv.id }, order: 'revision.desc' })]);
+    const contacts = await db.list('supplier_users', { filters: { supplier_id: inv.supplier_id } }).catch(() => []);
+    const draftMsg = req.query.quote ? msgs.find((x) => x.id === req.query.quote && x.email?.quote_draft && !x.email?.quote_id) : null;
     res.html(page({
       title: `${s?.name} · ${p.name}`, nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
       body: html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><a href="/admin/projects/${p.id}?tab=suppliers">${p.name}</a></nav>
       <div class="head-row"><div><h1>${s?.name}</h1><ul class="pp-meta"><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li><li>${p.ref}</li><li>Confirmed spec v${inv.ack_version} of v${p.current_version}</li>${p.nda_required ? html`<li>${inv.nda_accepted_at ? `NDA accepted ${fmt.date(inv.nda_accepted_at)} by ${inv.nda_accepted_by || ''}` : 'NDA not accepted'}</li>` : ''}<li><a href="/admin/suppliers/${s?.id}">Supplier profile</a></li></ul></div>
         <form method="post" action="/admin/projects/${p.id}/suppliers/${inv.id}/status" class="inline-form"><select name="status" aria-label="Status">${P.INV_STATUSES.map((x) => html`<option ${x === inv.status ? raw('selected') : ''}>${x}</option>`)}</select><button class="btn small ghost">Set status</button></form></div>
       <div class="dp-thread"><section class="card"><h2 class="sec">Conversation</h2>
-        <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}${x.source === 'email' ? ' by-email' : ''}"><header><b>${x.direction === 'supplier' ? (x.author || s?.name) : (x.author || 'Lulyboo')}</b>${when(x.created_at)}${x.source === 'email' ? html`<span class="via-email" title="${x.email?.from || ''}">✉ email${x.email?.summarized ? ' · AI summary' : ''}</span>` : ''}</header><p>${x.body}</p>${emailExtras(x)}${attLinks(x.attachments, (i) => `/admin/dev-files/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">No messages yet.</p>`}</div>
-        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt"><label class="frow top"><span>Reply</span><textarea name="body" rows="4" required placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
+        <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}${x.source === 'email' ? ' by-email' : ''}"><header><b>${x.direction === 'supplier' ? (x.author || s?.name) : (x.author || 'Lulyboo')}</b>${when(x.created_at)}${x.source === 'email' ? html`<span class="via-email" title="${x.email?.from || ''}">✉ email${x.email?.summarized ? ' · AI summary' : ''}</span>` : ''}${via(x) ? html`<span class="via-email via-manual">${via(x)[2]} ${via(x)[0]} · added by ${x.email?.added_by || 'Lulyboo'}${x.email?.summarized ? ' · AI summary' : ''}</span>` : ''}</header><p>${x.body}</p>${emailExtras(x)}${attLinks(x.attachments, (i) => `/admin/dev-files/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">No messages yet.</p>`}</div>
+        ${draftMsg ? quoteCheck(p, inv, draftMsg) : ''}
+        <div class="seg-links rtabs mt" role="tablist"><button type="button" class="${req.query.log ? '' : 'on'}" data-rtab="reply" role="tab">Reply to supplier</button><button type="button" class="${req.query.log ? 'on' : ''}" data-rtab="log" role="tab">Add supplier's reply</button></div>
+        ${manualForm(p, inv, contacts, req.query.log)}
+        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt" data-rpane="reply" ${req.query.log ? raw('hidden') : ''}><label class="frow top"><span>Reply</span><textarea name="body" rows="4" required placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
           <label class="frow"><span>Attach</span>${multiFile('files')}</label><label class="chk"><input type="checkbox" name="notify" value="1" checked> Email the supplier</label><div class="form-actions"><button class="btn">Send</button></div></form></section>
         <aside class="dp-side"><section class="card em-addr"><h2 class="sec">Follow up by email</h2><p class="sub">One mailbox for all projects. This conversation is found by the code in the subject, so keep it when you reply or write.</p><div class="em-copy"><span class="em-k">Code</span><code>[${DE.threadCode(p, inv)}]</code><button type="button" class="btn small ghost" data-copy-text="[${DE.threadCode(p, inv)}]">Copy</button></div><div class="em-copy"><span class="em-k">CC</span><code>${DE.threadAddress()}</code><button type="button" class="btn small ghost" data-copy-text="${DE.threadAddress()}">Copy</button></div><p class="sub">Supplier replies come here automatically. When you email the supplier from Outlook, CC the mailbox and put the code in the subject. Each email is summarised by AI and posted here with name and time.</p></section><section class="card"><div class="head-row"><h2 class="sec">Samples</h2><a class="btn small" href="/admin/samples/new?invitation=${inv.id}">+ Request sample</a></div>${smps.length ? html`<ul class="smp-mini">${smps.map((x) => html`<li><a href="/admin/samples/${x.id}">${x.ref}${x.stage ? ` · ${x.stage}` : ''}</a><span class="stp ${require('../samples').pillCls(x.status)}"><i></i>${x.status}</span></li>`)}</ul>` : html`<p class="muted small">No samples yet.</p>`}</section><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
           ${quotes.length > 1 ? html`<details class="fold mt"><summary><b>Earlier revisions (${quotes.length - 1})</b></summary>${quotes.slice(1).map((q) => html`<h3 class="sec2">Rev ${q.revision} · ${fmt.date(q.created_at)}</h3>${quoteCards(q, p, { admin: true })}`)}</details>` : ''}</section></aside></div>`,
@@ -377,6 +434,55 @@ module.exports = function projectRoutes(router, { db, config }) {
     if (f.notify === '1' && s) mailed = await P.notifySupplier(config, db, s, { replyTo: DE.threadAddress(), subject: `[Lulyboo ${DE.threadCode(p, inv)}] New message · 新消息: ${p.name}`, en: `New message about "${p.name}":\n\n${body}${r.saved.length ? `\n\n(${r.saved.length} attachment(s) in the portal)` : ''}`, zh: `关于“${p.name}”的新消息：\n\n${body}${r.saved.length ? `\n\n（平台中有 ${r.saved.length} 个附件）` : ''}`, link: link(inv.id), email: { ref: p.ref, project: p.name, title: ['New message from Lulyboo', 'Lulyboo 新消息'], lead: ['You have a new message about this project:', '关于以下项目，您有一条新消息：'], noteLabel: ['Message', '消息内容'], note: body, points: r.saved.length ? [[`${r.saved.length} attachment(s) are waiting in the portal.`, `平台中有 ${r.saved.length} 个附件。`]] : [], button: ['Reply in the portal', '在平台中回复'] } });
     flash(res, r.errors.length ? 'warn' : 'ok', `Message sent${mailed ? ' and supplier emailed' : ''}${r.errors.length ? ' · ' + r.errors.join(' · ') : ''}`);
     res.redirect(`/admin/projects/${p.id}/suppliers/${inv.id}`);
+  }));
+
+  // A supplier reply that came by WeChat / phone / … : record it in the thread (nothing is emailed).
+  router.post('/admin/projects/:id/suppliers/:invId/log', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId); const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 8 });
+    const thread = `/admin/projects/${p.id}/suppliers/${inv.id}`;
+    const text = str(f.body, 20000);
+    const all = DM.CAT_ORDER.flatMap((c) => P.fileList(files, `f_${c}`).map((x) => ({ ...x, cat: c })));
+    if (!text && !all.length) { flash(res, 'error', 'Paste the message or add a file'); return res.redirect(`${thread}?log=1`); }
+    const r = await P.storeFiles(db, { projectId: p.id, files: all, maxBytes });
+    const atts = r.saved.map((a) => ({ ...a, cat: all[a.i].cat }));
+    const s = await db.get('suppliers', inv.supplier_id);
+    const author = str(f.from, 120) || str(f.from_other, 120) || s?.name || 'Supplier';
+    const channel = DM.CHANNELS[f.channel] ? f.channel : 'other';
+    let at = Date.parse(f.received_iso || ''); if (!Number.isFinite(at)) at = Date.parse(f.received || '');
+    const created = Number.isFinite(at) && at < Date.now() + 36e5 ? new Date(at).toISOString() : now();
+    const ai = f.ai === '1' && text ? await DE.summarize({ text, subject: `${DM.CHANNELS[channel][0]} message`, project: `${p.ref} ${p.name}`, writer: `${author} (${s?.name || 'supplier'})` }) : null;
+    const body = (ai?.summary || text || `(${atts.length} file${atts.length === 1 ? '' : 's'})`).slice(0, 6000);
+    const meta = { channel, added_by: ST.current()?.name || 'Lulyboo', text: text || '', summarized: !!ai, language: ai?.language || null, questions: ai?.questions || [], commitments: ai?.commitments || [], skipped_files: r.errors };
+    let draft = null;
+    if (f.quote === '1') {
+      const pricing = r.saved.filter((a) => all[a.i].cat === 'pricing').map((a) => ({ name: a.name, buffer: all[a.i].buffer }));
+      if (pricing.length || text) draft = await DM.readQuote({ files: pricing, text: pricing.length ? text : text, project: `${p.ref} ${p.name}` });
+      if (draft) meta.quote_draft = draft;
+    }
+    let msg;
+    try { msg = await db.insert('dev_messages', { invitation_id: inv.id, direction: 'supplier', author, body, attachments: atts, created_at: created, source: 'manual', email: meta }); }
+    catch (e) { console.error('Saving manual reply details failed (run the dev_messages email SQL?):', e.message); msg = await db.insert('dev_messages', { invitation_id: inv.id, direction: 'supplier', author, body: `${body}\n\n(${DM.CHANNELS[channel][0]}, added by ${meta.added_by})`, attachments: atts, created_at: created }); draft = null; }
+    await db.update('dev_invitations', { id: inv.id }, { status: ['Invited', 'Viewed'].includes(inv.status) ? 'Questions' : inv.status, updated_at: now() });
+    const extra = f.quote === '1' && !draft ? ' · No price found to make a quote' : '';
+    flash(res, r.errors.length ? 'warn' : 'ok', `Reply added${ai ? ' and summarized' : ''}${draft ? ' · Check the quote below' : extra}${r.errors.length ? ' · ' + r.errors.join(' · ') : ''}`);
+    res.redirect(draft ? `${thread}?quote=${msg.id}#quote-check` : thread);
+  }));
+  // Save the checked quote (from a manual reply) as the supplier's next quote revision.
+  router.post('/admin/projects/:id/suppliers/:invId/quote', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId); const { fields: f } = await parseForm(req);
+    const thread = `/admin/projects/${p.id}/suppliers/${inv.id}`;
+    const msg = f.msg ? await db.get('dev_messages', f.msg) : null;
+    if (msg && msg.invitation_id !== inv.id) throw new HttpError(404, 'Message not found');
+    const tiers = [0, 1, 2].map((i) => ({ qty: int(f[`qty${i}`]), price: num(f[`price${i}`]) })).filter((x) => x.qty && x.price !== null && x.price >= 0);
+    if (!tiers.length) { flash(res, 'error', 'Enter at least one quantity and unit price'); return res.redirect(msg ? `${thread}?quote=${msg.id}#quote-check` : thread); }
+    const prev = await latestQuote(inv.id); const cur = F.CURRENCIES.includes(f.currency) ? f.currency : 'USD';
+    const q = await db.insert('dev_quotes', { invitation_id: inv.id, revision: (prev?.revision || 0) + 1, spec_version: p.current_version, currency: cur, incoterm: F.INCOTERMS.includes(f.incoterm) ? f.incoterm : null, tiers,
+      tooling_cost: num(f.tooling_cost), tooling_lead_days: int(f.tooling_lead_days), moq: int(f.moq), sample_cost: num(f.sample_cost), sample_lead_days: int(f.sample_lead_days), production_lead_days: int(f.production_lead_days),
+      validity_date: /^\d{4}-\d{2}-\d{2}$/.test(f.validity_date || '') ? f.validity_date : null, payment_terms: str(f.payment_terms, 300), material_notes: str(f.material_notes, 300), custom: [], notes: str(f.notes, 4000),
+      attachments: (msg?.attachments || []).filter((a) => a.cat === 'pricing'), created_at: now() });
+    await db.update('dev_invitations', { id: inv.id }, { status: ['Sample', 'Selected'].includes(inv.status) ? inv.status : 'Quoted', updated_at: now() });
+    if (msg?.email) await db.update('dev_messages', { id: msg.id }, { email: { ...msg.email, quote_draft: null, quote_id: q.id, quote_line: `${fmt.money(tiers[0].price, cur)} / pc at ${fmt.num(tiers[0].qty)}+${num(f.tooling_cost) !== null ? ` · tooling ${fmt.money(num(f.tooling_cost), cur)}` : ''}` } });
+    flash(res, 'ok', `Saved as quote rev ${q.revision}`); res.redirect(thread);
   }));
 
   // Milestones
@@ -449,7 +555,7 @@ module.exports = function projectRoutes(router, { db, config }) {
             ${versions.length > 1 ? html`<details class="fold mt"><summary><b>${t('Change history', '变更记录')}</b></summary><ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></details>` : ''}</section>
           <section class="card"><h2 class="sec">${t('Files', '文件')} <span class="count">${vis.length}</span></h2>${vis.length ? html`<ul class="fl">${vis.map((f) => html`<li class="fl-row"><div class="fl-thumb">${THUMB_OK.test(f.name) ? html`<button type="button" class="fl-thumb-btn" data-preview="/portal/projects/${inv.id}/files/${f.id}?inline=1" data-type="image" data-dl="/portal/projects/${inv.id}/files/${f.id}" aria-label="Preview"><img src="/portal/projects/${inv.id}/files/${f.id}?inline=1" alt="" loading="lazy"></button>` : html`<span aria-hidden="true">${kindIcon(f.kind)}</span>`}</div><div class="fl-main"><div class="fl-title">${supTitles.get(f.id)}${f.controlling ? html` <span class="pill s-selected">${t('Controlling drawing', '主图纸')}</span>` : ''}</div><div class="fl-meta">${t(P.FILE_KINDS[f.kind] || f.kind, P.FILE_KINDS_ZH[f.kind] || f.kind)} · ${P.extOf(f.name).slice(1).toUpperCase()} · ${bytes(f.bytes)} · v${f.version}</div></div><div class="fl-act">${P.INLINE_OK.test(f.name) ? html`<button type="button" class="ic-btn" data-preview="/portal/projects/${inv.id}/files/${f.id}?inline=1" data-type="${THUMB_OK.test(f.name) ? 'image' : 'doc'}" data-dl="/portal/projects/${inv.id}/files/${f.id}" title="Preview · 预览" aria-label="Preview">${icon('eye', 18)}</button>` : ''}<a class="ic-btn" href="/portal/projects/${inv.id}/files/${f.id}" title="Download · 下载" aria-label="Download">${icon('download', 18)}</a></div></li>`)}</ul>` : html`<p class="d-empty">${t('No files yet.', '暂无文件。')}</p>`}</section>
           <section class="card"><h2 class="sec">${t('Questions & answers', '问答')}</h2>
-            <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (x.source === 'email' ? x.author || t('You', '您') : t('You', '您')) : 'Lulyboo'}</b>${when(x.created_at)}${x.source === 'email' ? html`<span class="via-email">✉ ${t('email', '邮件')}</span>` : ''}</header><p>${x.source === 'email' && x.email?.text ? x.email.text : x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
+            <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (['email', 'manual'].includes(x.source) ? x.author || t('You', '您') : t('You', '您')) : 'Lulyboo'}</b>${when(x.created_at)}${x.source === 'email' ? html`<span class="via-email">✉ ${t('email', '邮件')}</span>` : ''}${via(x) ? html`<span class="via-email">${via(x)[2]} ${t(via(x)[0], via(x)[1])}</span>` : ''}</header><p>${['email', 'manual'].includes(x.source) && x.email?.text ? x.email.text : x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
             ${locked ? '' : html`<form method="post" enctype="multipart/form-data" action="/portal/projects/${inv.id}/message" class="fields mt"><label class="frow top"><span>${t('Message', '留言')}</span><textarea name="body" rows="3" required></textarea></label><label class="frow"><span>${t('Attach', '附件')}</span>${multiFile('files')}</label><div class="form-actions"><button class="btn">${t('Send', '发送')}</button></div></form>`}</section>
         </div>
         <aside class="dp-side"><section class="card" id="quote"><h2 class="sec">${t('Your quote', '您的报价')}${q ? html` <span class="sub">rev ${q.revision} · ${fmt.date(q.created_at)}</span>` : ''}</h2>

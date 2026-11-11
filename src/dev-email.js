@@ -182,4 +182,4 @@ async function handleDevEmail({ db, config, from, toList = [], cc = '', subject 
   return { matched: true, duplicate: false, messageId: msg?.id, direction: row.direction, how: th.how };
 }
 
-module.exports = { threadAddress, threadCode, parseAddress, findThread, handleDevEmail, cleanText, CODE_RE, sig };
+module.exports = { threadAddress, threadCode, parseAddress, findThread, handleDevEmail, cleanText, summarize, CODE_RE, sig };

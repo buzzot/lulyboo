@@ -1662,3 +1662,23 @@
   dlg.addEventListener('click', function (e) { if (e.target === dlg || e.target.closest('[data-rem-close]')) dlg.close(); });
   retick();
 })();
+
+// Development thread: "Reply to supplier" / "Add supplier's reply" tabs, and the manual reply form
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[data-rtab]')); if (!tabs.length) return;
+  tabs.forEach(function (b) { b.addEventListener('click', function () {
+    tabs.forEach(function (x) { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
+    document.querySelectorAll('[data-rpane]').forEach(function (p) { p.hidden = p.getAttribute('data-rpane') !== b.getAttribute('data-rtab'); });
+  }); });
+  var form = document.querySelector('[data-mr-form]'); if (!form) return;
+  var from = form.querySelector('[data-mr-from]'), other = form.querySelector('[data-mr-other]');
+  var sync = function () { other.hidden = from.value !== '' ; if (!other.hidden) other.focus(); };
+  from.addEventListener('change', sync); if (from.options.length === 1) other.hidden = false;
+  form.addEventListener('submit', function (e) {
+    var when = form.querySelector('[data-mr-when]'), iso = form.querySelector('[data-mr-iso]');
+    if (when.value) { var d = new Date(when.value); if (!isNaN(d)) iso.value = d.toISOString(); } // browser's own time zone
+    var body = form.querySelector('textarea[name=body]').value.trim(), files = Array.prototype.some.call(form.querySelectorAll('input[type=file]'), function (i) { return i.files.length; });
+    if (!body && !files) { e.preventDefault(); alert('Paste the message or add a file first.'); return; }
+    var btn = form.querySelector('.mr-act .btn'); btn.disabled = true; btn.textContent = form.querySelector('[name=ai]').checked || form.querySelector('[name=quote]').checked ? 'Reading with AI…' : 'Adding…';
+  });
+})();

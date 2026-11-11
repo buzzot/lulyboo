@@ -2724,3 +2724,68 @@ test('supplier holidays: AI read, save, calendar bands, portal page, confirm, re
   assert.equal(db.tables.supplier_holidays.length, 0);
   assert.equal(db.tables.crm_tasks.filter((x) => /Order cut-off/.test(x.title) && !x.done).length, 0);
 });
+
+test('development thread: add a supplier reply by hand with categorised files, AI summary and checked quote', async (t) => {
+  const { hashPassword } = require('../src/auth');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (!/anthropic/.test(String(url))) return realFetch(url, opts);
+    const b = JSON.parse(opts.body); const tool = b.tools?.[0]?.name;
+    const input = tool === 'record_quote'
+      ? { currency: 'USD', tiers: [{ qty: 3000, price: 2.35 }], tooling_cost: 3700, notes: 'Body mold 2800 + ear mold 900' }
+      : { summary: '- Factory can make the 3D trunk.\n- Sample 25 days after mold payment.', language: 'Chinese', questions: [], commitments: ['Sample 25 days after mold payment'] };
+    return new Response(JSON.stringify({ model: 'm', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'tool_use', name: tool, input }] }), { status: 200 });
+  };
+  process.env.ANTHROPIC_API_KEY = 'test';
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huanger', email: 'h@huanger.cn', active: true });
+  await db.insert('supplier_users', { supplier_id: s.id, email: 'lily@huanger.cn', name: 'Lily Chen', status: 'active', password_hash: await hashPassword('correct horse battery') });
+  const p = await db.insert('dev_projects', { ref: 'DP-1003', name: 'Elephant musical toy', status: 'Sourcing', current_version: 1 });
+  const inv = await db.insert('dev_invitations', { project_id: p.id, supplier_id: s.id, status: 'Viewed', ack_version: 1 });
+  const thread = `/admin/projects/${p.id}/suppliers/${inv.id}`;
+
+  const page0 = await req(base, 'GET', thread, { cookie: admin });
+  assert.match(page0.text, /Add supplier&#39;s reply|Add supplier's reply/); assert.match(page0.text, /name="f_design"/); assert.match(page0.text, /name="f_pricing"/); assert.match(page0.text, /Lily Chen · lily@huanger.cn/);
+
+  const fd = new FormData();
+  fd.append('from', 'Lily Chen'); fd.append('channel', 'wechat'); fd.append('received_iso', '2026-11-10T17:20:00.000Z');
+  fd.append('body', '工厂可以做3D象鼻。单价 USD 2.35 @ 3000pcs，模具 2800 + 900。'); fd.append('ai', '1'); fd.append('quote', '1');
+  fd.append('f_design', new Blob(['ISO-10303']), 'elephant_body_v2.step');
+  fd.append('f_image', new Blob([Buffer.alloc(2000, 1)]), 'trunk.jpg');
+  fd.append('f_pricing', new Blob(['qty,price\n3000,2.35']), 'quotation.csv');
+  const r = await fetch(base + `${thread}/log`, { method: 'POST', headers: { cookie: admin }, body: fd, redirect: 'manual' });
+  assert.equal(r.status, 303);
+  const msg = db.tables.dev_messages[0];
+  assert.match(r.headers.get('location'), new RegExp(`quote=${msg.id}`));
+  assert.equal(msg.direction, 'supplier'); assert.equal(msg.author, 'Lily Chen'); assert.equal(msg.source, 'manual');
+  assert.equal(msg.created_at, '2026-11-10T17:20:00.000Z');
+  assert.equal(msg.email.channel, 'wechat'); assert.match(msg.body, /3D trunk/); assert.match(msg.email.text, /3D象鼻/);
+  assert.deepEqual(msg.attachments.map((a) => a.cat), ['design', 'image', 'pricing']);
+  assert.equal(msg.email.quote_draft.tiers[0].price, 2.35);
+  assert.equal(db.tables.dev_invitations[0].status, 'Questions');
+  assert.equal(db.tables.dev_quotes?.length || 0, 0, 'not saved before checking');
+
+  const chk = await req(base, 'GET', `${thread}?quote=${msg.id}`, { cookie: admin });
+  assert.match(chk.text, /id="quote-check"/); assert.match(chk.text, /value="2.35"/); assert.match(chk.text, /value="3700"/);
+  assert.match(chk.text, /WeChat · added by/); assert.match(chk.text, /Design files/); assert.match(chk.text, /Pricing/);
+
+  const sv = await req(base, 'POST', `${thread}/quote`, { cookie: admin, form: { msg: msg.id, qty0: '3000', price0: '2.30', currency: 'USD', tooling_cost: '3700' } });
+  assert.equal(sv.status, 303);
+  const q = db.tables.dev_quotes[0];
+  assert.equal(q.revision, 1); assert.equal(q.tiers[0].price, 2.3); assert.equal(q.attachments.length, 1); assert.equal(q.attachments[0].name, 'quotation.csv');
+  assert.equal(db.tables.dev_invitations[0].status, 'Quoted');
+  assert.equal(db.tables.dev_messages[0].email.quote_id, q.id); assert.equal(db.tables.dev_messages[0].email.quote_draft, null);
+  assert.match((await req(base, 'GET', thread, { cookie: admin })).text, /Saved as latest quote/);
+
+  // Nothing pasted and no files → refused
+  assert.equal((await req(base, 'POST', `${thread}/log`, { cookie: admin, form: { from: 'Lily Chen', channel: 'phone', body: '' } })).status, 303);
+  assert.equal(db.tables.dev_messages.length, 1);
+
+  // The supplier sees the reply (their original words) in the portal thread
+  const sc = (await req(base, 'POST', '/login', { form: { email: 'lily@huanger.cn', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
+  const pt = await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc });
+  assert.match(pt.text, /3D象鼻/); assert.match(pt.text, /WeChat/);
+});
