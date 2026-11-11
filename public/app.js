@@ -1496,14 +1496,16 @@
   var statusTarget = setStatus;
   // Packing & Carton: a small drop / paste box for measurement screenshots (Amazon listing, spec sheet, packing list…)
   (function () {
-    var pcx = form && form.querySelector('.pcx'); if (!pcx) return;
+    var main = form && form.querySelector('.pcx .pcx-main'); if (!main) return;
+    var row = document.createElement('div'); row.className = 'pcx-row pk-ai-row';
+    row.innerHTML = '<div class="pcx-lbl">Fill with AI<small>screenshot · file · text</small></div><div class="pk-ai-cell"></div>';
     var z = document.createElement('div'); z.className = 'pk-ai'; z.setAttribute('data-pk-ai', '');
     z.innerHTML = '<span class="pk-ai-ic" aria-hidden="true">✦</span>' +
-      '<textarea rows="1" class="pk-ai-in" aria-label="Paste a screenshot or the measurements" placeholder="Paste a screenshot (⌘V) or the measurements, or drop a file — AI fills pieces, carton size and weights"></textarea>' +
-      '<button type="button" class="btn ghost small" data-pk-read hidden>Read with AI</button><button type="button" class="btn ghost small" data-pk-choose>Choose file</button>' +
+      '<textarea rows="1" class="pk-ai-in" aria-label="Paste a screenshot or the measurements" placeholder="Paste a screenshot (⌘V) or drop a file"></textarea>' +
+      '<button type="button" class="pk-ai-b pk-ai-go" data-pk-read hidden>Read</button><button type="button" class="pk-ai-b" data-pk-choose title="Choose a file">File</button>' +
       '<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xlsm,.csv" hidden><span class="pk-ai-over" aria-hidden="true">Drop it here</span>';
     var note = document.createElement('p'); note.className = 'pk-ai-status'; note.setAttribute('role', 'status'); note.setAttribute('aria-live', 'polite');
-    pcx.parentNode.insertBefore(z, pcx); pcx.parentNode.insertBefore(note, pcx);
+    row.querySelector('.pk-ai-cell').appendChild(z); row.querySelector('.pk-ai-cell').appendChild(note); main.insertBefore(row, main.firstChild);
     var ta = z.querySelector('textarea'), fi = z.querySelector('input[type=file]'), readBtn = z.querySelector('[data-pk-read]');
     var say = function (t, bad) { note.textContent = t; note.classList.toggle('bad', !!bad); };
     var go = function (f, text) { send(f, { pack: true, zone: z, say: say, text: text }); };
