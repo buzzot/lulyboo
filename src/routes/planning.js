@@ -14,6 +14,8 @@ const SCR = require('./schedules');
 const SAM = require('./samples');
 const LP = require('./loadplan');
 const cleanItem = (o) => PL.cleanName(o.product, o.sku);
+const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
+const BOXN = (c) => `Container ${c.no} · ${({ '20GP': '20GP', '40GP': '40GP', '40HQ': '40HQ' })[c.box] || c.box}`;
 
 const PALETTE = ['#3b6fb6', '#d07a1e', '#2f8a63', '#7a5bb0', '#b4473b', '#1f8a9a', '#a5682a', '#5b6c8f', '#c0507e', '#4e7d2f'];
 const portName = (code) => SC.PORT[code]?.name || null;
@@ -131,16 +133,66 @@ function planningRoutes(router, { db, config }) {
 
     let body;
     if (view === 'port') {
+      // one card per PO: lines of the same supplier + PO at this port, placed in the week of the latest ready date
+      const sailAll = await db.list('sailings', { filters: { etd: ['gte', day] }, order: 'etd.asc' }).catch(() => []);
+      const RANK = { overdue: 0, waiting: 1, production: 2, ready: 3, shipped: 4 };
+      const poGroups = {};
+      for (const o of open) {
+        const k = portKey(o);
+        const key = `${o.supplier_id}|${PL.normPo(o.po)}`;
+        const g = ((poGroups[k] = poGroups[k] || {})[key] = poGroups[k]?.[key] || { key, port: k, lines: [] });
+        g.lines.push(o);
+      }
+      const portWeeks = {};
+      for (const [k, gs] of Object.entries(poGroups)) {
+        for (const g of Object.values(gs)) {
+          const f = g.lines[0];
+          const dates = g.lines.map((o) => o.ready_date).filter(Boolean).sort();
+          g.ready = dates[dates.length - 1] || null;
+          g.split = new Set(dates.map((d) => PL.weekStart(d))).size > 1;
+          g.st = g.lines.map((o) => o.st).sort((a, b) => (RANK[a] ?? 9) - (RANK[b] ?? 9))[0];
+          g.po = f.po; g.sup = f.sup; g.col = f.col; g.supplier_id = f.supplier_id;
+          g.qty = g.lines.reduce((a, o) => a + (Number(o.qty) || 0), 0);
+          g.cbm = g.lines.reduce((a, o) => a + (Number(o.cbm) || 0), 0);
+          g.noCbm = g.lines.filter((o) => !(Number(o.cbm) > 0)).length;
+          g.waiting = [...new Set(g.lines.filter((o) => o.st === 'waiting' && o.pending_from_us).map((o) => o.pending_from_us))];
+          const ctn = g.lines.map((o) => ci.labelFor(o)).find(Boolean);
+          g.ctn = ctn || null;
+          if (ctn?.c?.sailing) g.etd = { etd: ctn.c.sailing.etd, carrier: ctn.c.sailing.carrier, planned: true };
+          else if (k !== '?') { const from = !g.ready || g.ready < day ? day : g.ready; const sl = sailAll.find((x) => x.origin === k && x.etd >= from); if (sl) g.etd = { etd: sl.etd, carrier: sl.carrier, planned: false }; }
+          const wk = !g.ready ? 'nodate' : g.ready < thisWeek ? thisWeek : PL.weekStart(g.ready);
+          ((portWeeks[k] = portWeeks[k] || {})[wk] = portWeeks[k]?.[wk] || []).push(g);
+        }
+      }
+      const int = (v) => Number(v).toLocaleString('en-US');
+      const item = (o) => { const name = o.product && o.product !== o.sku ? o.product : ''; return html`<div class="cp-it">
+        <div class="cp-it-n" title="${[o.sku, name].filter(Boolean).join(' · ') || '(whole PO)'}">${o.sku ? html`<b>${o.sku}</b>` : ''}${name ? html`<span>${name}</span>` : o.sku ? '' : html`<span>(whole PO)</span>`}</div>
+        ${editBtn(o, 'cp-it-ed')}
+        <div class="cp-it-m"><span>${o.qty ? `${int(o.qty)} pcs` : '—'}</span><span class="${Number(o.cbm) > 0 ? '' : 'miss'}">${Number(o.cbm) > 0 ? html`${n2(o.cbm)} m³${o.cbm_estimated ? html`<i title="Calculated from the carton size">calc.</i>` : ''}` : 'CBM ?'}</span></div></div>`; };
+      const poCard = (g) => {
+        const docs = filesFor(g.supplier_id, g.po).length;
+        const many = g.lines.length > 4;
+        return html`<article class="cp-po" style="--c:${g.col}">
+          <div class="cp-po-h"><div class="cp-po-id"><b>${g.sup?.name || 'Supplier'}</b><div class="sub">${poLink(g.lines[0], g.po)}${docs ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(g.po)}" title="Documents for ${g.po}">📎${docs}</a>` : ''} · ${g.lines.length} product${g.lines.length === 1 ? '' : 's'}</div></div>${tag(g.st)}</div>
+          <div class="cp-its">${(many ? g.lines.slice(0, 3) : g.lines).map(item)}
+            ${many ? html`<details class="cp-more"><summary>+ ${g.lines.length - 3} more products</summary>${g.lines.slice(3).map(item)}</details>` : ''}</div>
+          ${g.lines.length > 1 ? html`<div class="cp-po-tot"><span><b>${int(g.qty)}</b> pcs</span><span><b>${n2(g.cbm)} m³</b>${g.noCbm ? html` <em>+ ${g.noCbm} without CBM</em>` : ''}</span></div>` : ''}
+          <div class="cp-po-d"><span>${g.ready ? html`Ready <b>${PL.short(g.ready)}</b>` : 'No ready date'}${g.split ? html` <em title="Its products are ready in different weeks">· split dates</em>` : ''}</span>
+            ${g.etd ? html`<span class="cp-po-ar">→</span><span>ETD <b>${PL.short(g.etd.etd)}</b> <span class="sub">${g.etd.carrier}${g.etd.planned ? '' : ' · first sailing'}</span></span>` : ''}
+            ${g.waiting.length ? html`<span class="cp-po-w">Needs: ${g.waiting.join(', ')}</span>` : ''}
+            ${g.ctn ? html`<a class="cp-po-c" href="${g.ctn.url}">📦 ${BOXN(g.ctn.c)}</a>` : ''}</div>
+        </article>`;
+      };
       body = portOrder.length ? html`<div class="cp-board">${portOrder.map((k) => {
-        const weeks = Object.keys(ports[k]).sort((a, b) => (a === 'nodate' ? 1 : b === 'nodate' ? -1 : a.localeCompare(b)));
+        const weeks = Object.keys(portWeeks[k] || {}).sort((a, b) => (a === 'nodate' ? 1 : b === 'nodate' ? -1 : a.localeCompare(b)));
         const total = Object.values(ports[k]).flat().reduce((a, o) => a + (Number(o.cbm) || 0), 0);
         return html`<section class="cp-col ${k === '?' ? 'unknown' : ''}"><div class="cp-col-h"><h2>${k === '?' ? 'Port to confirm' : portName(k) || k}</h2><span class="sub">${k === '?' ? 'set the port' : k}</span></div>
           <div class="cp-col-sum"><b>${n1(total)} m³</b>${k !== '?' ? ` · ≈ ${PL.suggest(total).text}` : ''}</div>
           ${weeks.map((w) => {
-            const ls = ports[k][w]; const cbm = ls.reduce((a, o) => a + (Number(o.cbm) || 0), 0); const sg = PL.suggest(cbm);
+            const gs = portWeeks[k][w]; const cbm = gs.reduce((a, g) => a + g.cbm, 0); const sg = PL.suggest(cbm);
             const lab = w === 'nodate' ? { wk: 'No ready date', dates: '' } : PL.weekLabel(w);
             return html`<div class="cp-week"><div class="cp-week-h"><span>${lab.wk}${w === thisWeek ? ' · this week' : ''}</span><span>${lab.dates}</span></div>
-              ${ls.map(card)}
+              ${gs.map(poCard)}
               ${k !== '?' && cbm ? html`<div class="cp-fit"><div><b>${sg.text}</b><span>${sg.lcl ? 'LCL' : `${sg.fill}% full`}</span></div><div class="cp-bar"><i style="width:${sg.lcl && sg.boxes.length === 1 ? Math.round(cbm / 15 * 100) : sg.fill}%;background:${sg.lcl && sg.boxes.length === 1 ? '#d07a1e' : sg.fill >= 75 ? '#2f8a63' : '#d07a1e'}"></i></div></div>` : ''}</div>`;
           })}</section>`;
       })}</div>` : html`<div class="card cp-empty"><h2>No open orders yet</h2><p class="muted">Import a supplier's open-order report, PO or status email to start planning.</p><a class="btn" href="${BASE}/import">Import orders</a></div>`;

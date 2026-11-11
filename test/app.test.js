@@ -2202,7 +2202,7 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   // views
   const byPort = await req(base, 'GET', '/admin/logistics/planning', { cookie });
   assert.equal(byPort.status, 200);
-  assert.match(byPort.text, /Ningbo/); assert.match(byPort.text, /Port to confirm/); assert.match(byPort.text, /Waiting on us: Package artwork/);
+  assert.match(byPort.text, /Ningbo/); assert.match(byPort.text, /Port to confirm/); assert.match(byPort.text, /Needs: Package artwork/);
   assert.match(byPort.text, /Ready, not shipped/);                                  // PO900018 overdue
   const tl = await req(base, 'GET', '/admin/logistics/planning?view=timeline', { cookie });
   assert.equal(tl.status, 200); assert.match(tl.text, />Since /);

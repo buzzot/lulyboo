@@ -1768,3 +1768,44 @@ img.ph{object-fit:cover;padding:0}
 .pcx-ov{width:100%!important;max-width:66px}
 .pcx-note{font-size:11.5px}
 @media(max-width:1100px){.pcx{grid-template-columns:1fr}.pcx-fit{max-width:420px}}
+
+/* ── Container planning: one card per PO (By port) ──────────────────────── */
+.cp-po{border:1px solid var(--line);border-left:4px solid var(--c);border-radius:11px;background:#fff;margin-bottom:9px;overflow:hidden;transition:box-shadow .15s}
+.cp-po:hover{box-shadow:0 4px 14px rgba(0,0,0,.07)}
+.cp-po-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:10px 12px 4px}
+.cp-po-id{min-width:0}
+.cp-po-id>b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-po-id .sub{font-size:12.5px}.cp-po-id .cp-po-link{font-weight:600}
+.cp-po-h .cp-tag{flex:0 0 auto}
+.cp-its{margin:6px 12px 0;border-top:1px dashed #ece9e5}
+.cp-it{display:grid;grid-template-columns:minmax(0,1fr) auto auto 18px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed #f0eeeb;font-size:12.5px}
+.cp-its>.cp-it:last-child,.cp-more .cp-it:last-child{border-bottom:0}
+.cp-it-n{min-width:0}.cp-it-n b{font-weight:600;display:block}
+.cp-it-n span{display:block;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-it-n span:empty{display:none}
+.cp-it-q,.cp-it-v{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.cp-it-v.miss{color:#b7791f;font-weight:600}
+.cp-it-v i{color:#999;font-style:normal;font-size:11px;margin-left:3px}
+.cp-it-ed{border:0;background:none;color:#aaa;cursor:pointer;font-size:13px;padding:0;line-height:1}
+.cp-it-ed:hover,.cp-it-ed:focus-visible{color:var(--brand)}
+.cp-more summary{cursor:pointer;color:var(--brand-text,#b4473b);font-size:12px;font-weight:600;padding:5px 0;list-style:none}
+.cp-more summary::-webkit-details-marker{display:none}
+.cp-more[open] summary{display:none}
+.cp-po-tot{display:flex;justify-content:space-between;gap:8px;margin:6px 12px 0;padding:7px 0 0;border-top:1px solid #eeebe7;font-size:12.5px;font-variant-numeric:tabular-nums}
+.cp-po-tot em{font-style:normal;color:#b7791f}
+.cp-po-d{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;background:#faf9f7;border-top:1px solid #f0eeeb;margin-top:8px;padding:8px 12px;font-size:12.5px}
+.cp-po-d em{font-style:normal;color:#b7791f}
+.cp-po-ar{color:#bbb}
+.cp-po-w{color:#b23b2e;font-weight:600}
+.cp-po-c{margin-left:auto;font-size:11.5px;font-weight:600;color:#2c4356;background:#e7eef4;border-radius:999px;padding:2px 8px;text-decoration:none}
+.cp-board{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.cp-it{grid-template-columns:minmax(0,1fr) 18px;gap:2px 8px;align-items:start}
+.cp-it-n{display:flex;gap:6px;align-items:baseline;min-width:0}
+.cp-it-n b{display:inline;flex:0 0 auto}
+.cp-it-n span{flex:1 1 auto;min-width:0}
+.cp-it-ed{grid-row:1;grid-column:2;align-self:start;padding-top:1px}
+.cp-it-m{grid-column:1 / -1;display:flex;justify-content:space-between;gap:10px;font-variant-numeric:tabular-nums;color:#444}
+.cp-it-m .miss{color:#b7791f;font-weight:600}
+.cp-it-m i{color:#999;font-style:normal;font-size:11px;margin-left:3px}
+.cp-po-id .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-po-d{gap:4px 6px}
