@@ -151,32 +151,32 @@ const FIELD = Object.fromEntries(PRODUCT_FIELDS.map((f) => [f.key, f]));
 /** One number box sized for its value, with a small label in front and the unit inside. */
 function unitInput(key, product, opts, { pre = null, unit = '' } = {}) {
   const f = FIELD[key];
-  return html`<label class="u" title="${`${f.en} · ${f.cn}`}">${pre ? html`<small>${pre}</small>` : ''}${input(f, product[f.key], opts)}${unit ? html`<span>${unit}</span>` : ''}</label>`;
+  return html`<label class="pcx-u" title="${`${f.en} · ${f.cn}`}">${pre ? html`<small>${pre}</small>` : ''}${input(f, product[f.key], opts)}${unit ? html`<span>${unit}</span>` : ''}</label>`;
 }
 
 /** Packing & Carton: compact rows on the left, calculated container fit (with optional overrides) on the right. */
 function packingRows(product, opts) {
-  const row = (title, hint, body) => html`<div class="pk-row"><div class="pk-lbl">${title}${hint ? html`<small>${hint}</small>` : ''}</div><div class="pk-fields">${body}</div></div>`;
-  return html`<div class="pk">
-    <div class="pk-main">
+  const row = (title, hint, body) => html`<div class="pcx-row"><div class="pcx-lbl">${title}${hint ? html`<small>${hint}</small>` : ''}</div><div class="pcx-fields">${body}</div></div>`;
+  return html`<div class="pcx">
+    <div class="pcx-main">
       ${row(t('Pieces', '装箱数量'), t('inner pack · master carton', '内盒 · 外箱'), html`
         ${unitInput('units_per_inner', product, opts, { pre: t('Inner', '内盒'), unit: t('pcs', '件') })}
         ${unitInput('units_per_carton', product, opts, { pre: t('Carton', '外箱'), unit: t('pcs', '件') })}`)}
       ${row(t('Master carton size', '外箱尺寸'), t('outside L × W × H', '外径 长×宽×高'), html`
-        ${unitInput('carton_l_cm', product, opts, { unit: 'L' })}<span class="pk-x">×</span>
-        ${unitInput('carton_w_cm', product, opts, { unit: 'W' })}<span class="pk-x">×</span>
-        ${unitInput('carton_h_cm', product, opts, { unit: 'H' })}<span class="pk-chip">cm</span><span class="pk-chip" data-fit-cbm>— m³</span>`)}
+        ${unitInput('carton_l_cm', product, opts, { unit: 'L' })}<span class="pcx-x">×</span>
+        ${unitInput('carton_w_cm', product, opts, { unit: 'W' })}<span class="pcx-x">×</span>
+        ${unitInput('carton_h_cm', product, opts, { unit: 'H' })}<span class="pcx-chip">cm</span><span class="pcx-chip" data-fit-cbm>— m³</span>`)}
       ${row(t('Master carton weight', '外箱重量'), '', html`
         ${unitInput('carton_nw_kg', product, opts, { pre: t('Net', '净重'), unit: 'kg' })}
         ${unitInput('carton_gw_kg', product, opts, { pre: t('Gross', '毛重'), unit: 'kg' })}`)}
     </div>
-    <aside class="pk-fit" data-live-fit>
-      <div class="pk-fit-h"><strong>${t('Container fit', '装柜数量')}</strong><span>${t('calculated', '自动计算')}</span></div>
-      <div class="pk-fit-top"><span class="pk-box" aria-hidden="true"></span><div><b data-fit-cbm-big>—</b><small data-fit-per>${t('Enter the carton size to see how many fit.', '请输入外箱尺寸，系统将计算装柜数量。')}</small></div></div>
-      <table class="pk-fit-t"><thead><tr><th></th><th>${t('Cartons', '箱数')}</th><th>${t('Units', '件数')}</th><th>${t('Override', '指定')}</th></tr></thead><tbody>
-        ${[['20GP', 'supplier_qty_20gp'], ['40GP', 'supplier_qty_40gp'], ['40HQ', 'supplier_qty_40hq']].map(([b, k]) => html`<tr data-fit-row="${b}"><td><b>${b}</b></td><td data-fit-c>—</td><td data-fit-u>—</td><td>${(() => { const f = FIELD[k]; const v = product[k] ?? ''; return html`<input id="f_${k}" name="${k}" type="number" step="1" min="0" inputmode="numeric" value="${v}" placeholder="auto" class="pk-ov" aria-label="${f.en}">`; })()}</td></tr>`)}
+    <aside class="pcx-fit" data-live-fit>
+      <div class="pcx-fit-h"><strong>${t('Container fit', '装柜数量')}</strong><span>${t('calculated', '自动计算')}</span></div>
+      <div class="pcx-fit-top"><span class="pcx-box" aria-hidden="true"></span><div><b data-fit-cbm-big>—</b><small data-fit-per>${t('Enter the carton size to see how many fit.', '请输入外箱尺寸，系统将计算装柜数量。')}</small></div></div>
+      <table class="pcx-fit-t"><thead><tr><th></th><th>${t('Cartons', '箱数')}</th><th>${t('Units', '件数')}</th><th>${t('Override', '指定')}</th></tr></thead><tbody>
+        ${[['20GP', 'supplier_qty_20gp'], ['40GP', 'supplier_qty_40gp'], ['40HQ', 'supplier_qty_40hq']].map(([b, k]) => html`<tr data-fit-row="${b}"><td><b>${b}</b></td><td data-fit-c>—</td><td data-fit-u>—</td><td>${(() => { const f = FIELD[k]; const v = product[k] ?? ''; return html`<input id="f_${k}" name="${k}" type="number" step="1" min="0" inputmode="numeric" value="${v}" placeholder="auto" class="pcx-ov" aria-label="${f.en}">`; })()}</td></tr>`)}
       </tbody></table>
-      <p class="pk-note">${t('Counted by carton dimensions in the container and by weight (whichever limits first, ⚖). Type a number under Override only if your loading plan differs.', '按外箱尺寸和重量计算（以先达到者为准，⚖ 表示受重量限制）。如实际装柜数量不同，请在“指定”中填写。')}</p>
+      <p class="pcx-note">${t('By carton size and weight · ⚖ limited by weight. Override only if your loading plan differs.', '按外箱尺寸和重量计算 · ⚖ 受重量限制。实际装柜数量不同时再填写“指定”。')}</p>
     </aside>
   </div>`;
 }

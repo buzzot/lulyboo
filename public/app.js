@@ -107,12 +107,12 @@
       var chip = document.querySelector('[data-fit-cbm]'); if (chip) chip.textContent = ok ? cbm.toFixed(3) + ' m³' : '— m³';
       setTxt('[data-fit-cbm-big]', ok ? cbm.toFixed(3) + ' m³' : '—');
       setTxt('[data-fit-per]', ok ? L('per carton', '每箱') + (upc > 0 ? ' · ' + upc + ' ' + L('pcs', '件') + (gw > 0 ? ' · ' + gw + ' kg' : '') : '') : L('Enter the carton size to see how many fit.', '请输入外箱尺寸，系统将计算装柜数量。'));
-      var icon = fitBox.querySelector('.pk-box');
+      var icon = fitBox.querySelector('.pcx-box');
       if (icon) { var m = Math.max(l, w, h) || 1; icon.style.setProperty('--l', ok ? (l / m) : .8); icon.style.setProperty('--h', ok ? (h / m) : .6); icon.classList.toggle('on', ok); }
       Object.keys(C).forEach(function (k) {
         var row = fitBox.querySelector('[data-fit-row="' + k + '"]'); if (!row) return;
         var r = ok ? fit(l, w, h, gw, C[k]) : null;
-        row.querySelector('[data-fit-c]').innerHTML = r ? r.n.toLocaleString() + (r.kg ? ' <span class="pk-kg" title="Limited by weight · 受重量限制">⚖</span>' : '') : '—';
+        row.querySelector('[data-fit-c]').innerHTML = r ? r.n.toLocaleString() + (r.kg ? ' <span class="pcx-kg" title="Limited by weight · 受重量限制">⚖</span>' : '') : '—';
         row.querySelector('[data-fit-u]').textContent = r && upc > 0 ? (r.n * upc).toLocaleString() : '—';
         row.classList.toggle('kg', !!(r && r.kg));
       });
@@ -1376,4 +1376,81 @@
   document.addEventListener('focusout', function (e) { if (e.target.closest && e.target.closest('[data-po-tip]')) hide(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
   window.addEventListener('scroll', hide, true);
+})();
+
+// Product page: fill the form from a file with AI → review popup (now vs from file, tick fields) → apply to the form (not saved).
+(function () {
+  var box = document.querySelector('[data-aifill]'); if (!box) return;
+  var url = box.getAttribute('data-aifill'), drop = box.querySelector('[data-aifill-drop]'), file = box.querySelector('[data-aifill-file]');
+  var status = box.querySelector('[data-aifill-status]'), dlg = document.querySelector('[data-aifill-dlg]'), rowsEl = dlg.querySelector('[data-aifill-rows]');
+  var pick = dlg.querySelector('[data-aifill-pick]'), form = document.querySelector('.product-form'), data = null;
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var GROUP = { product: 'Product', pricing: 'Pricing & terms', packing: 'Packing & carton', other: 'Other' };
+  var el = function (k) { return form && form.elements[k]; };
+  var cur = function (k) { var e = el(k); return e ? String(e.value || '').trim() : ''; };
+  var isNum = function (v) { return /^-?\d+(\.\d+)?$/.test(v); };
+  var same = function (a, b) { if (a === '' || b === '') return a === b; if (isNum(a) && isNum(b)) return parseFloat(a) === parseFloat(b); return a.toLowerCase() === b.toLowerCase(); };
+  function setStatus(t, bad) { status.textContent = t; status.classList.toggle('bad', !!bad); }
+  function rows() {
+    var i = +pick.value, vals = (data.products[i] || {}).values || {}, html = '', last = '', n = 0;
+    Object.keys(data.labels).forEach(function (k) {
+      if (!(k in vals) || !el(k)) return;
+      var lab = data.labels[k], g = lab[2], now = cur(k), v = String(vals[k]), eq = same(now, v);
+      if (g !== last) { html += '<tr class="aifill-g"><td colspan="4">' + esc(GROUP[g] || g) + '</td></tr>'; last = g; }
+      var on = !eq; if (on) n++;
+      html += '<tr class="' + (eq ? 'eq' : now ? 'chg' : 'new') + '"><td><input type="checkbox" data-k="' + esc(k) + '"' + (on ? ' checked' : '') + (eq ? ' disabled' : '') + ' aria-label="Apply ' + esc(lab[0]) + '"></td>' +
+        '<td>' + esc(lab[0]) + '</td><td class="now">' + (now ? esc(now.length > 90 ? now.slice(0, 90) + '…' : now) : '<span class="sub">empty</span>') + '</td>' +
+        '<td><input class="aifill-v" data-v="' + esc(k) + '" value="' + esc(v) + '"' + (v.length > 60 ? ' title="' + esc(v) + '"' : '') + '>' + (eq ? '<span class="sub"> same</span>' : now ? '<span class="aifill-tag">replaces</span>' : '') + '</td></tr>';
+    });
+    rowsEl.innerHTML = html || '<tr><td colspan="4" class="sub">Nothing in this file matches the product fields.</td></tr>';
+    count();
+  }
+  function count() { var n = rowsEl.querySelectorAll('input[type=checkbox]:checked').length; dlg.querySelector('[data-aifill-count]').textContent = n + ' field' + (n === 1 ? '' : 's') + ' selected'; dlg.querySelector('[data-aifill-apply]').textContent = n ? 'Apply ' + n + ' field' + (n === 1 ? '' : 's') + ' to form' : 'Apply to form'; }
+  function open(d) {
+    data = d;
+    pick.innerHTML = d.products.map(function (p, i) { return '<option value="' + i + '">' + esc(p.label) + '</option>'; }).join('');
+    pick.value = d.best >= 0 ? d.best : 0;
+    dlg.querySelector('[data-aifill-pickwrap]').hidden = d.products.length < 2;
+    dlg.querySelector('[data-aifill-ctx]').textContent = [d.docType ? 'Read as: ' + d.docType : '', d.products.length > 1 ? d.products.length + ' products in the file' + (d.best < 0 ? ' — choose which one this is' : '') : '', d.stored ? 'saved to Documents' : ''].filter(Boolean).join(' · ');
+    rows(); if (dlg.showModal) dlg.showModal();
+  }
+  function send(f) {
+    if (!f) return;
+    var fd = new FormData(); fd.append('file', f); if (box.querySelector('[data-aifill-keep]').checked) fd.append('keep', '1');
+    drop.classList.add('busy'); setStatus('Reading ' + f.name + ' with AI…');
+    fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      drop.classList.remove('busy');
+      if (!j.ok) throw new Error(j.error || 'Could not read the file');
+      if (!j.products.length) { setStatus('AI found no product details in ' + f.name + '.', true); return; }
+      setStatus(''); open(j);
+    }).catch(function (e) { drop.classList.remove('busy'); setStatus(e.message, true); });
+    file.value = '';
+  }
+  file.addEventListener('change', function () { send(file.files[0]); });
+  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; send(f); });
+  pick.addEventListener('change', rows);
+  rowsEl.addEventListener('change', count);
+  rowsEl.addEventListener('input', function (e) { var k = e.target.getAttribute('data-v'); if (k) { var c = rowsEl.querySelector('input[data-k="' + k + '"]'); if (c && !c.disabled) { c.checked = true; count(); } } });
+  dlg.addEventListener('click', function (e) {
+    if (e.target.closest('[data-aifill-close]') || e.target === dlg) { dlg.close(); return; }
+    if (e.target.closest('[data-aifill-all]')) { rowsEl.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(function (c) { c.checked = true; }); count(); return; }
+    if (e.target.closest('[data-aifill-none]')) { rowsEl.querySelectorAll('input[type=checkbox]').forEach(function (c) { c.checked = false; }); count(); return; }
+    if (!e.target.closest('[data-aifill-apply]')) return;
+    var done = 0, skipped = [];
+    rowsEl.querySelectorAll('input[type=checkbox]:checked').forEach(function (c) {
+      var k = c.getAttribute('data-k'), v = rowsEl.querySelector('[data-v="' + k + '"]').value, f = el(k); if (!f) return;
+      if (f.tagName === 'SELECT' && !Array.prototype.some.call(f.options, function (o) { return (o.value || o.text) === v; })) { skipped.push(data.labels[k][0] + ' "' + v + '"'); return; }
+      f.value = v; f.dispatchEvent(new Event('input', { bubbles: true })); f.dispatchEvent(new Event('change', { bubbles: true }));
+      var hl = f.closest('.pcx-u') || f; hl.classList.add('aifill-hl'); setTimeout(function () { hl.classList.remove('aifill-hl'); }, 6000);
+      done++;
+    });
+    dlg.close();
+    setStatus(done + ' field' + (done === 1 ? '' : 's') + ' filled from the file — check them and click Save product.' + (skipped.length ? ' Not applied (not in the list): ' + skipped.join(', ') + '.' : ''));
+    var ed = document.getElementById('edit'); if (ed) ed.open = true;
+    var first = document.querySelector('.aifill-hl'); if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+  document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-aifill-open]')) setTimeout(function () { drop.scrollIntoView({ block: 'center' }); drop.focus(); }, 50); });
 })();

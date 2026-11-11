@@ -524,4 +524,4 @@ function reviewPage({ admin, action, token, fileName, parsed, values, selected, 
 
 const expiredResult = () => failed(m('This review expired (files are only kept for 30 minutes). Please upload the file again.', '此次审核已过期（文件仅保留 30 分钟），请重新上传文件。'));
 
-module.exports = { stagedSource, aiDescribe, reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };
+module.exports = { sheetText, stagedSource, aiDescribe, reviewImage, companyMatch, startReview, finishReview, cancelReview, runImport, insertParsed, importResult, expiredResult, readEdits, EDIT_KEYS, _staged: staged };

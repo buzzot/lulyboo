@@ -2589,3 +2589,32 @@ test('PO import with SKUs only: each SKU is its own line (never "whole PO"), nam
   assert.equal(ls.find((o) => o.sku === 'TBT 001').product, 'Teething bite toy');
   assert.equal(ls.find((o) => o.sku === 'LTT 001').product, 'LTT 001');
 });
+
+test('product page: fill from a file with AI returns fields to review, picks the matching product, stores the file', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch;
+  const answer = { document_type: 'quotation', currency: 'USD', incoterm: 'FOB', fob_port: 'Shenzhen', products: [
+    { product_name: 'Lion teether', supplier_sku: 'LTT 001', unit_price: 0.62, moq: 3000 },
+    { product_name: 'Teething bite toy, silicone, BPA free', supplier_sku: 'TBT-001', materials: 'Food-grade silicone', unit_price: 0.78, units_per_carton: 200, carton_l_cm: 50, carton_w_cm: 40, carton_h_cm: 35, carton_gw_kg: 12.4, hs_code: '3924.90' }] };
+  global.fetch = async (url, opts = {}) => (String(url).includes('api.anthropic.com') ? new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_products', input: answer }] }), { status: 200 }) : realFetch(url, opts));
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Huanger' });
+  const p = await db.insert('products', { supplier_id: h.id, product_name: 'TBT 001', supplier_sku: 'TBT 001', status: 'Selected', currency: 'USD' });
+  const page = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  assert.match(page, /data-aifill="\/admin\/products\/[^"]+\/ai-fill"/); assert.match(page, /Fill from a file with AI/); assert.match(page, /data-aifill-dlg/);
+  const fd = new FormData(); fd.append('keep', '1'); fd.append('file', new Blob([Buffer.from('%PDF-1.4 quote')], { type: 'application/pdf' }), 'Huanger quotation.pdf');
+  const j = await (await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', body: fd, headers: { cookie } })).json();
+  assert.ok(j.ok, j.error);
+  assert.equal(j.products.length, 2); assert.equal(j.best, 1);                              // matched by SKU (TBT 001 = TBT-001)
+  const v = j.products[1].values;
+  assert.equal(v.product_name, 'Teething bite toy, silicone, BPA free'); assert.equal(v.unit_price, 0.78); assert.equal(v.fob_port, 'Shenzhen'); assert.equal(v.carton_gw_kg, 12.4);
+  assert.equal(j.labels.carton_l_cm[2], 'packing');
+  assert.equal(j.stored, 'Huanger quotation.pdf');
+  assert.ok(db.tables.supplier_documents.some((d) => d.product_id === p.id && d.kind === 'specification'));
+  assert.equal(db.tables.products.find((x) => x.id === p.id).product_name, 'TBT 001');            // nothing saved to the product
+  const bad = await (await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', body: (() => { const f = new FormData(); f.append('file', new Blob(['x']), 'notes.docx'); return f; })(), headers: { cookie } })).json();
+  assert.equal(bad.ok, false);
+});

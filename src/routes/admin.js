@@ -765,6 +765,58 @@ module.exports = function adminRoutes(router, { db, config }) {
     } catch { flash(res, 'error', 'The file could not be saved. Run the latest supabase/schema.sql in Supabase and try again.'); }
     back(res, p.id, 'documents');
   }));
+  // Fill the product form from a file with AI: returns what was read; the popup lets the user pick fields; nothing is saved here
+  // except (optionally) the file itself, which goes to the product's Documents.
+  router.post('/admin/products/:id/ai-fill', G(async (req, res) => {
+    const p = await db.get('products', req.params.id);
+    if (!p) throw new HttpError(404, 'Product not found');
+    const AI = require('../ai');
+    if (!AI.enabled()) return res.json({ ok: false, error: 'AI is not set up (ANTHROPIC_API_KEY).' }, 400);
+    const { fields, files } = await parseForm(req, { limitBytes: config.maxUploadBytes });
+    const f = files.file && (Array.isArray(files.file) ? files.file[0] : files.file);
+    if (!f?.buffer?.length) return res.json({ ok: false, error: 'Choose a file' }, 400);
+    const name = String(f.name || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 150);
+    const ext = (name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+    if (!/^\.(pdf|png|jpe?g|webp|xlsx|xlsm|xls|csv)$/.test(ext)) return res.json({ ok: false, error: 'Use a PDF, photo (JPG/PNG), Excel or CSV file' }, 400);
+    const { PRODUCT_FIELDS, CATEGORIES, cleanProduct } = require('../fields');
+    const { sheetText } = require('../import-review');
+    const { parseXlsx, parseCsv, decodeText } = require('../importer');
+    const supplier = await db.get('suppliers', p.supplier_id).catch(() => null);
+    let table = null; let doc = null;
+    if (/\.(pdf|png|jpe?g|webp)$/.test(ext)) doc = { buffer: f.buffer, mime: { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[ext] };
+    else { try { table = sheetText(ext === '.csv' ? parseCsv(decodeText(f.buffer)) : parseXlsx(f.buffer)); } catch { return res.json({ ok: false, error: 'This spreadsheet could not be opened' }, 400); } }
+    let r;
+    try { r = await AI.extractProducts({ table, file: doc, supplierName: supplier?.name || '', categories: CATEGORIES }); }
+    catch (e) { return res.json({ ok: false, error: `AI could not read the file: ${String(e.message).slice(0, 160)}` }, 502); }
+    const keys = PRODUCT_FIELDS.filter((x) => x.group !== 'photos').map((x) => x.key);
+    const norm = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const products = (r.products || []).slice(0, 60).map((x) => {
+      const input = { currency: r.currency, incoterm: r.incoterm, fob_port: r.fob_port, payment_terms: r.payment_terms, quote_valid_until: r.quote_valid_until, ...x };
+      if (input.product_size_cm !== undefined && input.product_size_cm !== null) input.product_size_cm = String(input.product_size_cm);
+      for (const k of Object.keys(input)) if (input[k] === undefined || input[k] === null || input[k] === '') delete input[k];
+      let row = {};
+      try { row = cleanProduct(input, { partial: true }).row || {}; } catch { row = {}; }
+      const values = {};
+      for (const k of keys) { const v = row[k] ?? input[k]; if (v !== undefined && v !== null && v !== '') values[k] = v; }
+      return { label: [x.supplier_sku, x.product_name].filter(Boolean).join(' · ') || 'Product', values };
+    }).filter((x) => Object.keys(x.values).length);
+    // which product in the file is this one: same SKU, else a name that contains the other, else the only one
+    let best = products.findIndex((x) => p.supplier_sku && x.values.supplier_sku && norm(x.values.supplier_sku) === norm(p.supplier_sku));
+    if (best < 0) { const n = norm(p.product_name); const hits = products.map((x, i) => [i, norm(x.values.product_name)]).filter(([, m]) => n.length > 3 && m.length > 3 && (m.includes(n) || n.includes(m))); if (hits.length === 1) best = hits[0][0]; }
+    if (best < 0 && products.length === 1) best = 0;
+    let stored = null;
+    if (fields.keep === '1' && products.length) {
+      const id = crypto.randomUUID(); const path = `${p.supplier_id}/${id}${ext}`;
+      try {
+        await db.docs.upload(path, f.buffer, DOC_TYPES[ext] || 'application/octet-stream');
+        await db.insert('supplier_documents', { id, supplier_id: p.supplier_id, product_id: p.id, name, mime: DOC_TYPES[ext] || null, bytes: f.buffer.length, path, kind: 'specification' });
+        stored = name;
+      } catch { /* the fill still works without the stored copy */ }
+    }
+    const labels = Object.fromEntries(PRODUCT_FIELDS.filter((x) => keys.includes(x.key)).map((x) => [x.key, [x.en, x.cn, x.group]]));
+    res.json({ ok: true, products, best, labels, docType: r.document_type || '', stored, model: r.model || '' });
+  }));
+
   router.post('/admin/products/:id/documents/:docId/delete', G(async (req, res) => {
     const d = await db.get('supplier_documents', req.params.docId);
     if (d && d.product_id === req.params.id) {

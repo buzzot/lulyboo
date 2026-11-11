@@ -64,7 +64,7 @@ function renderWorkspace(c) {
         <form method="post" action="/admin/products/${p.id}/ai-review" data-go-tab="review"><button class="btn small" data-busy>AI review</button></form>
         <details class="more-menu"><summary class="btn ghost small icon-only" aria-label="More actions">${icon('more', 16)}</summary>
           <div class="mm-pop">
-            <a href="#edit" data-open-edit>Edit supplier data</a>
+            <a href="#edit" data-open-edit>Edit supplier data</a> · <a href="#edit" data-open-edit data-aifill-open>Fill from a file with AI</a>
             <form method="post" action="/admin/products/bulk" data-confirm="${p.archived_at ? 'Restore this product from the archive?' : 'Archive this product? It is hidden from the lists and the supplier portal. You can restore it later.'}"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
             ${canDelete ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos? This cannot be undone."><button class="danger">Delete product</button></form>` : ''}
           </div></details>
@@ -127,6 +127,24 @@ function renderWorkspace(c) {
       </div>
     </div>
     <details class="card fold" id="edit"><summary><h2 class="inline">Edit supplier data</h2><span class="muted small">Change what the supplier submitted. Photos and files are in Documents.</span></summary>
+      <div class="aifill" data-aifill="/admin/products/${p.id}/ai-fill">
+        <label class="aifill-drop" data-aifill-drop tabindex="0">
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xlsm,.csv" hidden data-aifill-file>
+          <span class="aifill-ic" aria-hidden="true">✦</span>
+          <span><b>Fill from a file with AI</b><small>Drop a spec sheet, quotation, PI, packing list or photo — you check every field before anything changes.</small></span>
+          <span class="btn ghost small">Choose file</span>
+        </label>
+        <label class="cp-chk aifill-keep"><input type="checkbox" data-aifill-keep checked> Also save the file to Documents</label>
+        <p class="aifill-status" data-aifill-status role="status" aria-live="polite"></p>
+      </div>
+      <dialog class="rp-modal aifill-dlg" data-aifill-dlg aria-labelledby="aifill-t"><form method="dialog" data-aifill-form>
+        <div class="rp-top"><h2 id="aifill-t">Check what AI read</h2><button type="button" class="icon-btn" data-aifill-close aria-label="Close">×</button></div>
+        <p class="sub rp-ctx" data-aifill-ctx></p>
+        <label class="aifill-pick" data-aifill-pickwrap hidden>Product in this file <select data-aifill-pick></select></label>
+        <div class="aifill-bar"><span class="sub" data-aifill-count></span><span><button type="button" class="link small" data-aifill-all>Select all</button> · <button type="button" class="link small" data-aifill-none>None</button></span></div>
+        <div class="table-wrap aifill-scroll"><table class="list aifill-t"><thead><tr><th></th><th>Field</th><th>Now</th><th>From the file</th></tr></thead><tbody data-aifill-rows></tbody></table></div>
+        <div class="rp-actions"><button type="button" class="btn" data-aifill-apply>Apply to form</button><button type="button" class="btn ghost" data-aifill-close>Cancel</button><span class="sub">Nothing is saved until you click Save product.</span></div>
+      </form></dialog>
       <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form" data-guard>
         <label class="photo-link-field"><span class="lbl">Supplier photo / catalog link</span><input name="photo_link" value="${p.photo_link || ''}" placeholder="https://"></label>
         ${productFields(p, { categories: ctx.categoryNames })}
