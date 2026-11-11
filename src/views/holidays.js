@@ -3,6 +3,7 @@
 
 const { html, raw, t } = require('../lib/html');
 const H = require('../holidays');
+const picker = (...a) => require('../routes/samples').supplierPicker(...a); // searchable supplier popup (shared)
 
 /** Before / after date for each stage, with the source words AI read it from. */
 function stageTable(h = {}) {
@@ -24,7 +25,7 @@ function holidayDialog({ action, readUrl, suppliers = null, deleteBase = '', bac
   return html`<dialog class="rp-modal hol-dlg" data-hol-dlg data-read="${readUrl}" data-delete-base="${deleteBase}" aria-labelledby="hol-dlg-t">
     <div class="rp-top"><h2 id="hol-dlg-t" data-hol-title>${t('Add holiday schedule', '添加假期安排')}</h2><button type="button" class="icon-btn" data-hol-close aria-label="Close">×</button></div>
     <div class="hol-step" data-hol-step="read">
-      ${suppliers ? html`<label class="hol-sup0">${t('Supplier', '供应商')}<select data-hol-sup0><option value="">${'— AI finds it from the notice, or choose —'}</option>${suppliers.map((s) => html`<option value="${s.id}">${s.name}</option>`)}</select></label>` : ''}
+      ${suppliers ? html`<div class="hol-sup0">${picker(suppliers, '', { name: '', required: false, placeholder: 'AI finds it from the notice, or choose…', attrs: 'data-hol-sup0' })}</div>` : ''}
       <div class="hol-in" data-hol-drop>
         <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.eml,.html" hidden data-hol-file>
         <textarea rows="6" data-hol-text aria-label="Holiday notice" placeholder="${'Paste the email text or a screenshot (⌘V / Ctrl+V), or drop a file here — PNG, JPG, PDF or email file'}"></textarea>
@@ -43,7 +44,7 @@ function holidayDialog({ action, readUrl, suppliers = null, deleteBase = '', bac
       <input type="hidden" name="id" data-hf="id"><input type="hidden" name="file_token" data-hf="file_token"><input type="hidden" name="back" value="${back}">
       <div class="hol-pick" data-hol-pickwrap hidden><label>${t('Holiday found in the file', '文件中的假期')} <select data-hol-pick></select></label></div>
       <div class="hol-row2">
-        ${suppliers ? html`<label>${t('Supplier', '供应商')}<select name="supplier_id" data-hf="supplier_id" required><option value="">— choose —</option>${suppliers.map((s) => html`<option value="${s.id}">${s.name}</option>`)}</select></label>` : ''}
+        ${suppliers ? picker(suppliers, '', { attrs: 'data-hf="supplier_id"' }) : ''}
         <label>${t('Holiday', '假期名称')}<input name="name" data-hf="name" placeholder="Chinese New Year 2027" required></label>
       </div>
       ${stageTable()}

@@ -1947,3 +1947,5 @@ table.cal td:last-child .hlanes{margin-right:-4px}table.cal td:first-child .hlan
 .hol-in.busy{opacity:.65;pointer-events:none}
 .hol-in.busy .hol-in-ic{animation:aifill-spin 1.1s linear infinite}
 .hol-read-row{margin-top:12px}
+.hol-sup0{display:block;margin-bottom:12px}.hol-row2 .pick1{min-width:0}
+.hol-sup0{font-size:inherit;font-weight:400;color:inherit}

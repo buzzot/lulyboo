@@ -243,7 +243,7 @@ module.exports = function crmRoutes(router, { db, config }) {
           <div class="sub">${e.supplier_id ? html`<a href="/admin/suppliers/${e.supplier_id}">${names[e.supplier_id]}</a>` : 'General'}${(() => { const ref = (String(e.label).match(/\bLB-\d{3,7}\b/) || [])[0]; return ref && reqByRef[ref] ? html` · <a href="/admin/requests/${reqByRef[ref]}">Open request ${ref}</a>` : ''; })()}</div></div></li>`)}</ul>` : html`<p class="muted">Nothing on this day.</p>`}
         ${dayList.some((e) => e.state === 'done') ? html`<p class="muted small">Completed tasks are shown struck through in the calendar.</p>` : ''}
         <h3>Schedule something on this day</h3>${taskForm({ suppliers, date: day, back })}</section>
-      ${HV.holidayDialog({ action: '/admin/crm/holidays', readUrl: '/admin/crm/holidays/read', suppliers, deleteBase: '/admin/crm/holidays', back, remind: true })}`,
+      ${HV.holidayDialog({ action: '/admin/crm/holidays', readUrl: '/admin/crm/holidays/read', suppliers: suppliers.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || holidays.some((h) => h.supplier_id === x.id)), deleteBase: '/admin/crm/holidays', back, remind: true })}`,
     }));
   }));
 

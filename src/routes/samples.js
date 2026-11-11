@@ -96,9 +96,9 @@ function docTiles(files, hrefOf, { zh = false, del = null } = {}) {
 
 // Supplier field as a popup with search (single choice). Leaves out inactive and "Pending: email" suppliers.
 const pickableSuppliers = (all, keepId) => all.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || x.id === keepId);
-const supplierPicker = (suppliers, sel) => html`<div class="pick1" data-single-pick><span class="lbl">Supplier</span>
-              <input type="hidden" name="supplier_id" value="${sel}" data-pick-value required>
-              <button type="button" class="pick1-btn" data-pick-open><span data-pick-label>${suppliers.find((x) => x.id === sel)?.name || 'Choose a supplier…'}</span><span aria-hidden="true">▾</span></button>
+const supplierPicker = (suppliers, sel, { name = 'supplier_id', required = true, placeholder = 'Choose a supplier…', attrs = '' } = {}) => html`<div class="pick1" data-single-pick data-placeholder="${placeholder}"><span class="lbl">Supplier</span>
+              <input type="hidden" name="${name}" value="${sel}" data-pick-value ${required ? raw('required') : ''} ${raw(attrs)}>
+              <button type="button" class="pick1-btn" data-pick-open><span data-pick-label>${suppliers.find((x) => x.id === sel)?.name || placeholder}</span><span aria-hidden="true">▾</span></button>
               <dialog class="pick-dlg" data-pick-dlg aria-label="Choose a supplier">
                 <div class="pick-head"><div class="pick-title"><h3>Choose a supplier</h3><button type="button" class="pick-x" data-pick-close aria-label="Close">×</button></div>
                   <input type="search" class="pick-q" placeholder="Search by name, country, contact or email" autocomplete="off" data-pick-q><span class="sub" data-pick-count>${suppliers.length} suppliers</span></div>

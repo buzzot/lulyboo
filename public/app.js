@@ -489,6 +489,8 @@
     var choose = function (r) { var changed = val.value !== r.getAttribute('data-id'); val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close(); var nf = box.closest('form') && box.closest('form').querySelector('[name=new_supplier]'); if (nf && nf.type !== 'hidden') nf.value = '';
       // Opened from the pencil next to the supplier name: save straight away.
       if (box.getAttribute('data-autosave') === '1') { box.removeAttribute('data-autosave'); var fm = box.closest('form'); if (changed && fm) { if (fm.requestSubmit) fm.requestSubmit(); else fm.submit(); } } };
+    // set from code (e.g. the holiday popup fills in the supplier AI found)
+    box._pick = function (id) { var r = rows.filter(function (x) { return x.getAttribute('data-id') === id; })[0]; val.value = r ? id : ''; label.textContent = r ? r.getAttribute('data-name') : (box.getAttribute('data-placeholder') || 'Choose a supplier…'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); };
     dlg.addEventListener('close', function () { setTimeout(function () { box.removeAttribute('data-autosave'); }, 0); });
     document.querySelectorAll('[data-change-supplier]').forEach(function (btn) { if (box.closest('#edit')) btn.addEventListener('click', function () { box.setAttribute('data-autosave', '1'); dlg.showModal(); q.value = ''; filter(); q.focus(); }); });
     box.querySelector('[data-pick-open]').addEventListener('click', function () { dlg.showModal(); q.value = ''; filter(); q.focus(); });
@@ -1473,10 +1475,12 @@
   }
   var F = ['order_cutoff', 'order_cutoff_after', 'last_ship', 'first_ship', 'factory_from', 'factory_to', 'office_from', 'office_to'];
   function field(k) { return form.querySelector('[data-hf="' + k + '"]'); }
+  function setSup(el, id) { if (!el) return; var b = el.closest('[data-single-pick]'); if (b && b._pick) b._pick(id || ''); else el.value = id || ''; }
   function show(step) { stepRead.hidden = step !== 'read'; form.hidden = step !== 'form'; }
   function title(en, zh) { dlg.querySelector('[data-hol-title]').innerHTML = L(en, zh); }
   function fill(h, quotes) {
-    ['id', 'name', 'notes', 'supplier_id'].forEach(function (k) { var f = field(k); if (f && h[k] !== undefined) f.value = h[k] || ''; });
+    ['id', 'name', 'notes'].forEach(function (k) { var f = field(k); if (f && h[k] !== undefined) f.value = h[k] || ''; });
+    if (h.supplier_id !== undefined) setSup(field('supplier_id'), h.supplier_id);
     F.forEach(function (k) {
       var f = field(k); if (!f) return; f.value = h[k] || '';
       f.classList.toggle('ai', !!(quotes && h[k]));
@@ -1485,7 +1489,7 @@
   }
   function open(mode, data) {
     form.reset(); found = []; token = ''; status.textContent = ''; status.classList.remove('bad');
-    textIn.value = ''; attach(null); if (sup0) sup0.value = ''; field('file_token').value = ''; field('id').value = '';
+    textIn.value = ''; attach(null); setSup(sup0, ''); setSup(field('supplier_id'), ''); field('file_token').value = ''; field('id').value = '';
     dlg.querySelector('[data-hol-pickwrap]').hidden = true; dlg.querySelector('[data-hol-src]').textContent = '';
     form.querySelectorAll('.hol-q').forEach(function (q) { q.textContent = ''; });
     var del = dlg.querySelector('[data-hol-delete]'); del.hidden = !data;
@@ -1503,7 +1507,7 @@
   });
   dlg.addEventListener('click', function (e) {
     if (e.target.closest('[data-hol-close]') || e.target === dlg) { dlg.close(); return; }
-    if (e.target.closest('[data-hol-manual]')) { title('Add holiday', '添加假期'); var s0 = field('supplier_id'); if (s0 && sup0) s0.value = sup0.value; show('form'); field('name').focus(); return; }
+    if (e.target.closest('[data-hol-manual]')) { title('Add holiday', '添加假期'); if (sup0) setSup(field('supplier_id'), sup0.value); show('form'); field('name').focus(); return; }
     if (e.target.closest('[data-hol-read]')) { send(); return; }
     if (e.target.closest('[data-hol-choose]')) { fileIn.click(); return; }
     if (e.target.closest('[data-hol-attx]')) { attach(null); return; }
@@ -1528,7 +1532,7 @@
       pick.innerHTML = found.map(function (h, i) { return '<option value="' + i + '">' + esc(h.name) + '</option>'; }).join('');
       dlg.querySelector('[data-hol-pickwrap]').hidden = found.length < 2;
       fill(found[0], found[0].quotes); field('file_token').value = token;
-      var sup = field('supplier_id'); if (sup) sup.value = (sup0 && sup0.value) || j.supplierId || '';
+      var sup = field('supplier_id'); if (sup) setSup(sup, (sup0 && sup0.value) || j.supplierId || '');
       dlg.querySelector('[data-hol-src]').innerHTML = L('Green dates were read by AI — check each one. Quotes show where it found them.', '绿色日期由 AI 识别，请逐一核对。引号内为原文。') + (j.supplierName && sup && !sup.value ? ' · AI saw: ' + esc(j.supplierName) : '');
       title('Check what AI read', '核对 AI 识别结果'); show('form');
     }).catch(function (x) { drop.classList.remove('busy'); status.innerHTML = bi(x.message); status.classList.add('bad'); });
