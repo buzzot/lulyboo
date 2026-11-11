@@ -1585,3 +1585,25 @@
   });
   apply();
 })();
+
+// CRM calendar · "Supplier holidays · coming up": filter by supplier, show 8 at a time
+(function () {
+  var card = document.querySelector('[data-hol-upcard]'); if (!card) return;
+  var sel = card.querySelector('[data-hol-upf]'), more = card.querySelector('[data-hol-upmore]'), none = card.querySelector('[data-hol-upnone]');
+  var items = Array.prototype.slice.call(card.querySelectorAll('.hol-up > li')), all = false, N = 8;
+  function apply() {
+    var id = sel ? sel.value : '', shown = 0, match = 0;
+    items.forEach(function (li) {
+      var ok = (!id || li.getAttribute('data-sup') === id) && !li.classList.contains('sup-off');
+      if (ok) match++;
+      li.hidden = !ok || (!all && shown >= N); if (!li.hidden) shown++;
+    });
+    if (none) none.hidden = match > 0;
+    if (more) { more.hidden = match <= N; more.textContent = all ? 'Show fewer' : 'Show all ' + match; }
+  }
+  if (sel) sel.addEventListener('change', function () { all = false; apply(); });
+  if (more) more.addEventListener('click', function () { all = !all; apply(); });
+  // the supplier buttons above the calendar hide suppliers too
+  var bar = document.querySelector('[data-cal-filters]'); if (bar) bar.addEventListener('click', function () { setTimeout(apply, 0); });
+  apply();
+})();

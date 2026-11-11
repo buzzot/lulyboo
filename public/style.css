@@ -1949,3 +1949,8 @@ table.cal td:last-child .hlanes{margin-right:-4px}table.cal td:first-child .hlan
 .hol-read-row{margin-top:12px}
 .hol-sup0{display:block;margin-bottom:12px}.hol-row2 .pick1{min-width:0}
 .hol-sup0{font-size:inherit;font-weight:400;color:inherit}
+.hol-up-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.hol-up-h h2{margin:0}
+.hol-up-f select{font:inherit;font-size:13px;border:1px solid #ddd9d4;border-radius:8px;padding:5px 8px;max-width:240px;background:#fff}
+.hol-up li[hidden]{display:none}
+.hol-up-more{margin-top:6px;font-size:13px}
