@@ -2656,7 +2656,7 @@ test('supplier holidays: AI read, save, calendar bands, portal page, confirm, re
   t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
 
   const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
-  const sup = await db.insert('suppliers', { name: 'Melikey Silicone', email: 'm@melikey.cn' });
+  const sup = await db.insert('suppliers', { name: 'Melikey Silicone', email: 'm@melikey.cn', crm_status: 'Active' });
   await db.insert('supplier_users', { supplier_id: sup.id, email: 'm@melikey.cn', name: 'Amy', status: 'active', password_hash: await hashPassword('correct horse battery') });
   const supCookie = (await req(base, 'POST', '/login', { form: { email: 'm@melikey.cn', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
 
@@ -2704,8 +2704,12 @@ test('supplier holidays: AI read, save, calendar bands, portal page, confirm, re
   assert.doesNotMatch((await req(base, 'GET', '/portal/holidays?year=2027', { cookie: oc })).text, /class="hol-card"/);
 
   // Reminder email to suppliers who have not confirmed
+  const acts0 = db.tables.supplier_activities.length;
+  await db.update('suppliers', { id: sup.id }, { holidays_confirmed_year: null });
   const rm = await req(base, 'POST', '/admin/crm/holidays/remind', { cookie: admin, form: { year: String(year) } });
   assert.equal(rm.status, 303);
+  const asked = db.tables.supplier_activities.slice(acts0).filter((a) => /Asked to confirm/.test(a.summary));
+  assert.deepEqual(asked.map((a) => a.supplier_id), [sup.id], 'only Active suppliers are emailed');
 
   // Delete removes the open reminder tasks too
   await req(base, 'POST', `/admin/crm/holidays/${h.id}/delete`, { cookie: admin, form: {} });

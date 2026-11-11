@@ -1930,3 +1930,20 @@ table.cal td:last-child .hlanes{margin-right:-4px}table.cal td:first-child .hlan
 .hol-dlg form.hol-step{display:block;gap:0}
 .hol-dlg .rp-actions{margin-top:12px}
 .hol-sent{white-space:nowrap}
+/* holiday popup: one field for drop / paste / type */
+.hol-sup0{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:#555;margin-bottom:12px}
+.hol-sup0 select{font:inherit;font-size:14px;font-weight:400;color:var(--ink);border:1px solid #ddd9d4;border-radius:8px;padding:8px 10px}
+.hol-in{position:relative;border:1.5px dashed #e3b7b3;border-radius:12px;background:#fff;transition:border-color .15s,box-shadow .15s}
+.hol-in:focus-within{border-color:var(--brand);border-style:solid;box-shadow:0 0 0 3px rgba(222,115,103,.12)}
+.hol-in textarea{display:block;width:100%;border:0!important;border-radius:12px 12px 0 0;padding:12px 14px;font:inherit;font-size:14px;resize:vertical;min-height:120px;background:transparent;outline:0;box-shadow:none}
+.hol-in-bar{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 12px;border-top:1px solid #f3e1de;background:var(--brand-soft);border-radius:0 0 11px 11px}
+.hol-in-ic{width:26px;height:26px;border-radius:8px;background:#fff;color:var(--brand);display:grid;place-items:center;font-size:13px;flex:0 0 auto}
+.hol-in-hint{flex:1;font-size:12.5px;color:#7a6560;line-height:1.35}
+.hol-att{flex:1;display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:13px;font-weight:600}
+.hol-att>span{background:#fff;border:1px solid #ecd3cf;border-radius:7px;padding:3px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.hol-att .icon-btn{width:24px;height:24px;font-size:14px}
+.hol-in-over{display:none;position:absolute;inset:0;border-radius:11px;background:rgba(251,227,225,.92);color:var(--brand);font-weight:700;align-items:center;justify-content:center;pointer-events:none}
+.hol-in.over{border-color:var(--brand);border-style:solid}.hol-in.over .hol-in-over{display:flex}
+.hol-in.busy{opacity:.65;pointer-events:none}
+.hol-in.busy .hol-in-ic{animation:aifill-spin 1.1s linear infinite}
+.hol-read-row{margin-top:12px}

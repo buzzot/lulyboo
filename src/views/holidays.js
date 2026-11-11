@@ -24,14 +24,18 @@ function holidayDialog({ action, readUrl, suppliers = null, deleteBase = '', bac
   return html`<dialog class="rp-modal hol-dlg" data-hol-dlg data-read="${readUrl}" data-delete-base="${deleteBase}" aria-labelledby="hol-dlg-t">
     <div class="rp-top"><h2 id="hol-dlg-t" data-hol-title>${t('Add holiday schedule', '添加假期安排')}</h2><button type="button" class="icon-btn" data-hol-close aria-label="Close">×</button></div>
     <div class="hol-step" data-hol-step="read">
-      <label class="hol-drop" data-hol-drop tabindex="0">
+      ${suppliers ? html`<label class="hol-sup0">${t('Supplier', '供应商')}<select data-hol-sup0><option value="">${'— AI finds it from the notice, or choose —'}</option>${suppliers.map((s) => html`<option value="${s.id}">${s.name}</option>`)}</select></label>` : ''}
+      <div class="hol-in" data-hol-drop>
         <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.eml,.html" hidden data-hol-file>
-        <span class="hol-drop-ic" aria-hidden="true">✦</span>
-        <span><b>${t('Drop a screenshot, PDF or email file', '拖入截图、PDF 或邮件文件')}</b><small>${t('AI reads the order cut-off, shipping cut-off, factory and office closing dates. You check them before saving.', 'AI 会识别下单截止、出货截止、工厂和办公室放假日期，保存前请核对。')}</small></span>
-        <span class="btn ghost small">${t('Choose file', '选择文件')}</span>
-      </label>
-      <div class="hol-or"><span>${t('or paste the email text', '或粘贴邮件内容')}</span></div>
-      <textarea rows="5" data-hol-text placeholder="As the 2027 Chinese New Year is approaching… Factory holiday: Jan 25 – Feb 21, 2027"></textarea>
+        <textarea rows="6" data-hol-text aria-label="Holiday notice" placeholder="${'Paste the email text or a screenshot (⌘V / Ctrl+V), or drop a file here — PNG, JPG, PDF or email file'}"></textarea>
+        <div class="hol-in-bar">
+          <span class="hol-in-ic" aria-hidden="true">✦</span>
+          <span class="hol-in-hint" data-hol-hint>${t('AI reads the order cut-off, shipping cut-off, factory and office closing dates. You check them before saving.', 'AI 会识别下单截止、出货截止、工厂和办公室放假日期，保存前请核对。')}</span>
+          <span class="hol-att" data-hol-att hidden><span data-hol-attname></span><button type="button" class="icon-btn" data-hol-attx aria-label="Remove file">×</button></span>
+          <button type="button" class="btn ghost small" data-hol-choose>${t('Choose file', '选择文件')}</button>
+        </div>
+        <div class="hol-in-over" aria-hidden="true">${t('Drop the file here', '将文件拖到这里')}</div>
+      </div>
       <div class="hol-read-row"><label class="hol-sent">${t('Sent on', '发送日期')} <input type="date" data-hol-sent></label><button type="button" class="btn" data-hol-read>${t('Read with AI', 'AI 识别')}</button><button type="button" class="link" data-hol-manual>${t('Enter dates by hand', '手动填写')}</button></div>
       <p class="hol-status" data-hol-status role="status" aria-live="polite"></p>
     </div>

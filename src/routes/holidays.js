@@ -121,7 +121,7 @@ module.exports = function holidayRoutes(router, { db, config }) {
     const { fields: f } = await parseForm(req);
     const year = Number(f.year) || H.targetYear();
     const P = require('../projects');
-    const sups = (await db.list('suppliers')).filter((s) => !s.archived_at && Number(s.holidays_confirmed_year) !== year);
+    const sups = (await db.list('suppliers')).filter((s) => s.crm_status === 'Active' && !s.archived_at && Number(s.holidays_confirmed_year) !== year);
     const ids = String(f.ids || '').split(',').filter(Boolean);
     let sent = 0;
     for (const s of ids.length ? sups.filter((x) => ids.includes(x.id)) : sups) {
@@ -133,7 +133,7 @@ module.exports = function holidayRoutes(router, { db, config }) {
       });
       if (ok) { sent++; await log(s.id, `Asked to confirm the ${year} holiday schedule (email).`); }
     }
-    flash(res, sent ? 'ok' : 'warn', sent ? `Reminder sent to ${sent} supplier${sent === 1 ? '' : 's'}` : 'No reminder sent (no supplier contact emails, or everyone has confirmed)');
+    flash(res, sent ? 'ok' : 'warn', sent ? `Reminder sent to ${sent} supplier${sent === 1 ? '' : 's'}` : 'No reminder sent (no Active suppliers with a contact email, or all have confirmed)');
     res.redirect(backTo(f.back, '/admin/crm/calendar'));
   }));
 

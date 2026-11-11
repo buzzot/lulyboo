@@ -1463,7 +1463,14 @@
   var bi = function (s) { var m = String(s || '').match(/^⟪([^⟫]*)⟫⟦([^⟧]*)⟧$/); return m ? L(esc(m[1]), esc(m[2])) : esc(s); };
   var stepRead = dlg.querySelector('[data-hol-step="read"]'), form = dlg.querySelector('[data-hol-step="form"]');
   var status = dlg.querySelector('[data-hol-status]'), fileIn = dlg.querySelector('[data-hol-file]'), drop = dlg.querySelector('[data-hol-drop]');
-  var pick = dlg.querySelector('[data-hol-pick]'), found = [], token = '';
+  var pick = dlg.querySelector('[data-hol-pick]'), found = [], token = '', attached = null;
+  var textIn = dlg.querySelector('[data-hol-text]'), sup0 = dlg.querySelector('[data-hol-sup0]');
+  var att = dlg.querySelector('[data-hol-att]'), hint = dlg.querySelector('[data-hol-hint]');
+  function attach(f) {
+    attached = f || null; att.hidden = !attached; hint.hidden = !!attached;
+    dlg.querySelector('[data-hol-attname]').textContent = attached ? '📎 ' + (attached.name || 'screenshot.png') + ' · ' + Math.max(1, Math.round(attached.size / 1024)) + ' KB' : '';
+    status.textContent = ''; status.classList.remove('bad');
+  }
   var F = ['order_cutoff', 'order_cutoff_after', 'last_ship', 'first_ship', 'factory_from', 'factory_to', 'office_from', 'office_to'];
   function field(k) { return form.querySelector('[data-hf="' + k + '"]'); }
   function show(step) { stepRead.hidden = step !== 'read'; form.hidden = step !== 'form'; }
@@ -1478,7 +1485,7 @@
   }
   function open(mode, data) {
     form.reset(); found = []; token = ''; status.textContent = ''; status.classList.remove('bad');
-    dlg.querySelector('[data-hol-text]').value = ''; field('file_token').value = ''; field('id').value = '';
+    textIn.value = ''; attach(null); if (sup0) sup0.value = ''; field('file_token').value = ''; field('id').value = '';
     dlg.querySelector('[data-hol-pickwrap]').hidden = true; dlg.querySelector('[data-hol-src]').textContent = '';
     form.querySelectorAll('.hol-q').forEach(function (q) { q.textContent = ''; });
     var del = dlg.querySelector('[data-hol-delete]'); del.hidden = !data;
@@ -1486,7 +1493,7 @@
     else if (mode === 'manual') { title('Add holiday', '添加假期'); show('form'); }
     else { title('Add holiday schedule', '添加假期安排'); show('read'); }
     if (dlg.showModal) dlg.showModal();
-    setTimeout(function () { var f = data || mode === 'manual' ? field('name') : drop; if (f) f.focus(); }, 30);
+    setTimeout(function () { var f = data || mode === 'manual' ? field('name') : (sup0 || textIn); if (f) f.focus(); }, 30);
   }
   document.addEventListener('click', function (e) {
     var o = e.target.closest && e.target.closest('[data-hol-open]');
@@ -1496,8 +1503,10 @@
   });
   dlg.addEventListener('click', function (e) {
     if (e.target.closest('[data-hol-close]') || e.target === dlg) { dlg.close(); return; }
-    if (e.target.closest('[data-hol-manual]')) { title('Add holiday', '添加假期'); show('form'); field('name').focus(); return; }
-    if (e.target.closest('[data-hol-read]')) { send(null); return; }
+    if (e.target.closest('[data-hol-manual]')) { title('Add holiday', '添加假期'); var s0 = field('supplier_id'); if (s0 && sup0) s0.value = sup0.value; show('form'); field('name').focus(); return; }
+    if (e.target.closest('[data-hol-read]')) { send(); return; }
+    if (e.target.closest('[data-hol-choose]')) { fileIn.click(); return; }
+    if (e.target.closest('[data-hol-attx]')) { attach(null); return; }
     if (e.target.closest('[data-hol-delete]')) {
       var id = field('id').value; if (!id) return;
       if (!confirm(document.documentElement.lang === 'zh-CN' ? '删除此假期？' : 'Delete this holiday?')) return;
@@ -1506,9 +1515,9 @@
       document.body.appendChild(f); f.submit();
     }
   });
-  function send(file) {
-    var text = dlg.querySelector('[data-hol-text]').value.trim();
-    if (!file && !text) { status.innerHTML = L('Choose a file or paste the email text first.', '请先选择文件或粘贴邮件内容。'); status.classList.add('bad'); return; }
+  function send() {
+    var file = attached, text = textIn.value.trim();
+    if (!file && !text) { status.innerHTML = L('Paste the email text or a screenshot, or drop a file first.', '请先粘贴邮件内容或截图，或拖入文件。'); status.classList.add('bad'); return; }
     var fd = new FormData(); if (file) fd.append('file', file); if (text) fd.append('text', text);
     var sent = dlg.querySelector('[data-hol-sent]').value; if (sent) fd.append('sent', sent);
     drop.classList.add('busy'); status.classList.remove('bad'); status.innerHTML = L('Reading with AI…', 'AI 识别中…');
@@ -1519,17 +1528,28 @@
       pick.innerHTML = found.map(function (h, i) { return '<option value="' + i + '">' + esc(h.name) + '</option>'; }).join('');
       dlg.querySelector('[data-hol-pickwrap]').hidden = found.length < 2;
       fill(found[0], found[0].quotes); field('file_token').value = token;
-      var sup = field('supplier_id'); if (sup && j.supplierId) sup.value = j.supplierId;
-      dlg.querySelector('[data-hol-src]').innerHTML = L('Green dates were read by AI — check each one. Quotes show where it found them.', '绿色日期由 AI 识别，请逐一核对。引号内为原文。') + (j.supplierName && sup && !j.supplierId ? ' · AI saw: ' + esc(j.supplierName) : '');
+      var sup = field('supplier_id'); if (sup) sup.value = (sup0 && sup0.value) || j.supplierId || '';
+      dlg.querySelector('[data-hol-src]').innerHTML = L('Green dates were read by AI — check each one. Quotes show where it found them.', '绿色日期由 AI 识别，请逐一核对。引号内为原文。') + (j.supplierName && sup && !sup.value ? ' · AI saw: ' + esc(j.supplierName) : '');
       title('Check what AI read', '核对 AI 识别结果'); show('form');
     }).catch(function (x) { drop.classList.remove('busy'); status.innerHTML = bi(x.message); status.classList.add('bad'); });
   }
   pick.addEventListener('change', function () { var h = found[+pick.value]; if (h) { fill(h, h.quotes); field('file_token').value = token; } });
-  fileIn.addEventListener('change', function () { if (fileIn.files[0]) send(fileIn.files[0]); fileIn.value = ''; });
-  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
-  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
-  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
-  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) send(f); });
+  fileIn.addEventListener('change', function () { if (fileIn.files[0]) attach(fileIn.files[0]); fileIn.value = ''; });
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { if (!e.dataTransfer || [].indexOf.call(e.dataTransfer.types || [], 'Files') < 0) return; e.preventDefault(); drop.classList.add('over'); }); });
+  drop.addEventListener('dragleave', function (e) { if (!drop.contains(e.relatedTarget)) drop.classList.remove('over'); });
+  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; drop.classList.remove('over'); if (f) { e.preventDefault(); attach(f); } });
+  // paste a screenshot straight from the clipboard (text pastes into the box as usual)
+  textIn.addEventListener('paste', function (e) {
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file') {
+        var f = items[i].getAsFile(); if (!f) continue;
+        e.preventDefault();
+        if (!f.name || f.name === 'image.png') { try { f = new File([f], 'screenshot-' + new Date().toISOString().slice(0, 10) + '.' + ((f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')), { type: f.type }); } catch (x) { /* old browser keeps the blob */ } }
+        attach(f); return;
+      }
+    }
+  });
   form.addEventListener('input', function (e) { if (e.target.classList.contains('ai')) e.target.classList.remove('ai'); });
   form.addEventListener('submit', function (e) {
     if (!F.some(function (k) { var f = field(k); return f && f.value; })) { e.preventDefault(); dlg.querySelector('[data-hol-src]').innerHTML = L('Enter at least one date.', '请至少填写一个日期。'); }
