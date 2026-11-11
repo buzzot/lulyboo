@@ -25,7 +25,7 @@ const ORIGINS = [
 ];
 const DESTS = [
   { code: 'USLGB', name: 'Long Beach', alias: /long\s*beach|\blgb\b|uslgb/i },
-  { code: 'USLAX', name: 'Los Angeles', alias: /los\s*angeles|\blax?\b|uslax|san\s*pedro/i },
+  { code: 'USLAX', name: 'Los Angeles', alias: /los\s*angeles|\blax?\b|uslax|uslsa|san\s*pedro/i },
 ];
 const PORT = Object.fromEntries([...ORIGINS, ...DESTS].map((p) => [p.code, p]));
 function portCode(s) {
@@ -167,11 +167,13 @@ async function fetchMaersk(src, origin, destination, { from, to }) {
 // ── COSCO open platform: /service/info/schedule ────────────────────────────
 // Cities are given as "City,City,Province,Country,UNLOCODE" plus COSCO's city id (uuid). The ids come from
 // COSCO_CITY_IDS (JSON, e.g. {"CNNGB":"7388…"}) or the defaults below.
+// COSCO's own city names and ids (from COSCO's public city lookup, elines.coscoshipping.com, Nov 2026).
+// Guangzhou's container port is Nansha, which is where COSCO's Guangzhou sailings load.
 const COSCO_CITY = {
-  CNNGB: 'Ningbo,Ningbo,Zhejiang,China,CNNGB', CNSHA: 'Shanghai,Shanghai,Shanghai,China,CNSHA', CNYTN: 'Yantian,Shenzhen,Guangdong,China,CNYTN',
-  CNCAN: 'Guangzhou,Guangzhou,Guangdong,China,CNCAN', USLGB: 'Long Beach,Long Beach,CA,United States,USLGB', USLAX: 'Los Angeles,Los Angeles,CA,United States,USLAX',
+  CNNGB: 'Ningbo,Ningbo,Zhejiang,China,CNNBO', CNSHA: 'Shanghai,Shanghai,Shanghai,China,CNSHA', CNYTN: 'Yantian,Shenzhen,Guangdong,China,CNYTN',
+  CNCAN: 'Nansha,Guangzhou,Guangdong,China,CNNSA', USLGB: 'Long Beach,Los Angeles,CA,United States,USLGB', USLAX: 'Los Angeles,Los Angeles,CA,United States,USLSA',
 };
-const COSCO_CITY_ID = { CNSHA: '738872886232873' };   // from COSCO's own documentation
+const COSCO_CITY_ID = { CNNGB: '738872886232879', CNSHA: '738872886232873', CNYTN: '738872886233032', CNCAN: '738879328681983', USLGB: '738872886242849', USLAX: '738872886242812' };
 function coscoCityIds() { let x = {}; try { x = JSON.parse(env('COSCO_CITY_IDS') || '{}'); } catch { /* ignore */ } return { ...COSCO_CITY_ID, ...x }; }
 let coscoLineMode = null;   // 'path' | 'url': what the gateway signs as the request line (learned on first success)
 function coscoHeaders(body, requestLine) {

@@ -2079,7 +2079,8 @@ test('sailing schedules: COSCO open platform (HMAC-signed) adapter', async (t) =
   assert.equal(SC.apiSources().find((x) => x.code === 'COSU').configured, true);
   const r = await SC.runRefresh({ db });
   assert.equal(r.errors.length, 0, r.errors.join(' | '));
-  assert.equal(seen.length, 8); assert.equal(seen[0].originCity, 'Ningbo,Ningbo,Zhejiang,China,CNNGB'); assert.equal(seen[0].dateLength, 8);
+  assert.equal(seen.length, 8); assert.equal(seen[0].originCity, 'Ningbo,Ningbo,Zhejiang,China,CNNBO'); assert.equal(seen[0].originCityUuid, '111'); assert.equal(seen[0].dateLength, 8);   // COSCO_CITY_IDS in Railway overrides the built-in ids
+  assert.ok(seen.every((b) => b.originCityUuid && b.destinationCityUuid));                     // every lane has COSCO's city ids
   const rows = db.tables.sailings.sort((a, b) => a.etd.localeCompare(b.etd));
   assert.equal(rows.length, 2);
   assert.equal(rows[0].carrier, 'COSCO'); assert.equal(rows[0].vessel, 'COSCO ITALY'); assert.equal(rows[0].voyage, '123E'); assert.equal(rows[0].service, 'AAC');
@@ -2540,12 +2541,12 @@ test('orders: delete a line or a whole PO from the PO page (with confirm)', asyn
   assert.deepEqual(db.tables.plan_orders.map((o) => o.po), ['PO900020']);
 });
 
-test('carrier refresh: what COSCO answered is shown in the Carrier APIs box; lanes without a city id are still tried', async (t) => {
+test('carrier refresh: what COSCO answered is shown in the Carrier APIs box', async (t) => {
   const SC = require('../src/schedules');
   process.env.COSCO_API_KEY = 'k'; process.env.COSCO_SECRET_KEY = 's';
   const realFetch = global.fetch; const bodies = [];
   global.fetch = async (url, opts = {}) => {
-    if (String(url).includes('coscoshipping')) { const b = JSON.parse(opts.body.toString()); bodies.push(b); return new Response(JSON.stringify(b.originCityUuid ? { code: '0', data: { content: { data: [] } } } : { code: '500', message: 'city not found' }), { status: 200 }); }
+    if (String(url).includes('coscoshipping')) { const b = JSON.parse(opts.body.toString()); bodies.push(b); return new Response(JSON.stringify(!b.originCity.startsWith('Nansha') ? { code: '0', data: { content: { data: [] } } } : { code: '500', message: 'failed call!!!' }), { status: 200 }); }
     return realFetch(url, opts);
   };
   const db = seedDb();
@@ -2554,9 +2555,9 @@ test('carrier refresh: what COSCO answered is shown in the Carrier APIs box; lan
   const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
   await req(base, 'POST', '/admin/logistics/schedules/refresh', { cookie, form: {} });
   assert.equal(bodies.length, 8);                                                        // every lane tried
-  assert.ok(bodies.some((b) => b.originCity.startsWith('Ningbo') && !b.originCityUuid));
+  assert.ok(bodies.every((b) => b.originCityUuid && b.destinationCityUuid));
   assert.equal(SC.LAST_RUN.COSCO.lanes, 8);
   const page = (await req(base, 'GET', '/admin/logistics/schedules', { cookie })).text;
-  assert.match(page, /Last check[\s\S]*8 lanes · 0 sailings · 6 failed/);
-  assert.match(page, /What COSCO answered[\s\S]*Ningbo→Long Beach: COSCO error 500: city not found \(no city id for Ningbo, Long Beach\)/);
+  assert.match(page, /Last check[\s\S]*8 lanes · 0 sailings · 2 failed/);
+  assert.match(page, /What COSCO answered[\s\S]*Guangzhou→Long Beach: COSCO error 500: failed call!!!/); assert.match(page, /Ningbo→Long Beach: COSCO answered without sailings/);
 });
