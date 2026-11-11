@@ -2561,3 +2561,31 @@ test('carrier refresh: what COSCO answered is shown in the Carrier APIs box', as
   assert.match(page, /Last check[\s\S]*8 lanes · 0 sailings · 2 failed/);
   assert.match(page, /What COSCO answered[\s\S]*Guangzhou→Long Beach: COSCO error 500: failed call!!!/); assert.match(page, /Ningbo→Long Beach: COSCO answered without sailings/);
 });
+
+test('PO import with SKUs only: each SKU is its own line (never "whole PO"), name from the product list, SKU editable in review', async (t) => {
+  const PL = require('../src/planning');
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch;
+  const answer = { orders: [{ po: '800019', sku: 'TBT 001', qty: 8028, production_status: 'in production', ready_date: '2026-11-26' }, { po: '800019', sku: 'LTT 001', qty: 5000, production_status: 'in production', ready_date: '2026-11-26' }, { po: '800025', sku: 'LTTP 001', qty: 5000, ready_date: '2026-12-13' }] };
+  global.fetch = async (url, opts = {}) => (String(url).includes('api.anthropic.com') ? new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_orders', input: answer }] }), { status: 200 }) : realFetch(url, opts));
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Huanger' });
+  await db.insert('products', { supplier_id: h.id, product_name: 'Teething bite toy', supplier_sku: 'TBT-001' });
+  const r = await PL.readOrders({ name: 'status.png', buffer: Buffer.from('x'), text: '' });
+  assert.deepEqual(r.orders.map((o) => o.product), ['TBT 001', 'LTT 001', 'LTTP 001']);
+  // review screen shows SKU column and the catalog name
+  const fd = new FormData(); fd.append('supplier_id', h.id); fd.append('file', new Blob([Buffer.from('%PDF-1.4')], { type: 'application/pdf' }), 'status.pdf');
+  const rev = await (await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd, headers: { cookie } })).text();
+  assert.match(rev, /<th>SKU<\/th>/); assert.match(rev, /name="r0_sku" value="TBT 001"/); assert.match(rev, /name="r0_product" value="Teething bite toy"/);
+  assert.match(rev, /name="r1_product" value="LTT 001"/);
+  // save: three separate lines
+  const saved = await PL.save(db, h.id, [{ po: '800019', sku: 'TBT 001', product: null, qty: 8028 }, { po: '800019', sku: 'LTT 001', product: null, qty: 5000 }, { po: '800025', sku: 'LTTP 001', qty: 5000 }], { batch: 'b', sourceName: 's' });
+  assert.equal(saved.added, 3);
+  const ls = db.tables.plan_orders.filter((o) => o.supplier_id === h.id);
+  assert.equal(ls.length, 3); assert.deepEqual(ls.map((o) => o.sku).sort(), ['LTT 001', 'LTTP 001', 'TBT 001']);
+  assert.equal(ls.find((o) => o.sku === 'TBT 001').product, 'Teething bite toy');
+  assert.equal(ls.find((o) => o.sku === 'LTT 001').product, 'LTT 001');
+});

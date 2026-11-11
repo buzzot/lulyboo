@@ -269,10 +269,11 @@ function planningRoutes(router, { db, config }) {
         <form method="post" action="${BASE}/save" data-busy class="card">
           <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
           <input type="hidden" name="source" value="${docs.map((f) => f.name).join(', ') || 'Pasted text'}">
-          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
+          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>SKU</th><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
           <tbody>${d.map((o, i) => html`<tr class="${o.change}">
             <td><input type="checkbox" name="r${i}_on" value="1" ${o.change === 'same' ? '' : raw('checked')} aria-label="Save line ${i + 1}"><input type="hidden" name="r${i}_json" value="${JSON.stringify(o)}"></td>
             <td><input name="r${i}_po" value="${o.po}" class="w-po"></td>
+            <td><input name="r${i}_sku" value="${o.sku || ''}" class="w-sku" placeholder="—" aria-label="SKU"></td>
             <td><input name="r${i}_product" value="${o.product || ''}" class="w-prod" placeholder="(whole PO)"></td>
             <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric"></td>
             <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece"></td>
@@ -282,7 +283,7 @@ function planningRoutes(router, { db, config }) {
             <td><input name="r${i}_pending" value="${o.pending_from_us || ''}" class="w-st"></td>
             <td><select name="r${i}_port">${portOpts(o.port)}</select></td>
             <td>${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
-          <p class="sub">Lines with no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
+          <p class="sub">Lines with no SKU and no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
           <button class="btn">Save checked lines</button>
         </form>`,
     }));
@@ -310,7 +311,7 @@ function planningRoutes(router, { db, config }) {
       let o = {}; try { o = JSON.parse(fields[`r${i}_json`] || '{}'); } catch { /* ignore */ }
       const num = (v) => { const x = Number(String(v || '').replace(/[^0-9.\-]/g, '')); return String(v || '').trim() && Number.isFinite(x) ? x : null; };
       const cbm = num(fields[`r${i}_cbm`]);
-      lines.push({ ...o, po: String(fields[`r${i}_po`] || o.po || '').trim().slice(0, 60), product: String(fields[`r${i}_product`] || '').trim().slice(0, 300) || null,
+      lines.push({ ...o, po: String(fields[`r${i}_po`] || o.po || '').trim().slice(0, 60), sku: String(fields[`r${i}_sku`] ?? o.sku ?? '').trim().slice(0, 80) || null, product: String(fields[`r${i}_product`] || '').trim().slice(0, 300) || String(fields[`r${i}_sku`] ?? o.sku ?? '').trim().slice(0, 300) || null,
         qty: num(fields[`r${i}_qty`]), unit_price: num(fields[`r${i}_price`]), currency: o.currency || (num(fields[`r${i}_price`]) ? 'USD' : null), cbm, cbm_estimated: !!o.cbm_estimated && cbm === o.cbm, ready_date: PL.isoDay(fields[`r${i}_ready`]),
         production_status: String(fields[`r${i}_status`] || '').trim().slice(0, 120) || null, pending_from_us: String(fields[`r${i}_pending`] || '').trim().slice(0, 200) || null,
         port: SC.PORT[fields[`r${i}_port`]] ? fields[`r${i}_port`] : null });

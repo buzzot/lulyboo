@@ -78,7 +78,7 @@ const TOOL = {
           properties: {
             po: { type: 'string', description: 'PO number exactly as written, e.g. PO200013' },
             product: { type: 'string', description: 'Product name without the item number (put that in sku); empty when the document lists only PO numbers' },
-            sku: { type: 'string', description: 'Item / model number if shown' },
+            sku: { type: 'string', description: 'SKU / item no. / model / article number of the product, if shown (e.g. "TBT 001"). A line with a SKU is a product line even without a description.' },
             qty: { type: 'number', description: 'Order quantity in pieces' },
             cartons: { type: 'number' },
             cbm: { type: 'number', description: 'Total goods volume in m³ for this line' },
@@ -139,7 +139,7 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
       unit_price: num(o.unit_price), currency: txt(o.currency, 8),
       units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg),
     };
-  }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po).map((o) => ({ ...o, product: cleanName(o.product, o.sku) }));
+  }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po).map((o) => ({ ...o, product: cleanName(o.product, o.sku) || o.sku || null }));
   return { orders, supplierName: txt(result?.supplier_name, 120) };
 }
 
@@ -182,6 +182,8 @@ function diff(incoming, existing) {
 
 /** Save reviewed lines: update matched rows (only fields that came in), insert the rest. */
 async function save(db, supplierId, lines, { batch, sourceName }) {
+  for (const o of lines) if (!o.product && o.sku) o.product = o.sku;   // a SKU makes it a product line, never "(whole PO)"
+  await namesFromCatalog(db, supplierId, lines);
   const existing = await db.list('plan_orders', { filters: { supplier_id: supplierId } });
   const d = diff(lines, existing);
   const now = new Date().toISOString();
@@ -415,8 +417,22 @@ async function packingToCatalog(db, supplierId, lines) {
   return n;
 }
 
+/** Lines known only by SKU ("TBT 001") take the product name from the supplier's product list when it has that SKU. */
+async function namesFromCatalog(db, supplierId, lines) {
+  if (!supplierId || !lines.some((o) => o.sku && (!o.product || normSku(o.product) === normSku(o.sku)))) return lines;
+  const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
+  for (const o of lines) {
+    if (!o.sku) continue;
+    if (o.product && normSku(o.product) !== normSku(o.sku)) continue;
+    const p = prods.find((x) => x.supplier_sku && normSku(x.supplier_sku) === normSku(o.sku));
+    o.product = p?.product_name || o.product || o.sku;
+  }
+  return lines;
+}
+
 /** For the review screen: fill m³ of lines that have none, from their own / earlier / catalog packing. */
 async function estimateCbm(db, supplierId, lines) {
+  await namesFromCatalog(db, supplierId, lines);
   const prods = await db.list('products', { filters: { supplier_id: supplierId } }).catch(() => []);
   const history = await db.list('plan_orders', { filters: { supplier_id: supplierId } }).catch(() => []);
   for (const o of lines) {
@@ -456,4 +472,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
