@@ -905,19 +905,79 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') d.open = false; });
   })();
 
-  // Main navigation: click to open a group (hover also works on desktop), Escape / outside click closes, "Menu" toggles on small screens
+  // Main navigation: hover opens a group's menu (desktop, short delay), the group name goes to the area's main page;
+  // on touch / small screens the first tap opens the menu. Escape / outside click closes, "Menu" toggles on small screens.
   (function () {
     var nav = document.getElementById('mainnav'); if (!nav) return;
     var toggle = document.querySelector('.nav-toggle');
-    var groups = nav.querySelectorAll('.nav-group');
-    var closeAll = function (except) { Array.prototype.forEach.call(groups, function (g) { if (g !== except) { g.classList.remove('open'); g.querySelector('.nav-btn').setAttribute('aria-expanded', 'false'); } }); };
-    Array.prototype.forEach.call(groups, function (g) {
-      var btn = g.querySelector('.nav-btn');
-      btn.addEventListener('click', function () { var open = !g.classList.contains('open'); closeAll(g); g.classList.toggle('open', open); btn.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+    var groups = Array.prototype.slice.call(nav.querySelectorAll('.nav-group'));
+    var canHover = window.matchMedia ? window.matchMedia('(hover: hover) and (pointer: fine) and (min-width: 901px)') : { matches: false };
+    var setOpen = function (g, open) { g.classList.toggle('open', open); g.querySelector('.nav-btn').setAttribute('aria-expanded', open ? 'true' : 'false'); };
+    var closeAll = function (except) { groups.forEach(function (g) { if (g !== except) setOpen(g, false); }); };
+    groups.forEach(function (g) {
+      var btn = g.querySelector('.nav-btn'), tIn, tOut;
+      g.addEventListener('mouseenter', function () { if (!canHover.matches) return; clearTimeout(tOut); tIn = setTimeout(function () { closeAll(g); setOpen(g, true); }, nav.querySelector('.nav-group.open') ? 0 : 110); });
+      g.addEventListener('mouseleave', function () { if (!canHover.matches) return; clearTimeout(tIn); tOut = setTimeout(function () { setOpen(g, false); }, 220); });
+      btn.addEventListener('click', function (e) {
+        if (canHover.matches) return; // desktop: the name is a link to the area's main page
+        if (!g.classList.contains('open')) { e.preventDefault(); closeAll(g); setOpen(g, true); }
+      });
+      btn.addEventListener('keydown', function (e) { if (e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); closeAll(g); setOpen(g, true); var first = g.querySelector('.nav-menu a'); if (first) first.focus(); } });
+      g.addEventListener('focusout', function (e) { if (!g.contains(e.relatedTarget)) setOpen(g, false); });
     });
     document.addEventListener('click', function (e) { if (!nav.contains(e.target) && !(toggle && toggle.contains(e.target))) closeAll(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeAll(); if (toggle) { nav.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); } } });
     if (toggle) toggle.addEventListener('click', function () { var o = nav.classList.toggle('open'); toggle.setAttribute('aria-expanded', o ? 'true' : 'false'); });
+  })();
+
+  // ⌘K / Ctrl+K quick jump: pages from the menu + suppliers, POs, projects, samples, RFQs, products from /admin/quick
+  (function () {
+    var ov = document.querySelector('[data-qk-ov]'); if (!ov) return;
+    var q = ov.querySelector('[data-qk-q]'), res = ov.querySelector('[data-qk-res]');
+    var pages = []; try { pages = JSON.parse(ov.querySelector('[data-qk-pages]').textContent); } catch (e) { /* none */ }
+    var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+    var key = document.querySelector('[data-qk-key]'); if (key && !isMac) key.textContent = 'Ctrl K';
+    var rows = [], sel = 0, timer = null, seq = 0, recs = [], lastFocus = null;
+    var ICON = { Page: '↗', Supplier: '🏭', PO: '🧾', Project: '🧪', Sample: '📦', RFQ: '✉', Product: '🏷️' };
+    var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    function draw() {
+      var w = q.value.trim().toLowerCase();
+      var pg = pages.filter(function (p) { return !w || (p.t + ' ' + p.g + ' ' + p.d).toLowerCase().indexOf(w) >= 0; })
+        .map(function (p) { return { type: 'Page', title: p.t, sub: p.g, href: p.h }; });
+      if (w) pg = pg.slice(0, 6);
+      rows = pg.concat(recs); if (sel >= rows.length) sel = 0;
+      if (!rows.length) { res.innerHTML = '<li class="qk-empty">' + (w.length >= 2 ? 'Nothing found' : 'Type to search') + '</li>'; return; }
+      var html = '', i = 0, head = function (t) { html += '<li class="qk-h" role="presentation">' + t + '</li>'; };
+      if (pg.length) { head('Pages'); pg.forEach(function (r) { html += row(r, i++); }); }
+      if (recs.length) { head('Records'); recs.forEach(function (r) { html += row(r, i++); }); }
+      res.innerHTML = html; mark();
+    }
+    function row(r, i) { return '<li class="qk-r" role="option" data-i="' + i + '"><span class="qk-ic" aria-hidden="true">' + (ICON[r.type] || '•') + '</span><span class="qk-t"><b>' + esc(r.title) + '</b>' + (r.sub ? '<small>' + esc(r.sub) + '</small>' : '') + '</span><span class="qk-type">' + esc(r.type === 'Page' ? '' : r.type) + '</span></li>'; }
+    function mark() { Array.prototype.forEach.call(res.querySelectorAll('.qk-r'), function (li) { var on = +li.getAttribute('data-i') === sel; li.classList.toggle('sel', on); li.setAttribute('aria-selected', on); if (on) li.scrollIntoView({ block: 'nearest' }); }); }
+    function search() {
+      clearTimeout(timer); var w = q.value.trim(); var my = ++seq;
+      if (w.length < 2) { recs = []; draw(); return; }
+      timer = setTimeout(function () {
+        fetch('/admin/quick?q=' + encodeURIComponent(w), { headers: { Accept: 'application/json' } }).then(function (r) { return r.ok ? r.json() : { results: [] }; })
+          .then(function (j) { if (my !== seq) return; recs = j.results || []; draw(); }).catch(function () {});
+      }, 140);
+    }
+    function open() { lastFocus = document.activeElement; ov.hidden = false; document.body.classList.add('qk-on'); q.value = ''; recs = []; sel = 0; draw(); setTimeout(function () { q.focus(); }, 0); }
+    function close() { ov.hidden = true; document.body.classList.remove('qk-on'); if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+    function go(i, newTab) { var r = rows[i]; if (!r) return; if (newTab) { window.open(r.href, '_blank'); return; } close(); window.location.href = r.href; }
+    document.addEventListener('keydown', function (e) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); if (ov.hidden) open(); else close(); return; }
+      if (ov.hidden) return;
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(rows.length - 1, sel + 1); mark(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); mark(); }
+      else if (e.key === 'Enter') { e.preventDefault(); go(sel, e.metaKey || e.ctrlKey); }
+    });
+    q.addEventListener('input', function () { sel = 0; draw(); search(); });
+    res.addEventListener('mousemove', function (e) { var li = e.target.closest('.qk-r'); if (li && +li.getAttribute('data-i') !== sel) { sel = +li.getAttribute('data-i'); mark(); } });
+    res.addEventListener('click', function (e) { var li = e.target.closest('.qk-r'); if (li) go(+li.getAttribute('data-i'), e.metaKey || e.ctrlKey); });
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+    document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-qk-open]')) open(); });
   })();
   // Selects that go somewhere / re-filter as soon as they change
   document.querySelectorAll('[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form && el.form.submit(); }); });

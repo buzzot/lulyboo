@@ -655,7 +655,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     const urls = await db.storage.signedUrls(filtered.map(({ product: p }) => imgs[p.id]?.[0]?.thumb_path));
     const supOpts = suppliers.filter((x) => items.some(({ product: p }) => p.supplier_id === x.id));
     res.html(page({
-      title: 'Archive', nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
+      title: 'Archive', nav: adminNav('archive'), flash: takeFlash(req, res), wide: true,
       body: html`
       <div class="head-row"><div><h1>Archive (${items.length})</h1><p class="muted">Archived products are hidden from the product lists, comparisons and the supplier's portal. Restore them any time.</p></div>
         <div class="actions"><a class="btn ghost small" href="/admin/products">Back to products</a></div></div>

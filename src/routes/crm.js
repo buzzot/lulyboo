@@ -207,7 +207,7 @@ module.exports = function crmRoutes(router, { db, config }) {
     const dayList = byDate.get(day) || [];
     const back = `/admin/crm/calendar?m=${month}&day=${day}`;
     res.html(page({
-      title: 'CRM calendar', nav: adminNav('crm'), flash: takeFlash(req, res), wide: true,
+      title: 'CRM calendar', nav: adminNav('calendar'), flash: takeFlash(req, res), wide: true,
       body: html`<div class="head-row"><h1>CRM</h1>${tabs('cal')}</div>
       <div class="cal-nav"><a class="btn small ghost" href="/admin/crm/calendar?m=${prev}">←</a><b>${monthLabel}</b><a class="btn small ghost" href="/admin/crm/calendar?m=${next}">→</a><a class="btn small ghost" href="/admin/crm/calendar">Today</a>
         <span class="legend">${C.TASK_TYPES.map((x) => html`<span class="chip ${tyClass(x)}">${x}</span>`)}<span class="chip log">Logged activity</span></span></div>

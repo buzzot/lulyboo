@@ -73,8 +73,9 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
   <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo ${nav?.admin ? '' : html`<span>${nav?.label || t('Supplier Portal', '供应商平台')}</span>`}</a>
   ${nav?.groups ? adminMainNav(nav) : nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
   ${sw}
-  ${isAdmin ? html`<div class="top-right">${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
-</div></header>
+  ${isAdmin ? html`<div class="top-right">${nav?.groups ? html`<button type="button" class="qk-btn" data-qk-open aria-label="Quick jump (⌘K)">${icon('search', 15)}<span>Jump to…</span><kbd data-qk-key>⌘K</kbd></button>` : ''}${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
+</div>${isAdmin && nav?.groups ? subNav(nav, wide) : ''}</header>
+${isAdmin && nav?.groups ? quickJump(nav) : ''}
 <main class="${wide ? 'wide' : ''}">
 ${flashHtml}
 ${body}
@@ -95,27 +96,48 @@ function userMenu() {
       <a class="um-out" href="/admin/logout">Sign out</a></div></details>`;
 }
 
-/** Grouped, compact main navigation: dropdowns on desktop, one "Menu" button on small screens. */
+/** Grouped main navigation: menus open on hover (desktop) or tap; the group name itself goes to the area's main page. */
 function adminMainNav(nav) {
   return html`<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="mainnav">${icon('list', 16)}<span>Menu</span></button>
-  <nav class="mainnav" id="mainnav" aria-label="Main">${nav.groups.map((g) => g.href
+  <nav class="mainnav" id="mainnav" aria-label="Main">${nav.groups.map((g) => !g.items
     ? html`<a class="nav-link ${g.active ? 'on' : ''}" href="${g.href}" ${g.active ? raw('aria-current="page"') : ''}>${g.label}</a>`
-    : html`<div class="nav-group ${g.active ? 'on' : ''}"><button type="button" class="nav-btn" aria-expanded="false" aria-haspopup="true">${g.label}<span class="um-caret" aria-hidden="true"></span></button>
-      <div class="nav-menu">${g.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}" ${i.active ? raw('aria-current="page"') : ''}>${i.label}</a>`)}</div></div>`)}</nav>`;
+    : html`<div class="nav-group ${g.active ? 'on' : ''}"><a href="${g.href}" class="nav-btn" aria-expanded="false" aria-haspopup="true">${g.label}<span class="um-caret" aria-hidden="true"></span></a>
+      <div class="nav-menu">${g.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}" ${i.active ? raw('aria-current="page"') : ''}><span>${i.label}</span>${i.desc ? html`<small>${i.desc}</small>` : ''}</a>`)}</div></div>`)}</nav>`;
 }
 
-// Only destinations that exist. (Clients, Orders, Purchasing and Automations have no pages yet, so they are not listed.)
+/** Tabs for every page of the area you are in (one click between e.g. Container planning and Load containers). */
+function subNav(nav, wide) {
+  const g = nav?.groups?.find((x) => x.active && x.items);
+  if (!g) return '';
+  return html`<nav class="subnav" aria-label="${g.label}"><div class="subnav-in ${wide ? 'wide' : ''}"><span class="subnav-lbl">${g.label}</span>${g.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}" ${i.active ? raw('aria-current="page"') : ''}>${i.label}</a>`)}</div></nav>`;
+}
+
+/** ⌘K quick jump: pages (listed here) + records (fetched from /admin/quick). */
+function quickJump(nav) {
+  const pages = nav.groups.flatMap((g) => (g.items ? g.items.map((i) => ({ t: i.label, g: g.label, d: i.desc || '', h: i.href })) : [{ t: g.label, g: '', d: '', h: g.href }]));
+  if (nav.settings) pages.push({ t: 'Settings', g: '', d: 'Portal settings', h: nav.settings.href });
+  return html`<div class="qk-ov" data-qk-ov hidden><div class="qk" role="dialog" aria-modal="true" aria-label="Quick jump">
+    <input type="search" class="qk-q" data-qk-q placeholder="Jump to a page, supplier, PO, project, sample…" autocomplete="off" aria-label="Search">
+    <ul class="qk-res" data-qk-res role="listbox"></ul>
+    <div class="qk-ft"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div><script type="application/json" data-qk-pages>${raw(JSON.stringify(pages).replace(/</g, '\\u003c'))}</script></div>`;
+}
+
 function adminNav(active) {
   const staff = STAFF.current();
   const on = (k) => k === active;
-  const group = (label, items) => ({ label, items: items.map(([k, href, l]) => ({ href, label: l, active: on(k) })), active: items.some(([k]) => on(k)) });
+  const group = (label, items) => {
+    const list = items.map(([k, href, l, d]) => ({ href, label: l, desc: d, active: on(k) }));
+    const act = items.some(([k]) => on(k));
+    return list.length === 1 ? { label, href: list[0].href, active: act } : { label, href: list[0].href, items: list, active: act };
+  };
   const groups = [
     { label: 'Dashboard', href: '/admin', active: on('dashboard') },
-    group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers'], ['requests', '/admin/requests', 'RFQs & requests'], ['projects', '/admin/projects', 'Development'], ['samples', '/admin/samples', 'Samples']]),
-    group('Catalog', [['products', '/admin/products', 'Products'], ['pricing', '/admin/pricing', 'Pricing'], ['categories', '/admin/categories', 'Categories'], ['archive', '/admin/archive', 'Archive']]),
-    group('Orders', [['orders', '/admin/orders', 'Purchase orders'], ['planning', '/admin/logistics/planning', 'Container planning'], ['load', '/admin/logistics/planning/load', 'Load containers'], ['orders-import', '/admin/logistics/planning/import', 'Import orders']]),
-    group('Operations', [['logistics', '/admin/logistics', 'Logistics'], ['crm', '/admin/crm', 'Follow-ups'], ['calendar', '/admin/crm/calendar', 'Calendar']]),
-    group('AI Tools', [['ai', '/admin/ai', 'AI Assistant']]),
+    group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers', 'Factories, contacts, CRM status'], ['requests', '/admin/requests', 'RFQs & requests', 'Info requests to suppliers'], ['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
+    group('Catalog', [['products', '/admin/products', 'Products', 'Supplier products'], ['pricing', '/admin/pricing', 'Pricing', 'Landed cost & margins'], ['categories', '/admin/categories', 'Categories', 'Category list'], ['archive', '/admin/archive', 'Archive', 'Archived products']]),
+    group('Orders', [['orders', '/admin/orders', 'Purchase orders', 'All POs'], ['planning', '/admin/logistics/planning', 'Container planning', 'Group POs by ready date'], ['load', '/admin/logistics/planning/load', 'Load containers', 'Fill 20GP / 40GP / 40HQ'], ['orders-import', '/admin/logistics/planning/import', 'Import orders', 'PO / PL with AI']]),
+    group('Operations', [['logistics', '/admin/logistics', 'Logistics', 'Shipments & forwarders'], ['crm', '/admin/crm', 'Follow-ups', 'CRM tasks'], ['calendar', '/admin/crm/calendar', 'Calendar', 'Activities & supplier holidays']]),
+    group('AI Tools', [['ai', '/admin/ai', 'AI Assistant', 'Ask about your data']]),
   ];
   const showSettings = !staff || STAFF.can(staff.role, 'settings');
   return { home: '/admin', label: 'Admin', groups, settings: showSettings ? { href: '/admin/settings', active: on('settings') } : null, items: groups.flatMap((g) => g.items || [g]), admin: true };

@@ -246,7 +246,7 @@ function planningRoutes(router, { db, config }) {
     }
 
     res.html(page({
-      title: 'Container planning · Logistics', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, req,
+      title: 'Container planning · Logistics', nav: adminNav('planning'), flash: takeFlash(req, res), wide: true, req,
       body: html`${SCR.logisticsTabs('planning')}
         ${missing ? html`<p class="flash warn">Run the container planning SQL in Supabase first (supabase/schema.sql, "Container planning").</p>` : ''}
         ${(() => { const dup = PL.duplicateGroups(orders); return dup.length ? html`<form method="post" action="${BASE}/dedupe" class="flash warn cp-dup"><span><b>${dup.length} item${dup.length === 1 ? ' appears' : 's appear'} twice on the same PO</b> — ${dup.slice(0, 3).map((g) => `${g[0].po} ${cleanItem(g[0])}`).join(', ')}${dup.length > 3 ? '…' : ''}. Merge keeps one line per item with all its details — skip it if they are separate shipments.</span><button class="btn small">Merge duplicates</button></form>` : ''; })()}
@@ -266,7 +266,7 @@ function planningRoutes(router, { db, config }) {
     const all = await db.list('suppliers', { select: 'id,name,country,contact_name,email,active', order: 'name.asc' });
     const sups = SAM.pickableSuppliers(all, req.query.supplier);
     res.html(page({
-      title: 'Import orders · Container planning', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, req,
+      title: 'Import orders · Container planning', nav: adminNav('orders-import'), flash: takeFlash(req, res), wide: true, req,
       body: html`<p><a href="${BASE}">‹ Container planning</a></p><h1>Import orders</h1>
         <p class="muted">Drop the supplier's open-order report, PO or production status (Excel, PDF, screenshot, or pasted email). AI reads every line; you check it before it is saved.</p>
         <form method="post" action="${BASE}/import" enctype="multipart/form-data" data-busy class="cp-import">
@@ -319,7 +319,7 @@ function planningRoutes(router, { db, config }) {
     const count = (c) => d.filter((x) => x.change === c).length;
     const portOpts = (sel) => html`<option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}" ${p.code === sel ? raw('selected') : ''}>${p.name}</option>`)}`;
     res.html(page({
-      title: 'Check orders · Container planning', nav: adminNav('logistics'), wide: true, req,
+      title: 'Check orders · Container planning', nav: adminNav('orders-import'), wide: true, req,
       body: html`<p><a href="${BASE}/import">‹ Back</a></p><h1>Check what AI read</h1>
         <p class="muted">${created ? html`New supplier: <b>${supplier.name}</b>` : supplier.name}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
         <div class="cp-chips"><span class="cp-tag ok">${count('new')} new</span><span class="cp-tag plan">${count('updated')} updated</span><span class="cp-tag done">${count('same')} unchanged</span>${d.some((x) => !x.cbm) ? html`<span class="cp-tag wait">${d.filter((x) => !x.cbm).length} without CBM</span>` : ''}</div>

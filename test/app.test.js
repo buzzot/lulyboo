@@ -1333,7 +1333,11 @@ test('dashboard: grouped nav, KPIs, attention counts and filters match the data'
   t.after(() => server.close());
   const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
   const d = (await req(base, 'GET', '/admin', { cookie })).text;
-  for (const g of ['Sourcing', 'Catalog', 'Orders', 'Operations', 'AI Tools']) assert.match(d, new RegExp(`class="nav-btn"[^>]*>${g}`));
+  for (const g of ['Sourcing', 'Catalog', 'Orders', 'Operations']) assert.match(d, new RegExp(`class="nav-btn"[^>]*>${g}`));
+  assert.match(d, /class="nav-link [^"]*" href="\/admin\/ai"[^>]*>AI Tools</, 'one-item group is a plain link');
+  assert.match(d, /class="nav-btn"[^>]*>Orders/); assert.match(d, /<a href="\/admin\/suppliers" class="nav-btn"/, 'group name goes to the area main page');
+  assert.match(d, /data-qk-open/); assert.match(d, /data-qk-pages/);
+  assert.doesNotMatch(d, /class="subnav"/, 'dashboard has no section tabs');
   assert.match(d, /href="\/admin\/settings"/); assert.doesNotMatch(d, />Purchasing<|>Automations</);
   assert.match(d, /Product development &amp; sourcing overview/);
   assert.match(d, /<span>Awaiting review<\/span><b>2<\/b>/); // a and b are New
@@ -2255,7 +2259,7 @@ test('orders menu: PO list, PO page with lines and documents, mark shipped', asy
   await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', production_status: 'Ready for shipping', ready_date: d(-11) });
   await db.insert('plan_files', { supplier_id: b.id, name: 'PO200014.pdf', path: 'p/x.pdf', content_type: 'application/pdf', kind: 'PO', pos: ['PO200014'] });
   const home = await req(base, 'GET', '/admin', { cookie });
-  assert.match(home.text, /href="\/admin\/orders"[^>]*>Purchase orders</);
+  assert.match(home.text, /href="\/admin\/orders"[^>]*><span>Purchase orders</);
   const list = await req(base, 'GET', '/admin/orders', { cookie });
   assert.equal(list.status, 200);
   assert.equal((list.text.match(/<b>PO200014<\/b>/g) || []).length, 1);                // two lines → one PO row
@@ -2788,4 +2792,30 @@ test('development thread: add a supplier reply by hand with categorised files, A
   const sc = (await req(base, 'POST', '/login', { form: { email: 'lily@huanger.cn', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
   const pt = await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc });
   assert.match(pt.text, /3D象鼻/); assert.match(pt.text, /WeChat/);
+});
+
+test('navigation: section tabs for the current area and ⌘K quick search', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huizhou Melikey Silicone Product Co., Ltd.', email: 'm@melikey.cn', crm_status: 'Active' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO-4512', product: 'Silicone bib', qty: 6000 });
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO-4512', product: 'Suction plate', qty: 2000 });
+  await db.insert('dev_projects', { ref: 'DP-1003', name: 'Elephant musical toy', status: 'Sourcing', current_version: 1 });
+
+  const pg = await req(base, 'GET', '/admin/logistics/planning', { cookie });
+  assert.equal(pg.status, 200);
+  const sub = pg.text.slice(pg.text.indexOf('class="subnav"'));
+  assert.match(sub, /Purchase orders/); assert.match(sub, /class="on"[^>]*>Container planning/); assert.match(sub, /Load containers/); assert.match(sub, /Import orders/);
+
+  const r1 = JSON.parse((await req(base, 'GET', '/admin/quick?q=melikey', { cookie })).text).results;
+  assert.ok(r1.some((x) => x.type === 'Supplier' && x.href === `/admin/suppliers/${s.id}`));
+  assert.ok(r1.some((x) => x.type === 'PO' && /^PO-4512 · /.test(x.title) && /2 lines/.test(x.sub)), 'PO lines grouped into one PO');
+  const r2 = JSON.parse((await req(base, 'GET', '/admin/quick?q=po 4512', { cookie })).text).results;
+  assert.equal(r2.filter((x) => x.type === 'PO').length, 1);
+  const r3 = JSON.parse((await req(base, 'GET', '/admin/quick?q=elephant', { cookie })).text).results;
+  assert.equal(r3[0].type, 'Project');
+  assert.deepEqual(JSON.parse((await req(base, 'GET', '/admin/quick?q=m', { cookie })).text).results, []);
+  assert.notEqual((await req(base, 'GET', '/admin/quick?q=melikey')).status, 200, 'needs a login');
 });

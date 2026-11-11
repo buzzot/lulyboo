@@ -99,7 +99,7 @@ function loadPlanRoutes(router, { db, config }) {
     const tabs = html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['load', 'Load containers'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${k === 'load' ? `${BASE}/load` : `${BASE}?view=${k}`}" class="${k === 'load' ? 'on' : ''}" ${k === 'load' ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
 
     res.html(page({
-      title: 'Load containers · Container planning', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, req,
+      title: 'Load containers · Container planning', nav: adminNav('load'), flash: takeFlash(req, res), wide: true, req,
       body: html`${SCR.logisticsTabs('planning')}
         ${missing ? html`<p class="flash warn">Run the container loading SQL in Supabase first (supabase/schema.sql, "Container load plans").</p>` : ''}
         <div class="cp-head"><div><h2 class="sl-title">Container planning</h2><p class="muted">Drag open PO lines into a container. Cartons load in and the bar shows how full it is.</p></div>
