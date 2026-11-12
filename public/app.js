@@ -17,8 +17,6 @@
     });
   });
 
-  // Auto-submit filter selects
-  document.querySelectorAll('select[data-autosubmit]').forEach(function (el) { el.addEventListener('change', function () { el.form.submit(); }); });
 
   // Help dialogs: [data-open-dialog="id"] opens <dialog id>, [data-close-dialog] or a click on the backdrop closes it
   document.addEventListener('click', function (e) {
@@ -487,6 +485,8 @@
       rows.forEach(function (r) { var ok = w.every(function (x) { return r.getAttribute('data-q').indexOf(x) >= 0; }); r.parentNode.hidden = !ok; if (ok) n++; });
       count.textContent = n + ' supplier' + (n === 1 ? '' : 's'); empty.hidden = n > 0; };
     var choose = function (r) { var changed = val.value !== r.getAttribute('data-id'); val.value = r.getAttribute('data-id'); label.textContent = r.getAttribute('data-name'); rows.forEach(function (x) { x.classList.toggle('on', x === r); }); box.classList.remove('invalid'); dlg.close(); var nf = box.closest('form') && box.closest('form').querySelector('[name=new_supplier]'); if (nf && nf.type !== 'hidden') nf.value = '';
+      // Filters: apply as soon as a supplier is picked
+      if (box.hasAttribute('data-pick-submit') && changed && box.closest('form')) { box.closest('form').submit(); return; }
       // Opened from the pencil next to the supplier name: save straight away.
       if (box.getAttribute('data-autosave') === '1') { box.removeAttribute('data-autosave'); var fm = box.closest('form'); if (changed && fm) { if (fm.requestSubmit) fm.requestSubmit(); else fm.submit(); } } };
     // set from code (e.g. the holiday popup fills in the supplier AI found)

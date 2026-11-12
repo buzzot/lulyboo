@@ -114,7 +114,7 @@ module.exports = function crmRoutes(router, { db, config }) {
         <div class="kpi"><b>${groups[2][1].length}</b><span>Next 7 days</span></div>
         <div class="kpi"><b>${items.length}</b><span>Open in total</span></div>
       </div>
-      <form method="get" class="filters"><label><span class="lbl">Supplier</span><select name="supplier" onchange="this.form.submit()"><option value="">All suppliers</option>${suppliers.map((s) => html`<option value="${s.id}" ${s.id === supplierFilter ? raw('selected') : ''}>${s.name}</option>`)}</select></label><noscript><button class="btn small">Filter</button></noscript></form>
+      <form method="get" class="filters">${require('./samples').supplierPicker(suppliers, supplierFilter || '', { name: 'supplier', required: false, all: 'All suppliers', submit: true, cls: 'pick1-filter' })}<noscript><button class="btn small">Filter</button></noscript></form>
       <section class="card"><h2>Add a follow-up or appointment</h2>${taskForm({ suppliers, date: today, back, supplierId: supplierFilter })}</section>
       ${groups.map(([label, list, cls]) => list.length ? html`<section class="card crm-group ${cls}"><h2>${label} <span class="muted">(${list.length})</span></h2><ul class="tasks">${list.map((i) => itemRow(i, ctx))}</ul></section>` : '')}
       ${!items.length ? html`<section class="card"><p class="muted">Nothing scheduled. Add your first follow-up above.</p></section>` : ''}

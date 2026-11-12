@@ -2201,3 +2201,9 @@ nav.subnav a,nav.subnav a.on{background:transparent;border-radius:0}
 .pm-ref-t{fill:#857d72;paint-order:stroke;stroke:#fbfaf7;stroke-linejoin:round;letter-spacing:.01em}
 .pm-port.empty{display:none}
 svg.dragging .pm-port.empty{display:inline;opacity:.55}
+/* supplier filter (searchable picker in filter bars) */
+.pick1-filter{display:flex;align-items:center;gap:8px}
+.pick1-filter .lbl{font-size:14px;color:inherit;font-weight:500;margin:0;text-transform:none;letter-spacing:0}
+.pick1-filter .pick1-btn{min-width:240px;max-width:340px;padding:7px 12px;height:38px;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.pick1-filter .pick1-btn span:last-child{color:#999;font-size:11px}
+.pick1-nolbl .lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}

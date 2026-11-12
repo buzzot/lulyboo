@@ -304,8 +304,8 @@ function planningRoutes(router, { db, config }) {
         <div class="cp-head"><div><h2 class="sl-title">Container planning</h2><p class="muted">Open purchase orders grouped by loading port and ready week, with a suggested container mix.</p></div>
           <div class="cp-head-r">${viewTabs(view, q)}<a class="btn" href="${BASE}/import">Import orders</a></div></div>
         <form class="cp-filters" method="get" action="${BASE}"><input type="hidden" name="view" value="${view}">
-          <label>Supplier <select name="supplier" onchange="this.form.submit()"><option value="">All suppliers</option>${Object.values(sups).sort((a, b) => a.name.localeCompare(b.name)).map((s) => html`<option value="${s.id}" ${s.id === fSup ? raw('selected') : ''}>${s.name}</option>`)}</select></label>
-          <label class="cp-chk"><input type="checkbox" name="shipped" value="1" ${showShipped ? raw('checked') : ''} onchange="this.form.submit()"> Show shipped</label>
+          ${SAM.supplierPicker(Object.values(sups).sort((a, b) => a.name.localeCompare(b.name)), fSup, { name: 'supplier', required: false, all: 'All suppliers', submit: true, cls: 'pick1-filter' })}
+          <label class="cp-chk"><input type="checkbox" name="shipped" value="1" ${showShipped ? raw('checked') : ''} data-autosubmit> Show shipped</label>
           <a class="link small" href="${BASE}.csv">Download CSV</a></form>
         ${kpis}${body}
         ${editDialog(req.url)}`,

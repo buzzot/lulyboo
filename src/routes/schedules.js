@@ -92,8 +92,8 @@ function schedulesRoutes(router, { db, config }) {
         <div class="sl-f"><span class="sl-k">From</span>${SC.ORIGINS.map((o) => html`<a class="sl-pill ${origins.includes(o.code) ? 'on' : ''}" href="${url({ from: toggleOrigin(o.code) })}">${o.name}</a>`)}${origins.length ? html`<a class="link small" href="${url({ from: '' })}">All</a>` : ''}</div>
         <div class="sl-f"><span class="sl-k">To</span><a class="sl-pill ${to.length === 2 ? 'on' : ''}" href="${url({ to: '' })}">LA + Long Beach</a>${SC.DESTS.map((d) => html`<a class="sl-pill ${to.length === 1 && to[0] === d.code ? 'on' : ''}" href="${url({ to: d.code })}">${d.name}</a>`)}</div>
         <form class="sl-f" method="get" action="/admin/logistics/schedules"><input type="hidden" name="month" value="${month}"><input type="hidden" name="from" value="${origins.join(',')}"><input type="hidden" name="to" value="${to.length === 1 ? to[0] : ''}">
-          <span class="sl-k">Line</span><select name="carrier" onchange="this.form.submit()"><option value="">All lines</option>${carriers.map((c) => html`<option ${c === carrier ? raw('selected') : ''}>${c}</option>`)}</select>
-          <label class="sl-direct"><input type="checkbox" name="direct" value="1" ${direct ? raw('checked') : ''} onchange="this.form.submit()"> Direct only</label></form>
+          <span class="sl-k">Line</span><select name="carrier" data-autosubmit><option value="">All lines</option>${carriers.map((c) => html`<option ${c === carrier ? raw('selected') : ''}>${c}</option>`)}</select>
+          <label class="sl-direct"><input type="checkbox" name="direct" value="1" ${direct ? raw('checked') : ''} data-autosubmit> Direct only</label></form>
       </div>
       <div class="kpis sl-kpis">
         <div class="kpi"><span>Sailings this month</span><b>${list.length}</b></div>

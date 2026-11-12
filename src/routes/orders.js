@@ -92,7 +92,7 @@ module.exports = function orderRoutes(router, { db, config }) {
         <div class="or-bar">
           <nav class="cp-views" aria-label="Status">${TABS.map(([k, l]) => html`<a href="${link({ status: k })}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l} <span class="or-n">${count(k)}</span></a>`)}</nav>
           <form method="get" action="/admin/orders" class="or-search"><input type="hidden" name="status" value="${tab}">
-            <select name="supplier" onchange="this.form.submit()" aria-label="Supplier"><option value="">All suppliers</option>${Object.values(sups).sort((a, b) => a.name.localeCompare(b.name)).map((s) => html`<option value="${s.id}" ${s.id === fSup ? raw('selected') : ''}>${s.name}</option>`)}</select>
+            ${require('./samples').supplierPicker(Object.values(sups).sort((a, b) => a.name.localeCompare(b.name)), fSup, { name: 'supplier', required: false, all: 'All suppliers', submit: true, cls: 'pick1-filter pick1-nolbl' })}
             <input type="search" name="q" value="${req.query.q || ''}" placeholder="Search PO, product or supplier" aria-label="Search"></form>
         </div>
         <div class="card flush"><div class="table-wrap"><table class="list or-table"><thead><tr><th>PO</th><th>Supplier</th><th>Products</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Port</th><th>Status</th><th>Docs</th></tr></thead>
