@@ -1777,3 +1777,41 @@
     var btn = form.querySelector('.mr-act .btn'); btn.disabled = true; btn.textContent = form.querySelector('[name=ai]').checked || form.querySelector('[name=quote]').checked ? 'Reading with AI…' : 'Adding…';
   });
 })();
+
+// Development thread: AI email draft (follow-up / request) → check & edit → use as the reply
+(function () {
+  var dlg = document.querySelector('[data-ad-dlg]'); if (!dlg) return;
+  var url = dlg.getAttribute('data-url'), status = dlg.querySelector('[data-ad-status]'), out = dlg.querySelector('[data-ad-out]');
+  var text = dlg.querySelector('[data-ad-text]'), pend = dlg.querySelector('[data-ad-pending]'), busy = false;
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var val = function (n) { var r = dlg.querySelector('input[name="' + n + '"]:checked'); return r ? r.value : ''; };
+  var say = function (t, bad) { status.textContent = t; status.classList.toggle('bad', !!bad); };
+  function write() {
+    if (busy) return; busy = true;
+    var btns = dlg.querySelectorAll('[data-ad-go]'); Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+    say('Reading the project and the conversation, writing the email…');
+    var body = new URLSearchParams({ purpose: val('ad_purpose'), tone: val('ad_tone'), notes: dlg.querySelector('[data-ad-notes]').value, zh: dlg.querySelector('[data-ad-zh]').checked ? '1' : '' });
+    fetch(url, { method: 'POST', body: body, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'Could not write the draft');
+      say(''); out.hidden = false; text.value = j.body; text.focus(); text.setSelectionRange(0, 0); text.scrollTop = 0;
+      pend.hidden = !(j.pending && j.pending.length);
+      pend.querySelector('ul').innerHTML = (j.pending || []).map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('');
+    }).catch(function (e) { say(e.message, true); }).then(function () { busy = false; Array.prototype.forEach.call(btns, function (b) { b.disabled = false; }); });
+  }
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    if (e.target.closest('[data-ad-open]')) { say(''); dlg.showModal(); return; }
+    if (!dlg.contains(e.target)) return;
+    if (e.target === dlg || e.target.closest('[data-ad-close]')) { dlg.close(); return; }
+    if (e.target.closest('[data-ad-go]')) { write(); return; }
+    if (e.target.closest('[data-ad-copy]')) { var b = e.target.closest('[data-ad-copy]'); (navigator.clipboard ? navigator.clipboard.writeText(text.value) : Promise.reject()).then(function () { b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); }).catch(function () { text.select(); }); return; }
+    if (e.target.closest('[data-ad-use]')) {
+      var reply = document.querySelector('[data-reply-body]'); if (!reply) return;
+      var tab = document.querySelector('[data-rtab="reply"]'); if (tab && !tab.classList.contains('on')) tab.click();
+      reply.value = text.value; reply.dispatchEvent(new Event('input', { bubbles: true }));
+      reply.style.height = 'auto'; reply.style.height = Math.min(reply.scrollHeight + 4, 520) + 'px';
+      dlg.close(); reply.focus(); reply.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      reply.classList.add('aifill-hl'); setTimeout(function () { reply.classList.remove('aifill-hl'); }, 4000);
+    }
+  });
+})();

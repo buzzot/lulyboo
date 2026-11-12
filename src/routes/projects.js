@@ -15,6 +15,7 @@ const ST = require('../staff');
 const F = require('../fields');
 const P = require('../projects');
 const DM = require('../dev-manual');
+const DD = require('../dev-draft');
 
 const num = (x) => { if (x === undefined || x === null || String(x).trim() === '') return null; const n = Number(String(x).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
 const int = (x) => { const n = num(x); return n === null ? null : Math.round(n); };
@@ -111,6 +112,24 @@ function manualForm(p, inv, contacts, open) {
     </div>
     <div class="form-actions mr-act"><button class="btn">Add to conversation</button><span class="sub">Nothing is emailed — this only records the supplier's reply</span></div>
   </form>`;
+}
+/** Popup: AI drafts an email to the supplier (request or follow-up) from the project and thread; you edit, then use it as the reply. */
+function aiDraftDialog(p, inv) {
+  return html`<dialog class="rp-modal ad-dlg" data-ad-dlg data-url="/admin/projects/${p.id}/suppliers/${inv.id}/draft" aria-labelledby="ad-t">
+    <div class="rp-top"><h2 id="ad-t">✦ Draft an email with AI</h2><button type="button" class="icon-btn" data-ad-close aria-label="Close">×</button></div>
+    <div class="ad-body">
+      <div class="ad-sec"><span class="ad-lbl">What for</span><div class="ad-chips" role="radiogroup" aria-label="Purpose">${Object.entries(DD.PURPOSES).map(([k, v], i) => html`<label class="ad-chip"><input type="radio" name="ad_purpose" value="${k}" ${i === 0 ? raw('checked') : ''}><span>${v[0]}</span></label>`)}</div></div>
+      <div class="ad-sec"><span class="ad-lbl">Tone</span><div class="ad-chips" role="radiogroup" aria-label="Tone">${[['friendly', 'Friendly'], ['firm', 'Firm, with a deadline'], ['short', 'Short']].map(([k, l], i) => html`<label class="ad-chip"><input type="radio" name="ad_tone" value="${k}" ${i === 0 ? raw('checked') : ''}><span>${l}</span></label>`)}</div></div>
+      <label class="mr-f"><span>Anything to include <span class="sub">(optional)</span></span><textarea rows="2" data-ad-notes placeholder="e.g. Need the quote by Friday · ask for the ear mold cost separately · we prefer UV printing"></textarea></label>
+      <div class="ad-row"><label class="chk"><input type="checkbox" data-ad-zh> Add a Chinese translation under the English</label><button type="button" class="btn" data-ad-go>✦ Write draft</button></div>
+      <p class="hol-status" data-ad-status role="status" aria-live="polite"></p>
+      <div class="ad-out" data-ad-out hidden>
+        <div class="ad-pending" data-ad-pending hidden><b>Still open with this supplier</b><ul></ul></div>
+        <label class="mr-f"><span>Draft <span class="sub">— edit freely</span></span><textarea rows="12" data-ad-text></textarea></label>
+        <div class="rp-actions"><button type="button" class="btn" data-ad-use>Use as reply</button><button type="button" class="btn ghost" data-ad-go>↻ Write again</button><button type="button" class="btn ghost" data-ad-copy>Copy</button><span class="sub">Nothing is sent until you click Send.</span></div>
+      </div>
+    </div>
+  </dialog>`;
 }
 /** AI-read quote from a manual reply, shown as a form to check before it becomes the latest quote. */
 function quoteCheck(p, inv, msg) {
@@ -413,7 +432,9 @@ module.exports = function projectRoutes(router, { db, config }) {
         ${draftMsg ? quoteCheck(p, inv, draftMsg) : ''}
         <div class="seg-links rtabs mt" role="tablist"><button type="button" class="${req.query.log ? '' : 'on'}" data-rtab="reply" role="tab">Reply to supplier</button><button type="button" class="${req.query.log ? 'on' : ''}" data-rtab="log" role="tab">Add supplier's reply</button></div>
         ${manualForm(p, inv, contacts, req.query.log)}
-        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt" data-rpane="reply" ${req.query.log ? raw('hidden') : ''}><label class="frow top"><span>Reply</span><textarea name="body" rows="4" required placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
+        ${aiDraftDialog(p, inv)}
+        <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt" data-rpane="reply" ${req.query.log ? raw('hidden') : ''}><div class="ad-bar"><button type="button" class="btn small ghost ad-open" data-ad-open>✦ Draft with AI</button><span class="sub">Follow up, ask for a quote, sample, files or a timeline — you check the email first</span></div>
+          <label class="frow top"><span>Reply</span><textarea name="body" rows="4" required data-reply-body placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
           <label class="frow"><span>Attach</span>${multiFile('files')}</label><label class="chk"><input type="checkbox" name="notify" value="1" checked> Email the supplier</label><div class="form-actions"><button class="btn">Send</button></div></form></section>
         <aside class="dp-side"><section class="card em-addr"><h2 class="sec">Follow up by email</h2><p class="sub">One mailbox for all projects. This conversation is found by the code in the subject, so keep it when you reply or write.</p><div class="em-copy"><span class="em-k">Code</span><code>[${DE.threadCode(p, inv)}]</code><button type="button" class="btn small ghost" data-copy-text="[${DE.threadCode(p, inv)}]">Copy</button></div><div class="em-copy"><span class="em-k">CC</span><code>${DE.threadAddress()}</code><button type="button" class="btn small ghost" data-copy-text="${DE.threadAddress()}">Copy</button></div><p class="sub">Supplier replies come here automatically. When you email the supplier from Outlook, CC the mailbox and put the code in the subject. Each email is summarised by AI and posted here with name and time.</p></section><section class="card"><div class="head-row"><h2 class="sec">Samples</h2><a class="btn small" href="/admin/samples/new?invitation=${inv.id}">+ Request sample</a></div>${smps.length ? html`<ul class="smp-mini">${smps.map((x) => html`<li><a href="/admin/samples/${x.id}">${x.ref}${x.stage ? ` · ${x.stage}` : ''}</a><span class="stp ${require('../samples').pillCls(x.status)}"><i></i>${x.status}</span></li>`)}</ul>` : html`<p class="muted small">No samples yet.</p>`}</section><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
           ${quotes.length > 1 ? html`<details class="fold mt"><summary><b>Earlier revisions (${quotes.length - 1})</b></summary>${quotes.slice(1).map((q) => html`<h3 class="sec2">Rev ${q.revision} · ${fmt.date(q.created_at)}</h3>${quoteCards(q, p, { admin: true })}`)}</details>` : ''}</section></aside></div>`,
@@ -434,6 +455,24 @@ module.exports = function projectRoutes(router, { db, config }) {
     if (f.notify === '1' && s) mailed = await P.notifySupplier(config, db, s, { replyTo: DE.threadAddress(), subject: `[Lulyboo ${DE.threadCode(p, inv)}] New message · 新消息: ${p.name}`, en: `New message about "${p.name}":\n\n${body}${r.saved.length ? `\n\n(${r.saved.length} attachment(s) in the portal)` : ''}`, zh: `关于“${p.name}”的新消息：\n\n${body}${r.saved.length ? `\n\n（平台中有 ${r.saved.length} 个附件）` : ''}`, link: link(inv.id), email: { ref: p.ref, project: p.name, title: ['New message from Lulyboo', 'Lulyboo 新消息'], lead: ['You have a new message about this project:', '关于以下项目，您有一条新消息：'], noteLabel: ['Message', '消息内容'], note: body, points: r.saved.length ? [[`${r.saved.length} attachment(s) are waiting in the portal.`, `平台中有 ${r.saved.length} 个附件。`]] : [], button: ['Reply in the portal', '在平台中回复'] } });
     flash(res, r.errors.length ? 'warn' : 'ok', `Message sent${mailed ? ' and supplier emailed' : ''}${r.errors.length ? ' · ' + r.errors.join(' · ') : ''}`);
     res.redirect(`/admin/projects/${p.id}/suppliers/${inv.id}`);
+  }));
+
+  // AI email draft for this supplier thread (returned as JSON; nothing is saved or sent).
+  router.post('/admin/projects/:id/suppliers/:invId/draft', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId); const { fields: f } = await parseForm(req);
+    const AI = require('../ai'); if (!AI.enabled()) return res.json({ ok: false, error: 'AI is not set up (ANTHROPIC_API_KEY).' }, 400);
+    const [supplier, msgs, quote, samples, milestones, users] = await Promise.all([
+      db.get('suppliers', inv.supplier_id), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), latestQuote(inv.id),
+      db.list('samples', { filters: { invitation_id: inv.id } }).catch(() => []), db.list('dev_milestones', { filters: { project_id: p.id } }).catch(() => []),
+      db.list('supplier_users', { filters: { supplier_id: inv.supplier_id } }).catch(() => []),
+    ]);
+    const lastFrom = [...msgs].reverse().find((m) => m.direction === 'supplier' && m.author)?.author;
+    const contact = lastFrom || users.find((u) => u.status !== 'disabled' && u.name)?.name || '';
+    const context = DD.brief({ p, inv, supplier, contact, msgs, quote, samples, milestones });
+    try {
+      const d = await DD.draft({ context, purpose: DD.PURPOSES[f.purpose] ? f.purpose : 'follow', tone: f.tone, notes: str(f.notes, 1500) || '', zh: f.zh === '1', sender: ST.current()?.name || 'Lulyboo' });
+      res.json({ ok: true, body: d.body_zh ? `${d.body}\n\n———\n\n${d.body_zh}` : d.body, pending: d.pending });
+    } catch (e) { res.json({ ok: false, error: `AI could not write the draft: ${String(e.message).slice(0, 160)}` }, 502); }
   }));
 
   // A supplier reply that came by WeChat / phone / … : record it in the thread (nothing is emailed).

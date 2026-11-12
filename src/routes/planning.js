@@ -13,6 +13,7 @@ const AI = require('../ai');
 const SCR = require('./schedules');
 const SAM = require('./samples');
 const LP = require('./loadplan');
+const PM = require('../portmap');
 const cleanItem = (o) => PL.cleanName(o.product, o.sku);
 const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
 const BOXN = (c) => `Container ${c.no} · ${({ '20GP': '20GP', '40GP': '40GP', '40HQ': '40HQ' })[c.box] || c.box}`;
@@ -73,7 +74,55 @@ function planningRoutes(router, { db, config }) {
     return { orders, sups, color, missing, files, filesFor };
   }
 
-  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['load', 'Load containers'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${k === 'load' ? `${BASE}/load` : `${BASE}?${new URLSearchParams({ ...q, view: k })}`}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
+  const viewTabs = (view, q) => html`<nav class="cp-views" aria-label="Views">${[['port', 'By port'], ['map', 'Map'], ['load', 'Load containers'], ['timeline', 'Timeline'], ['table', 'Table'], ['docs', 'Documents']].map(([k, l]) => html`<a href="${k === 'load' ? `${BASE}/load` : `${BASE}?${new URLSearchParams({ ...q, view: k })}`}" class="${view === k ? 'on' : ''}" ${view === k ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>`;
+  /** Map view: ports with next-container fill, suppliers by location, consolidation ideas (drawn by /static/portmap.js). */
+  async function mapView({ open, sups, day, thisWeek, by, poUrl }) {
+    const WINDOWS = [1, 2, 3, 4].map((n) => ({ key: `w${n}`, end: PL.addDays(thisWeek, 7 * n - 1) })).concat([{ key: 'all', end: null }]);
+    const win = WINDOWS.find((w) => w.key === by) || WINDOWS[1];
+    const options = await db.list('logistics_options').catch(() => []);
+    const lots = {}; const noPort = []; const noDate = []; const noPlace = {};
+    for (const o of open) {
+      if (!o.port || !PM.PORT_GEO[o.port]) { if (!o.port) noPort.push(o); continue; }
+      if (!o.ready_date) { noDate.push(o); continue; }
+      if (win.end && o.ready_date > win.end) continue;
+      const s = sups[o.supplier_id]; const where = PM.cityOf(s);
+      if (!where) { (noPlace[o.supplier_id] = noPlace[o.supplier_id] || { s, cbm: 0, lines: 0 }); noPlace[o.supplier_id].cbm += Number(o.cbm) || 0; noPlace[o.supplier_id].lines++; }
+      const k = `${o.supplier_id}|${o.port}`;
+      const lot = (lots[k] = lots[k] || { id: k, sid: o.supplier_id, name: s?.name || 'Supplier', port: o.port, home: o.port, ll: where?.city.ll || null, city: where ? where.city.en : null, cityHow: where?.how || null, cbm: 0, noCbm: 0, locked: false, orders: [] });
+      const cbm = Number(o.cbm) || 0; lot.cbm += cbm; if (!cbm) lot.noCbm++;
+      if (o.container_id) lot.locked = true;
+      lot.orders.push({ id: o.id, po: o.po, product: o.product || '', qty: o.qty != null && o.qty !== '' ? Number(o.qty) : null, cbm: Math.round(cbm * 100) / 100, ready: PL.short(o.ready_date), late: o.ready_date < day, url: poUrl(o), locked: !!o.container_id });
+    }
+    const data = { ports: PM.PORT_GEO, regions: PM.REGIONS, caps: PM.CAPS, lclMax: PM.LCL_MAX, rates: PM.rates(options), lots: Object.values(lots).map((l) => ({ ...l, cbm: Math.round(l.cbm * 100) / 100 })), moveUrl: `${BASE}/map/move` };
+    const winLabel = (w) => (w.end ? `By ${PL.short(w.end)}` : 'All open');
+    const unplaced = Object.values(noPlace);
+    return html`<div class="pm" data-pm>
+      <div class="pm-bar"><span class="pm-lbl">Ready by</span><nav class="seg-links" aria-label="Ready by">${WINDOWS.map((w) => html`<a href="${BASE}?view=map&by=${w.key}" class="${w === win ? 'on' : ''}" ${w === win ? raw('aria-current="true"') : ''}>${winLabel(w)}</a>`)}</nav>
+        <span class="sub">${data.lots.length ? `${data.lots.reduce((a, l) => a + l.orders.length, 0)} open lines ready ${win.end ? `by ${PL.short(win.end)} (late ones included)` : '(all dates)'}` : ''}${noDate.length ? ` · ${noDate.length} without a ready date not shown` : ''}${noPort.length ? html` · <a href="${BASE}?view=table">${noPort.length} without a port</a>` : ''}</span></div>
+      <div class="pm-grid">
+        <div class="pm-main">
+          <div class="card pm-mapcard"><div class="pm-head"><svg class="pm-inset" data-pm-inset viewBox="0 0 150 120" aria-hidden="true"></svg>
+            <div class="pm-legend"><span><i class="dot"></i>Supplier · size = m³ · colour = its port</span><span><em></em>Suggested move</span><span><b class="ringk"></b>Port ring = next container fill</span><span class="sub">Click a port to see its suppliers · drag a supplier onto another port to move its orders</span></div></div>
+            <div class="pm-regions" data-pm-regions></div></div>
+          <div class="pm-strip" data-pm-strip></div>
+        </div>
+        <aside class="pm-side">
+          <section class="card pm-card" data-pm-ideas></section>
+          <section class="card pm-card" data-pm-port></section>
+          ${unplaced.length ? html`<section class="card pm-card"><h3>Not on the map (${unplaced.length})</h3><p class="sub">Their city could not be found in the name or address. Pick it once and they appear on the map.</p>
+            <ul class="pm-unplaced">${unplaced.map((u) => html`<li><span><b>${u.s?.name || 'Supplier'}</b><small>${u.lines} line${u.lines === 1 ? '' : 's'} · ${u.cbm.toFixed(1)} m³</small></span>
+              <form method="post" action="${BASE}/map/geo" class="inline"><input type="hidden" name="supplier_id" value="${u.s?.id}"><input type="hidden" name="by" value="${win.key}"><select name="city" aria-label="City of ${u.s?.name}" data-autosubmit required><option value="">City…</option>${PM.CITIES.map((c) => html`<option value="${c.key}">${c.en} ${c.zh}</option>`)}</select></form></li>`)}</ul></section>` : ''}
+          <section class="card pm-card pm-how"><h3>How it decides</h3><ul>
+            <li>Open orders at each port, ready in the chosen window, are packed into the cheapest mix of 40HQ, 40GP, 20GP and LCL (usable ${PM.CAPS['40HQ']} / ${PM.CAPS['40GP']} / ${PM.CAPS['20GP']} m³).</li>
+            <li>Ocean costs: ${data.rates.fromLogistics ? html`your cheapest active rates in <a href="/admin/logistics">Logistics</a>` : html`example rates — add your forwarder rates in <a href="/admin/logistics">Logistics</a>`}. Trucking to a farther port is estimated from road distance; the forwarder confirms.</li>
+            <li>A move is suggested when it saves more than the extra trucking. Moving changes the loading port on those PO lines; tell the supplier and forwarder.</li></ul></section>
+        </aside>
+      </div>
+      <script type="application/json" data-pm-data>${raw(JSON.stringify(data).replace(/</g, '\\u003c'))}</script>
+      <script src="/static/china-coast.js?v=1" defer></script><script src="/static/portmap.js?v=1" defer></script>
+    </div>`;
+  }
+
   const tag = (st) => html`<span class="cp-tag ${PL.STATE[st].tag}">${PL.STATE[st].label}</span>`;
 
   router.get(BASE, G(async (req, res) => {
@@ -96,7 +145,7 @@ function planningRoutes(router, { db, config }) {
     };
     const poLink = (o, inner) => html`<a class="cp-po-link" href="${poUrl(o)}" data-po-tip="${tip(o)}">${inner}</a>`;
     const day = PL.today(); const thisWeek = PL.weekStart(day);
-    const view = ['port', 'timeline', 'table', 'docs'].includes(req.query.view) ? req.query.view : 'port';
+    const view = ['port', 'map', 'timeline', 'table', 'docs'].includes(req.query.view) ? req.query.view : 'port';
     const fSup = sups[req.query.supplier] ? req.query.supplier : '';
     const showShipped = req.query.shipped === '1';
     const q = { ...(fSup ? { supplier: fSup } : {}), ...(showShipped ? { shipped: '1' } : {}) };
@@ -132,7 +181,8 @@ function planningRoutes(router, { db, config }) {
       ${o.st === 'waiting' ? html`<div class="cp-wait">Waiting on us: ${o.pending_from_us}</div>` : ''}</div>`;
 
     let body;
-    if (view === 'port') {
+    if (view === 'map') body = await mapView({ open, sups, day, thisWeek, by: req.query.by, poUrl });
+    else if (view === 'port') {
       // one card per PO: lines of the same supplier + PO at this port, placed in the week of the latest ready date
       const sailAll = await db.list('sailings', { filters: { etd: ['gte', day] }, order: 'etd.asc' }).catch(() => []);
       const RANK = { overdue: 0, waiting: 1, production: 2, ready: 3, shipped: 4 };
@@ -259,6 +309,36 @@ function planningRoutes(router, { db, config }) {
         ${kpis}${body}
         ${editDialog(req.url)}`,
     }));
+  }));
+
+  // ── map: move a supplier's lines to another loading port; set a supplier's city ──
+  router.post(`${BASE}/map/move`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req);
+    const port = PM.PORT_GEO[f.port] ? f.port : null;
+    const ids = [].concat(f.ids || []).filter(Boolean).slice(0, 500);
+    if (!port || !ids.length) return res.json({ ok: false, error: 'Choose a port and order lines' }, 400);
+    const moved = []; const skipped = [];
+    for (const id of ids) {
+      const o = await db.get('plan_orders', id).catch(() => null);
+      if (!o || o.shipped) continue;
+      if (o.container_id) { skipped.push(o.po); continue; }
+      if (o.port === port) continue;
+      await db.update('plan_orders', { id }, { port, updated_at: new Date().toISOString() });
+      moved.push(o);
+    }
+    for (const [sid, list] of Object.entries(moved.reduce((m, o) => ((m[o.supplier_id] = m[o.supplier_id] || []).push(o), m), {}))) {
+      const pos = [...new Set(list.map((o) => o.po))].join(', ');
+      await db.insert('supplier_activities', { supplier_id: sid, type: 'Note', summary: `Loading port changed to ${PM.PORT_GEO[port].name} for PO ${pos} (container planning, from ${list.map((o) => portName(o.port) || o.port).filter((v, i, a) => a.indexOf(v) === i).join(' / ')}).`, }).catch(() => null);
+    }
+    res.json({ ok: true, moved: moved.map((o) => ({ id: o.id, from: o.port })), skipped });
+  }));
+  router.post(`${BASE}/map/geo`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req);
+    const back = `${BASE}?view=map${/^(w[1-4]|all)$/.test(f.by || '') ? `&by=${f.by}` : ''}`;
+    if (!PM.CITY[f.city] || !f.supplier_id) { flash(res, 'error', 'Choose a city'); return res.redirect(back); }
+    try { await db.update('suppliers', { id: f.supplier_id }, { geo_city: f.city }); flash(res, 'ok', `Location set: ${PM.CITY[f.city].en}`); }
+    catch (e) { console.error('Saving supplier city failed:', e.message); flash(res, 'error', 'Run the supplier location SQL in Supabase first (supabase/schema.sql: suppliers.geo_city).'); }
+    res.redirect(back);
   }));
 
   // ── import ────────────────────────────────────────────────────────────────

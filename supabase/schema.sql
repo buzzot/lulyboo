@@ -852,3 +852,6 @@ create index if not exists supplier_holidays_sup_idx on public.supplier_holidays
 alter table public.supplier_holidays enable row level security;
 alter table public.suppliers add column if not exists holidays_confirmed_year int;
 alter table public.suppliers add column if not exists holidays_confirmed_at   timestamptz;
+
+-- Container planning port map (run once): supplier city for the map (key from src/portmap.js, e.g. 'ningbo')
+alter table public.suppliers add column if not exists geo_city text;

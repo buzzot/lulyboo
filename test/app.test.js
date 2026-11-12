@@ -2847,3 +2847,75 @@ test('product AI fill: packing box reads pasted measurements / screenshots with 
   const none = await fetch(`${base}/admin/products/${p.id}/ai-fill`, { method: 'POST', headers: { cookie }, body: new FormData() });
   assert.equal(none.status, 400);
 });
+
+test('development thread: AI email draft uses the thread and project, never internal price or notes', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch; let sent = null;
+  global.fetch = async (url, opts) => {
+    if (!/anthropic/.test(String(url))) return realFetch(url, opts);
+    sent = JSON.parse(opts.body);
+    return new Response(JSON.stringify({ model: 'm', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'tool_use', name: 'draft_email', input: { body: 'Dear Lily,\n\nCould you send the quote by Nov 20?\n\nBest regards,\nOwner', body_zh: '您好 Lily，请在11月20日前报价。', pending: ['Quote not received', 'Mold cost for ears'] } }] }), { status: 200 });
+  };
+  process.env.ANTHROPIC_API_KEY = 'test';
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Ningbo Coooko' });
+  const p = await db.insert('dev_projects', { ref: 'DP-1005', name: 'Salon teether set of 3', status: 'Sourcing', current_version: 1, summary: 'Silicone teethers', target_price_usd: 0.77, internal_notes: 'SECRET-NOTE' });
+  const inv = await db.insert('dev_invitations', { project_id: p.id, supplier_id: s.id, status: 'Questions', ack_version: 1, created_at: '2026-11-01T00:00:00Z' });
+  await db.insert('dev_messages', { invitation_id: inv.id, direction: 'supplier', author: 'Lily Wang', body: 'We can do food-grade silicone. Which colours?', attachments: [], created_at: '2026-11-03T02:00:00Z', source: 'email', email: { questions: ['Which Pantone colours?'], commitments: [] } });
+  const thread = `/admin/projects/${p.id}/suppliers/${inv.id}`;
+  assert.match((await req(base, 'GET', thread, { cookie })).text, /data-ad-dlg/);
+
+  const r = await req(base, 'POST', `${thread}/draft`, { cookie, form: { purpose: 'quote', tone: 'firm', notes: 'Need it by Nov 20', zh: '1' } });
+  const j = JSON.parse(r.text);
+  assert.equal(j.ok, true); assert.match(j.body, /Dear Lily/); assert.match(j.body, /———\n\n您好/); assert.deepEqual(j.pending, ['Quote not received', 'Mold cost for ears']);
+  const prompt = JSON.stringify(sent.messages);
+  assert.match(prompt, /Ask for a quote/); assert.match(prompt, /polite but firm/); assert.match(prompt, /Need it by Nov 20/);
+  assert.match(prompt, /Which Pantone colours/); assert.match(prompt, /contact Lily Wang/); assert.match(prompt, /No quote received yet/);
+  assert.doesNotMatch(prompt, /SECRET-NOTE/); assert.doesNotMatch(prompt, /0\.77/);
+  assert.equal(db.tables.dev_messages.length, 1, 'nothing saved or sent');
+});
+
+test('container planning map: lots by supplier & port, move lines between ports, set a supplier city', async (t) => {
+  const PM = require('../src/portmap');
+  assert.equal(PM.cityOf({ name: 'Huizhou Melikey Silicone Product Co., Ltd.' }).city.key, 'huizhou');
+  assert.equal(PM.cityOf({ name: 'Guangdong Haixing Plastic', address: 'Chenghai District, Shantou' }).city.key, 'chenghai');
+  assert.equal(PM.cityOf({ name: 'Huanger' }), null);
+  assert.equal(PM.cityOf({ name: 'Huanger', geo_city: 'yiwu' }).how, 'set');
+  const r = PM.rates([{ mode: 'FCL_40HQ', rate_usd: 3800, fees_per_shipment_usd: 1500, active: true }, { mode: 'FCL_40HQ', rate_usd: 3000, fees_per_shipment_usd: 1500, active: false }]);
+  assert.equal(r['40HQ'], 5300); assert.equal(r.fromLogistics, true);
+
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const iya = await db.insert('suppliers', { name: 'Hangzhou Iyahome Houseware' });
+  const hu = await db.insert('suppliers', { name: 'Huanger' });
+  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const a = await db.insert('plan_orders', { supplier_id: iya.id, po: 'PO-4524', product: 'Storage bins', qty: 2400, cbm: 11.6, ready_date: soon, port: 'CNSHA', shipped: false });
+  const b = await db.insert('plan_orders', { supplier_id: iya.id, po: 'PO-4525', product: 'Baskets', qty: 900, cbm: 4, ready_date: soon, port: 'CNSHA', shipped: false, container_id: 'c1' });
+  await db.insert('plan_orders', { supplier_id: hu.id, po: 'PO-9', product: 'Toy', cbm: 3, ready_date: soon, port: 'CNNGB', shipped: false });
+
+  const pg = await req(base, 'GET', '/admin/logistics/planning?view=map&by=w4', { cookie });
+  assert.equal(pg.status, 200);
+  assert.match(pg.text, /class="on"[^>]*>Map</); assert.match(pg.text, /data-pm-data/); assert.match(pg.text, /portmap\.js/);
+  const data = JSON.parse(pg.text.match(/<script type="application\/json" data-pm-data>([\s\S]*?)<\/script>/)[1]);
+  const lot = data.lots.find((l) => l.sid === iya.id);
+  assert.equal(lot.port, 'CNSHA'); assert.equal(lot.city, 'Hangzhou'); assert.equal(lot.cbm, 15.6); assert.equal(lot.locked, true); assert.equal(lot.orders.length, 2);
+  assert.equal(data.lots.find((l) => l.sid === hu.id).ll, null);
+  assert.match(pg.text, /Not on the map \(1\)/);
+
+  const body = new URLSearchParams([['ids', a.id], ['ids', b.id], ['port', 'CNNGB']]);
+  const mv = await (await fetch(`${base}/admin/logistics/planning/map/move`, { method: 'POST', headers: { cookie }, body })).json();
+  assert.equal(mv.ok, true); assert.deepEqual(mv.moved.map((x) => x.from), ['CNSHA']); assert.deepEqual(mv.skipped, ['PO-4525']);
+  assert.equal(db.tables.plan_orders.find((o) => o.id === a.id).port, 'CNNGB');
+  assert.equal(db.tables.plan_orders.find((o) => o.id === b.id).port, 'CNSHA', 'line in a container plan is not moved');
+  assert.ok(db.tables.supplier_activities.some((x) => /Loading port changed to Ningbo for PO PO-4524/.test(x.summary)));
+  assert.equal((await fetch(`${base}/admin/logistics/planning/map/move`, { method: 'POST', headers: { cookie }, body: new URLSearchParams([['ids', a.id], ['port', 'XXX']]) })).status, 400);
+
+  await req(base, 'POST', '/admin/logistics/planning/map/geo', { cookie, form: { supplier_id: hu.id, city: 'yiwu', by: 'w4' } });
+  assert.equal(db.tables.suppliers.find((s) => s.id === hu.id).geo_city, 'yiwu');
+  const pg2 = await req(base, 'GET', '/admin/logistics/planning?view=map&by=w4', { cookie });
+  assert.doesNotMatch(pg2.text, /Not on the map/);
+});
