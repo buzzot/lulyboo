@@ -108,7 +108,7 @@
   });
   function endPointer(e) {
     delete pinch[e.pointerId];
-    if (drag) { var k = nearPort(r, svgPt(r, e)), l = drag.l; drag = null; if (k && k !== l.port) move([l], k); else drawMap(); return; }
+    if (drag) { r.svg.classList.remove('dragging'); var k = nearPort(r, svgPt(r, e)), l = drag.l; drag = null; if (k && k !== l.port) move([l], k); else drawMap(); return; }
     if (pan && pan.id === e.pointerId) { pan = null; r.svg.classList.remove('panning'); }
   }
   r.svg.addEventListener('pointerup', endPointer); r.svg.addEventListener('pointercancel', endPointer);
@@ -124,7 +124,8 @@
   function spreadPorts(u) {
     codes.forEach(function (k) { PORTS[k].dxy = PORTS[k].xy.slice(); });
     var min = 2 * 24 * u + 10 * u;
-    for (var it = 0; it < 4; it++) codes.forEach(function (a, i) { codes.forEach(function (b, j) {
+    var live = codes.filter(function (k) { return vol(k) > 0.01; });
+    for (var it = 0; it < 4; it++) live.forEach(function (a, i) { live.forEach(function (b, j) {
       if (j <= i) return; var A = PORTS[a].dxy, B = PORTS[b].dxy, dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy);
       if (d >= min) return; if (d < 0.01) { dx = 1; dy = 0; d = 1; }
       var push = (min - d) / 2, ux = dx / d, uy = dy / d; A[0] -= ux * push; A[1] -= uy * push; B[0] += ux * push; B[1] += uy * push;
@@ -172,14 +173,14 @@
           var t = el('text', { x: (left ? 1 : -1) * (rad + 4 * u), y: 4 * u + (nth - 1) * 13 * u, 'text-anchor': left ? 'start' : 'end', style: 'font-size:' + 11 * u + 'px;stroke-width:' + 3 * u + 'px' }, g);
           t.textContent = label;
         }
-        if (!l.locked) g.addEventListener('pointerdown', function (e) { e.preventDefault(); drag = { r: r, l: l, line: el('line', { class: 'pm-leg sug', x1: l.xy[0], y1: l.xy[1], x2: l.xy[0], y2: l.xy[1], style: 'stroke-width:' + 2.2 * u + 'px;stroke-dasharray:' + 5 * u + ' ' + 5 * u }, r.sug) }; r.svg.setPointerCapture(e.pointerId); });
+        if (!l.locked) g.addEventListener('pointerdown', function (e) { e.preventDefault(); r.svg.classList.add('dragging'); drag = { r: r, l: l, line: el('line', { class: 'pm-leg sug', x1: l.xy[0], y1: l.xy[1], x2: l.xy[0], y2: l.xy[1], style: 'stroke-width:' + 2.2 * u + 'px;stroke-dasharray:' + 5 * u + ' ' + 5 * u }, r.sug) }; r.svg.setPointerCapture(e.pointerId); });
         g.addEventListener('keydown', function (e) { if (e.key === 'Enter') { sel = l.port; draw(); } });
       });
       codes.forEach(function (k) {
         var p = PORTS[k]; if (!inReg(r, p.ll)) return;
-        var f = fill(k), col = ringColor(f), R = 20 * u, C = 2 * Math.PI * R;
-        if (Math.hypot(p.dxy[0] - p.xy[0], p.dxy[1] - p.xy[1]) > u) { el('line', { x1: p.xy[0], y1: p.xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-tick', style: 'stroke-width:' + 1.2 * u + 'px' }, r.ports); el('circle', { cx: p.xy[0], cy: p.xy[1], r: 2.5 * u, class: 'pm-anchor' }, r.ports); }
-        var g = el('g', { class: 'pm-port' + (k === sel ? ' sel' : ''), 'data-port': k, transform: 'translate(' + p.dxy[0] + ',' + p.dxy[1] + ')', tabindex: '0', role: 'button', 'aria-label': p.name + ': ' + m3(f.v) + ', ' + (f.p.mix.join(' + ') || 'nothing ready') }, r.ports);
+        var f = fill(k), col = ringColor(f), R = 20 * u, C = 2 * Math.PI * R, empty = f.v <= 0.01;
+        if (!empty && Math.hypot(p.dxy[0] - p.xy[0], p.dxy[1] - p.xy[1]) > u) { el('line', { x1: p.xy[0], y1: p.xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-tick', style: 'stroke-width:' + 1.2 * u + 'px' }, r.ports); el('circle', { cx: p.xy[0], cy: p.xy[1], r: 2.5 * u, class: 'pm-anchor' }, r.ports); }
+        var g = el('g', { class: 'pm-port' + (k === sel ? ' sel' : '') + (empty ? ' empty' : ''), 'data-port': k, transform: 'translate(' + p.dxy[0] + ',' + p.dxy[1] + ')', tabindex: '0', role: 'button', 'aria-label': p.name + ': ' + m3(f.v) + ', ' + (f.p.mix.join(' + ') || 'nothing ready') }, r.ports);
         el('circle', { r: R, class: 'bg', style: 'stroke-width:' + 7 * u + 'px' }, g);
         if (f.pct > 0.005) el('circle', { r: R, class: 'ring', stroke: col, transform: 'rotate(-90)', 'stroke-dasharray': C * f.pct + ' ' + C, style: 'stroke-width:' + 7 * u + 'px' }, g);
         el('text', { class: 'pct', fill: col, style: 'font-size:' + 11 * u + 'px' }, g).textContent = f.v ? (f.onlyLcl ? 'LCL' : Math.round(f.pct * 100) + '%') : '—';
@@ -236,7 +237,7 @@
   }
   function drawStrip() {
     stripEl.innerHTML = '';
-    codes.forEach(function (k) { var f = fill(k), b = document.createElement('button'); b.type = 'button'; b.className = 'pm-chip' + (k === sel ? ' sel' : ''); b.innerHTML = '<b><i style="background:' + PORTS[k].color + '"></i>' + esc(PORTS[k].name) + '</b><small>' + m3(f.v) + ' · ' + esc(f.p.mix.join(' + ') || '—') + '</small>'; b.addEventListener('click', function () { sel = k; draw(); }); stripEl.appendChild(b); });
+    codes.forEach(function (k) { var f = fill(k); if (f.v <= 0.01) return; var b = document.createElement('button'); b.type = 'button'; b.className = 'pm-chip' + (k === sel ? ' sel' : ''); b.innerHTML = '<b><i style="background:' + PORTS[k].color + '"></i>' + esc(PORTS[k].name) + '</b><small>' + m3(f.v) + ' · ' + esc(f.p.mix.join(' + ') || '—') + '</small>'; b.addEventListener('click', function () { sel = k; draw(); }); stripEl.appendChild(b); });
     var t = document.createElement('div'); t.className = 'pm-chip tot'; t.innerHTML = '<b>' + money(total()) + '</b><small>est. ocean + extra trucking in this window</small>'; stripEl.appendChild(t);
   }
   var insetBox = null, ip = null;
@@ -252,7 +253,8 @@
     var a = ip(unpj(r.vb[0], r.vb[1])), b = ip(unpj(r.vb[0] + r.vb[2], r.vb[1] + r.vb[3]));
     insetBox.setAttribute('x', a[0]); insetBox.setAttribute('y', a[1]); insetBox.setAttribute('width', Math.max(2, b[0] - a[0])); insetBox.setAttribute('height', Math.max(2, b[1] - a[1]));
   }
-  function draw() { lastIdeas = ideas(); drawMap(); drawIdeas(); drawPort(); drawStrip(); }
+  function draw() { if (vol(sel) <= 0.01) { var full = codes.filter(function (k) { return vol(k) > 0.01; }).sort(function (a, b) { return vol(b) - vol(a); })[0]; if (full) sel = full; }
+    lastIdeas = ideas(); drawMap(); drawIdeas(); drawPort(); drawStrip(); }
 
   // ── moving lines between ports (saved right away; Undo in the toast) ──
   function post(ids, port) {

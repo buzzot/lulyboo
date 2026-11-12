@@ -2199,3 +2199,5 @@ nav.subnav a,nav.subnav a.on{background:transparent;border-radius:0}
 .pm-ref{pointer-events:none}
 .pm-ref-dot{fill:#fff;stroke:#8f877c}
 .pm-ref-t{fill:#857d72;paint-order:stroke;stroke:#fbfaf7;stroke-linejoin:round;letter-spacing:.01em}
+.pm-port.empty{display:none}
+svg.dragging .pm-port.empty{display:inline;opacity:.55}

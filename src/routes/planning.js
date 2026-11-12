@@ -122,7 +122,7 @@ function planningRoutes(router, { db, config }) {
         </aside>
       </div>
       <script type="application/json" data-pm-data>${raw(JSON.stringify(data).replace(/</g, '\\u003c'))}</script>
-      <script src="/static/china-coast.js?v=3" defer></script><script src="/static/portmap.js?v=3" defer></script>
+      <script src="/static/china-coast.js?v=3" defer></script><script src="/static/portmap.js?v=4" defer></script>
     </div>`;
   }
 
