@@ -1215,9 +1215,15 @@
   function chipsHTML(items) {
     return items.length ? '<div class="lp-chips">' + items.map(function (o) { return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-id="' + o.id + '"><i></i><b>' + esc(o.po) + '</b>' + esc((o.product ? ' ' + o.product + ' · ' : ' ') + n2(o.cbm) + ' m³') + '<button type="button" class="lp-x" data-lp-out="' + o.id + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>'; }).join('') + '</div>' : '';
   }
+  function addDays(d, n) { var x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+  function ldHTML(c, sail) {
+    var lcl = D.box[c.box] && D.box[c.box].lcl, auto = sail ? addDays(sail.etd, -3) : '';
+    return '<div class="lp-ld"><label>' + (lcl ? 'Delivery to CFS' : 'Loading date') + ' <input type="date" data-lp-ld="' + c.id + '" value="' + esc(c.loading || auto) + '"></label>' +
+      '<span class="sub">' + (c.loading ? 'set by you' : sail ? 'ETD − 3 days' : 'choose a sailing or a date') + ' · each supplier is asked for shipping documents that day at 9:00 China time' + (c.containerNo ? ' · <b>' + esc(c.containerNo) + '</b>' : '') + '</span></div>';
+  }
   function footHTML(c, items, sail, canReq, why) {
     var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
-    return '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
+    return ldHTML(c, sail) + '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
       '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
       '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (canReq ? '' : ' disabled title="' + esc(why) + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>';
   }
@@ -1321,6 +1327,7 @@
     var el = e.target, id;
     if ((id = el.getAttribute('data-lp-quick'))) { if (el.value) load(id, el.value); return; }
     if ((id = el.getAttribute('data-lp-box'))) { var c = cById(id); c.box = el.value; itemsOf(c).forEach(function (o) { fresh[o.id] = 1; }); render(); post(D.base + '/containers/' + id, { box: el.value }).catch(fail); return; }
+    if ((id = el.getAttribute('data-lp-ld'))) { cById(id).loading = el.value; render(); toast(el.value ? 'Loading date saved' : 'Loading date cleared'); post(D.base + '/containers/' + id, { loading_date: el.value }).catch(fail); return; }
     if ((id = el.getAttribute('data-lp-sail'))) { cById(id).sailing = el.value; render(); post(D.base + '/containers/' + id, { sailing: el.value }).catch(fail); return; }
     if ((id = el.getAttribute('data-lp-status'))) { cById(id).status = el.value; render(); post(D.base + '/containers/' + id, { status: el.value }).catch(fail); }
   });

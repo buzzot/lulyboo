@@ -406,7 +406,13 @@ module.exports = function adminRoutes(router, { db, config }) {
     const uncategorized = items.filter((i) => !i.product.category).length;
     const samples = nStatus('Sample requested');
     const awaitingReply = reqRows.filter((r) => r.status === 'Sent').length;
+    const SD = require('../shipdocs');
+    const shipRows = await db.list('ship_confirmations').catch(() => []);
+    const shipReview = shipRows.filter((r) => r.status === 'received').length;
+    const shipLate = shipRows.filter((r) => SD.stateOf(r, todayStr).key === 'overdue').length;
     const attention = [
+      { label: 'Shipping documents to review', n: shipReview, href: '/admin/orders/shipping', tone: 'info' },
+      { label: 'Shipping documents overdue', n: shipLate, href: '/admin/orders/shipping', tone: 'danger' },
       { label: 'Products awaiting review', n: awaitingReview, href: '/admin/products?status=New', tone: 'info' },
       { label: 'Overdue follow-ups', n: overdue.length, href: '/admin/crm', tone: 'danger' },
       { label: 'Products missing required data', n: missingData, href: '/admin/products?issues=missing', tone: 'warn' },

@@ -462,6 +462,12 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });
       return res.json({ ok: true, samples: true, ...out });
     }
+    // Shipping documents from suppliers: replies to the shipment confirmation carry LBS-XXXXX in the subject.
+    const SD = require('../shipdocs');
+    if (SD.CODE_RE.test(subject) || toList.some((x) => /^docs@/i.test(x.trim()))) {
+      const out = await SD.handleShipEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
+      if (out.matched) return res.json({ ok: true, shipment: true, ...out });
+    }
     // Forwarder quotations: replies to our request for quotation carry LBQ-XXXXX in the subject.
     const QT = require('../quotes');
     if (toList.some((x) => /^quotes@/i.test(x.trim())) || QT.CODE_RE.test(subject)) {

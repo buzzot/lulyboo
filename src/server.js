@@ -58,6 +58,7 @@ function createApp({ db, config }) {
   require('./routes/planning')(router, { db, config });
   require('./routes/loadplan')(router, { db, config });
   require('./routes/forwarders')(router, { db, config });
+  require('./routes/shipping')(router, { db, config });
   require('./routes/orders')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/holidays')(router, { db, config });
@@ -119,6 +120,8 @@ if (require.main === module) {
     setTimeout(tick, 15_000); setInterval(tick, 60_000);
   } else console.warn('TELEGRAM_BOT_TOKEN is not set: CRM reminders on Telegram are off.');
   { const { runMilestoneReminders } = require('./projects'); const run = () => runMilestoneReminders({ db, config }).catch((e) => console.error('Milestone reminders failed:', e.message)); setTimeout(run, 30_000); setInterval(run, 60 * 60_000); }
+  // Shipment confirmations: schedule, send at 9:00 China time on the loading date, remind after 2 and 4 days.
+  { const SD = require('./shipdocs'); const run = () => SD.runShipConfirmations({ db, config }).catch((e) => { if (!/ship_confirmations|PGRST205/.test(e.message)) console.error('Shipment confirmations failed:', e.message); }); setTimeout(run, 60_000); setInterval(run, 60 * 60_000); }
   // Samples: carrier tracking every 10 minutes (each shipment has its own next-check time), reminders hourly.
   { const SM = require('./samples');
     const CR = require('./carriers');

@@ -41,7 +41,7 @@ const siteUrl = () => (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOM
 const FONT = "Arial,'Microsoft YaHei','PingFang SC',sans-serif";
 
 /** Shared layout: brand header, body rows, footer. `preheader` is the hidden inbox preview text. */
-const layout = ({ preheader, body, admin = false }) => `<!doctype html>
+const layout = ({ preheader, body, admin = false, english = false }) => `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lulyboo</title></head>
 <body style="margin:0;padding:0;background-color:#ffffff;font-family:${FONT};color:#292c30;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(preheader)}</div>
@@ -50,12 +50,12 @@ const layout = ({ preheader, body, admin = false }) => `<!doctype html>
 <tr><td style="padding:0 0 22px;border-bottom:1px solid #e8e9eb;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>
 <td style="padding:0 12px 0 0;vertical-align:middle;"><img src="${siteUrl()}/static/email-logo.png" width="48" height="46" alt="" style="display:block;border:0;width:48px;height:46px;"></td>
 <td style="vertical-align:middle;"><span style="color:#de7367;font-size:28px;line-height:32px;font-weight:700;">Lulyboo</span>
-<div style="margin-top:3px;font-size:12px;line-height:16px;color:#73777d;">${admin ? 'ADMIN NOTIFICATION' : 'SUPPLIER PORTAL · 供应商平台'}</div></td></tr></table></td></tr>
+<div style="margin-top:3px;font-size:12px;line-height:16px;color:#73777d;">${admin ? 'ADMIN NOTIFICATION' : english ? 'SUPPLIER PORTAL' : 'SUPPLIER PORTAL · 供应商平台'}</div></td></tr></table></td></tr>
 ${body}
 <tr><td style="border-top:1px solid #e8e9eb;padding:22px 0 0;">${admin ? `<p style="margin:0;font-size:11px;line-height:19px;color:#858990;">Sent to Lulyboo owners (REQUEST_CC) by the supplier portal.</p>
 <p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Admin</p>` : `<p style="margin:0;font-size:11px;line-height:19px;color:#858990;">If you weren't expecting this email, you can ignore it.</p>
-<p style="margin:4px 0 0;font-size:11px;line-height:19px;color:#858990;" lang="zh-CN">如果您未预期收到此邮件，请忽略本邮件。</p>
-<p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Supplier Portal / 供应商平台</p>`}</td></tr>
+${english ? '' : '<p style="margin:4px 0 0;font-size:11px;line-height:19px;color:#858990;" lang="zh-CN">如果您未预期收到此邮件，请忽略本邮件。</p>'}
+<p style="margin:19px 0 0;font-size:11px;line-height:19px;color:#858990;">Lulyboo · Supplier Portal${english ? '' : ' / 供应商平台'}</p>`}</td></tr>
 </table></td></tr></table></body></html>`;
 
 function codeEmail({ code, purpose, minutes }) {
@@ -229,4 +229,31 @@ function noticeEmail({ title, companyName, en, zh, button, link }) {
   };
 }
 
-module.exports = { noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+/** Shipment confirmation request to a supplier: PO table, what to send, upload button (English). */
+function shipmentEmail({ name, intro, rows = [], shipment, asks = [], link, delayNote }) {
+  const td = 'padding:7px 9px;border:1px solid #ece6e4;font-size:13px;line-height:19px;';
+  const table = rows.length ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:6px;">
+<tr>${['PO', 'Product', 'Qty', 'Cartons', 'm³'].map((h, i) => `<td style="${td}background:#faf6f5;font-weight:600;${i > 1 ? 'text-align:right;' : ''}">${h}</td>`).join('')}</tr>
+${rows.map((r) => `<tr><td style="${td}">${esc(r.po)}</td><td style="${td}">${esc(r.product)}</td><td style="${td}text-align:right;">${esc(r.qty)}</td><td style="${td}text-align:right;">${esc(r.cartons)}</td><td style="${td}text-align:right;">${esc(r.cbm)}</td></tr>`).join('')}</table>` : '';
+  const paras = (t) => esc(t).split(/\n{2,}/).map((x) => `<p style="margin:0 0 12px;font-size:15px;line-height:24px;">${x.replace(/\n/g, '<br>')}</p>`).join('');
+  const text = [`Dear ${name || 'Sir or Madam'},`, '', intro, '', ...rows.map((r) => `- PO ${r.po}${r.product ? ` · ${r.product}` : ''}${r.qty ? ` · ${r.qty} pcs` : ''}${r.cartons ? ` · ${r.cartons} cartons` : ''}${r.cbm ? ` · ${r.cbm} m³` : ''}`), ...(shipment ? ['', `Shipment: ${shipment}`] : []), '', 'Please send:', ...asks.map((a, i) => `  ${i + 1}. ${a}`), '', `Reply to this email with the files attached, or upload them here (no login needed):\n${link}`, '', delayNote || '', '', 'Thank you,', 'Lulyboo Sourcing'].join('\n');
+  return {
+    text,
+    html: layout({
+      english: true,
+      preheader: 'Please confirm the shipment and send the shipping documents',
+      body: `<tr><td style="padding:30px 0 0;"><h1 style="margin:0;font-size:25px;line-height:33px;font-weight:600;">Shipment confirmation &amp; documents</h1></td></tr>
+<tr><td style="padding:20px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:24px;">Dear ${esc(name || 'Sir or Madam')},</p>${paras(intro)}${table}
+${shipment ? `<p style="margin:12px 0 0;font-size:14px;line-height:22px;"><b>Shipment:</b> ${esc(shipment)}</p>` : ''}</td></tr>
+<tr><td style="padding:18px 0 0;"><p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#73777d;text-transform:uppercase;letter-spacing:.05em;">Please send</p>
+<ol style="margin:0;padding-left:20px;font-size:15px;line-height:25px;">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></td></tr>
+<tr><td style="padding:20px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:24px;">Reply to this email with the files attached, or upload them here — no login needed:</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
+<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:13px 22px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">Confirm &amp; upload documents</a></td></tr></table></td></tr>
+<tr><td style="padding:18px 0 30px;">${delayNote ? `<p style="margin:0 0 12px;font-size:13px;line-height:21px;color:#62676e;">${esc(delayNote)}</p>` : ''}<p style="margin:0;font-size:15px;line-height:24px;">Thank you,<br>Lulyboo Sourcing</p>
+<p style="margin:14px 0 0;font-size:12px;line-height:20px;color:#73777d;">If the button doesn't work, open this link: <a href="${esc(link)}" style="color:#62676e;">${esc(link)}</a></p></td></tr>`,
+    }),
+  };
+}
+
+module.exports = { shipmentEmail, noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

@@ -123,6 +123,7 @@ module.exports = function orderRoutes(router, { db, config }) {
     const prods = await db.list('products', { filters: { supplier_id: supplier.id } }).catch(() => []);
     const inCat = (o) => (o.product ? PL.catalogMatch(o, prods) : null);
     const missingCat = ls.filter((o) => o.product && !inCat(o));
+    const shipSection = await require('./shipping').shipmentSection(db, supplier, p?.po || poQ, back);
     const icon = (f) => (/pdf/.test(f.content_type) ? 'PDF' : /image/.test(f.content_type) ? 'IMG' : /sheet|excel|csv/.test(f.content_type) ? 'XLS' : /word/.test(f.content_type) ? 'DOC' : 'FILE');
     res.html(page({
       title: `${poQ} · Purchase orders`, nav: adminNav('orders'), flash: takeFlash(req, res), wide: true, req,
@@ -144,6 +145,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
             <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody></table></div>
           ${ls.some((o) => o.notes) ? html`<div class="or-notes">${ls.filter((o) => o.notes).map((o) => html`<p><b>${o.product || 'Note'}:</b> ${o.notes}</p>`)}</div>` : ''}</section>` : ''}
+        ${shipSection}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
           ${docs.length ? html`<ul class="cp-filelist">${docs.map((f) => html`<li><span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>
             <div class="cp-fmain"><a href="/admin/logistics/planning/files/${f.id}?inline=1" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}><b>${f.name}</b></a>

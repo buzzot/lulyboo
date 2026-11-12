@@ -15,10 +15,10 @@ const ASSET_V = crypto.createHash('sha1')
 // Language comes from the lb_lang cookie (set by the header switch); English by default.
 const langOf = (req) => (req && /(?:^|;\s*)lb_lang=zh/.test(req.headers?.cookie || '') ? 'zh' : 'en');
 
-function page({ title, body, nav = null, flash = null, wide = false, req = null, admin = false }) {
+function page({ title, body, nav = null, flash = null, wide = false, req = null, admin = false, lang = true }) {
   const isAdmin = admin || !!nav?.admin;
   const zh = !isAdmin && langOf(req) === 'zh';
-  const showSwitch = !isAdmin;
+  const showSwitch = !isAdmin && lang;
   const sw = showSwitch ? html`<div class="lang-switch" role="group" aria-label="Language / 语言">
     <button type="button" data-lang="en" aria-pressed="${zh ? 'false' : 'true'}">EN</button><button type="button" data-lang="zh" aria-pressed="${zh ? 'true' : 'false'}">中文</button>
   </div>` : '';
@@ -135,7 +135,7 @@ function adminNav(active) {
     { label: 'Dashboard', href: '/admin', active: on('dashboard') },
     group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers', 'Factories, contacts, CRM status'], ['requests', '/admin/requests', 'RFQs & requests', 'Info requests to suppliers'], ['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
     group('Catalog', [['products', '/admin/products', 'Products', 'Supplier products'], ['pricing', '/admin/pricing', 'Pricing', 'Landed cost & margins'], ['categories', '/admin/categories', 'Categories', 'Category list'], ['archive', '/admin/archive', 'Archive', 'Archived products']]),
-    group('Orders', [['orders', '/admin/orders', 'Purchase orders', 'All POs'], ['planning', '/admin/logistics/planning', 'Container planning', 'Group POs by ready date'], ['load', '/admin/logistics/planning/load', 'Load containers', 'Fill 20GP / 40GP / 40HQ'], ['orders-import', '/admin/logistics/planning/import', 'Import orders', 'PO / PL with AI']]),
+    group('Orders', [['orders', '/admin/orders', 'Purchase orders', 'All POs'], ['planning', '/admin/logistics/planning', 'Container planning', 'Group POs by ready date'], ['load', '/admin/logistics/planning/load', 'Load containers', 'Fill 20GP / 40GP / 40HQ / LCL'], ['shipping', '/admin/orders/shipping', 'Shipping documents', 'Loading confirmations & docs'], ['orders-import', '/admin/logistics/planning/import', 'Import orders', 'PO / PL with AI']]),
     group('Operations', [['logistics', '/admin/logistics', 'Logistics', 'Shipments & forwarders'], ['crm', '/admin/crm', 'Follow-ups', 'CRM tasks'], ['calendar', '/admin/crm/calendar', 'Calendar', 'Activities & supplier holidays']]),
     group('AI Tools', [['ai', '/admin/ai', 'AI Assistant', 'Ask about your data']]),
   ];

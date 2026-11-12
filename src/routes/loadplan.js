@@ -95,7 +95,7 @@ function loadPlanRoutes(router, { db, config }) {
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, color: COLORS[i % COLORS.length],
       })),
-      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
+      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
       states: Object.fromEntries(Object.entries(PL.STATE).map(([k, v]) => [k, { label: v.label, tag: v.tag }])),
     };
@@ -169,6 +169,7 @@ function loadPlanRoutes(router, { db, config }) {
     const patch = { updated_at: now() };
     if (f.box !== undefined) { if (!BOX[f.box]) throw new HttpError(400, 'Unknown container type'); patch.box = f.box; }
     if (f.sailing !== undefined) patch.sailing_id = f.sailing || null;
+    if (f.loading_date !== undefined) patch.loading_date = PL.isoDay(f.loading_date) || null;
     if (f.status !== undefined) { if (!STATUSES.includes(f.status)) throw new HttpError(400, 'Unknown status'); patch.status = f.status; }
     await db.update('plan_containers', { id: c.id }, patch);
     return {};
