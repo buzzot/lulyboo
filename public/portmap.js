@@ -68,24 +68,24 @@
 
   // ── one map: zoom (wheel / pinch / buttons) and pan (drag the empty map) ──
   function vbOf(bb) { var a = pj([bb[0][0], bb[1][1]]), b = pj([bb[1][0], bb[0][1]]); return [a[0], a[1], b[0] - a[0], b[1] - a[1]]; }
-  var V = D.views, FULL = vbOf(V.all.bb);
+  var V = D.views, FULL = vbOf((V.china || V.all).bb);
   var box = root.querySelector('[data-pm-map]');
-  var r = { bb: V.all.bb, vb: FULL.slice() };
+  var r = { bb: (V.china || V.all).bb, vb: vbOf(V.all.bb) };
   r.svg = el('svg', { viewBox: r.vb.join(' '), preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'Map of China’s coast with loading ports and suppliers' }, box);
   var lg = el('g', {}, r.svg); Object.keys(G.paths).forEach(function (n) { el('path', { d: G.paths[n], class: 'pm-land' + (n === 'China' ? '' : ' other') }, lg); });
-  r.legs = el('g', {}, r.svg); r.sug = el('g', {}, r.svg); r.sups = el('g', {}, r.svg); r.ports = el('g', {}, r.svg);
+  r.ref = el('g', { class: 'pm-ref' }, r.svg); r.legs = el('g', {}, r.svg); r.sug = el('g', {}, r.svg); r.sups = el('g', {}, r.svg); r.ports = el('g', {}, r.svg);
   r.u = function () { var b = r.svg.getBoundingClientRect(); return 1 / Math.min((b.width || 800) / r.vb[2], (b.height || 560) / r.vb[3]); };
   var regions = [r];
   var raf = null;
   function setVb(vb, now) {
-    var minW = FULL[2] / 12, maxW = FULL[2] * 1.05, asp = vb[3] / vb[2];
+    var minW = FULL[2] / 30, maxW = FULL[2] * 1.05, asp = vb[3] / vb[2];
     var w = Math.max(minW, Math.min(maxW, vb[2])), h = w * asp, cx = vb[0] + vb[2] / 2, cy = vb[1] + vb[3] / 2;
     cx = Math.max(FULL[0], Math.min(FULL[0] + FULL[2], cx)); cy = Math.max(FULL[1], Math.min(FULL[1] + FULL[3], cy));
     r.vb = [cx - w / 2, cy - h / 2, w, h]; r.svg.setAttribute('viewBox', r.vb.join(' '));
     if (now) { drawMap(); drawInsetBox(); } else if (!raf) raf = requestAnimationFrame(function () { raf = null; drawMap(); drawInsetBox(); });
     Array.prototype.forEach.call(root.querySelectorAll('[data-pm-zoom-to]'), function (b) { b.classList.remove('on'); });
   }
-  function zoomAt(f, p) { p = p || [r.vb[0] + r.vb[2] / 2, r.vb[1] + r.vb[3] / 2]; var w = r.vb[2] * f, h = r.vb[3] * f; if (w < FULL[2] / 12 || w > FULL[2] * 1.05) { if (f > 1) return setVb(FULL); return; } setVb([p[0] - (p[0] - r.vb[0]) * f, p[1] - (p[1] - r.vb[1]) * f, w, h]); }
+  function zoomAt(f, p) { p = p || [r.vb[0] + r.vb[2] / 2, r.vb[1] + r.vb[3] / 2]; var w = r.vb[2] * f, h = r.vb[3] * f; if (w < FULL[2] / 30 || w > FULL[2] * 1.05) { if (f > 1) return setVb(FULL); return; } setVb([p[0] - (p[0] - r.vb[0]) * f, p[1] - (p[1] - r.vb[1]) * f, w, h]); }
   function zoomTo(key) { setVb(vbOf(V[key].bb), true); var b = root.querySelector('[data-pm-zoom-to="' + key + '"]'); if (b) b.classList.add('on'); }
   r.svg.addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(Math.exp((e.ctrlKey ? 0.01 : 0.0018) * e.deltaY), svgPt(r, e)); }, { passive: false });
   var pan = null, pinch = {};
@@ -130,9 +130,26 @@
       var push = (min - d) / 2, ux = dx / d, uy = dy / d; A[0] -= ux * push; A[1] -= uy * push; B[0] += ux * push; B[1] += uy * push;
     }); });
   }
+  /** Reference cities: small grey squares; minor ones only when zoomed in. */
+  var REFC = (D.ref || []).map(function (c) { return { en: c.en, zh: c.zh, rank: c.rank, xy: pj(c.ll) }; });
+  function drawRef(u) {
+    r.ref.innerHTML = '';
+    var wide = r.vb[2] > FULL[2] * 0.45, taken = [];
+    var near = function (xy) { return LOTS.some(function (l) { return l.xy && Math.hypot(l.xy[0] - xy[0], l.xy[1] - xy[1]) < 10 * u; }) || codes.some(function (k) { return Math.hypot(PORTS[k].dxy[0] - xy[0], PORTS[k].dxy[1] - xy[1]) < 70 * u; }); };
+    REFC.forEach(function (c) {
+      if (c.rank > 1 && wide) return;
+      if (c.xy[0] < r.vb[0] || c.xy[0] > r.vb[0] + r.vb[2] || c.xy[1] < r.vb[1] || c.xy[1] > r.vb[1] + r.vb[3]) return;
+      if (taken.some(function (t) { return Math.abs(t[0] - c.xy[0]) < 60 * u && Math.abs(t[1] - c.xy[1]) < 14 * u; })) return;
+      taken.push(c.xy);
+      var s = 3.2 * u; el('rect', { x: c.xy[0] - s, y: c.xy[1] - s, width: 2 * s, height: 2 * s, class: 'pm-ref-dot', style: 'stroke-width:' + 1.2 * u + 'px' }, r.ref);
+      if (near(c.xy)) return; // a supplier or port is right there: dot only
+      el('text', { x: c.xy[0] + 6 * u, y: c.xy[1] + 3.6 * u, class: 'pm-ref-t', style: 'font-size:' + 10.5 * u + 'px;stroke-width:' + 3 * u + 'px' }, r.ref).textContent = c.en + ' ' + c.zh;
+    });
+  }
   function drawMap() {
     var hi = hoverIdea != null && lastIdeas[hoverIdea];
     spreadPorts(r.u());
+    drawRef(r.u());
     regions.forEach(function (r) {
       var u = r.u(); r.legs.innerHTML = ''; r.sug.innerHTML = ''; r.sups.innerHTML = ''; r.ports.innerHTML = '';
       LOTS.forEach(function (l) { if (!inReg(r, l.ll)) return; var p = PORTS[l.port]; el('line', { x1: l.xy[0], y1: l.xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-leg', stroke: p.color, style: 'stroke-width:' + 1.4 * u + 'px' }, r.legs); });
@@ -145,7 +162,7 @@
         el('title', {}, g).textContent = l.name + ' · ' + m3(l.cbm) + (l.noCbm ? ' (+' + l.noCbm + ' line(s) without CBM)' : '') + ' · ' + (l.city || '') + ' → ' + PORTS[l.port].name + (l.locked ? ' · already in a container plan' : '');
         var rad = (5 + Math.sqrt(Math.max(l.cbm, 0.5)) * 1.5) * u;
         el('circle', { r: rad, fill: PORTS[l.port].color, style: 'stroke-width:' + 2 * u + 'px' }, g);
-        var show = l.port === sel || inIdea;
+        var show = (l.port === sel && r.vb[2] < FULL[2] * 0.6) || inIdea;
         if (show) {
           var key = Math.round(l.xy[0] / (14 * u)) + ':' + Math.round(l.xy[1] / (14 * u)), nth = labelled[key] = (labelled[key] || 0) + 1;
           // label away from the port when there is room for it, otherwise on the side that fits

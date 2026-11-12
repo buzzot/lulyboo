@@ -2196,3 +2196,6 @@ nav.subnav a,nav.subnav a.on{background:transparent;border-radius:0}
 .pm-views button.on{background:#1f1f1f;color:#fff}
 .pm-views button:hover:not(.on),.pm-zoom button:hover{background:#f1efec}
 .pm-tick{stroke:#8a8a8a;stroke-dasharray:2 2}.pm-anchor{fill:#8a8a8a}
+.pm-ref{pointer-events:none}
+.pm-ref-dot{fill:#fff;stroke:#8f877c}
+.pm-ref-t{fill:#857d72;paint-order:stroke;stroke:#fbfaf7;stroke-linejoin:round;letter-spacing:.01em}

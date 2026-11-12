@@ -15,9 +15,21 @@ const PORT_GEO = {
 /** Map views: the whole coast, and quick zooms to the two port areas. */
 const VIEWS = {
   all: { label: 'All ports', bb: [[111.4, 21.4], [123.8, 32.5]] },
+  china: { label: 'China', bb: [[96.5, 18.0], [128.5, 42.5]], max: true },
   east: { label: 'East China', bb: [[118.4, 27.6], [123.5, 32.4]] },
   south: { label: 'South China', bb: [[111.8, 21.6], [118.9, 25.1]] },
 };
+/** Reference cities drawn on the map (not suppliers). rank 1 = shown at every zoom, 2 = when zoomed in. */
+const REF = [
+  ['Beijing', '北京', 116.40, 39.90, 1], ['Shanghai', '上海', 121.47, 31.23, 1], ['Wuhan', '武汉', 114.30, 30.59, 1], ['Changsha', '长沙', 112.94, 28.23, 1],
+  ['Nanjing', '南京', 118.80, 32.06, 1], ['Kunming', '昆明', 102.83, 24.88, 1], ['Guangzhou', '广州', 113.26, 23.13, 1], ['Chengdu', '成都', 104.07, 30.67, 1],
+  ['Chongqing', '重庆', 106.55, 29.56, 1], ['Hangzhou', '杭州', 120.16, 30.27, 1], ['Shenzhen', '深圳', 114.06, 22.54, 2], ['Xiamen', '厦门', 118.09, 24.48, 1],
+  ['Tianjin', '天津', 117.20, 39.13, 2], ['Qingdao', '青岛', 120.38, 36.07, 1], ['Zhengzhou', '郑州', 113.63, 34.75, 1], ['Xi’an', '西安', 108.94, 34.34, 1],
+  ['Hefei', '合肥', 117.23, 31.82, 2], ['Nanchang', '南昌', 115.86, 28.68, 2], ['Fuzhou', '福州', 119.30, 26.08, 2], ['Nanning', '南宁', 108.37, 22.82, 1],
+  ['Guiyang', '贵阳', 106.63, 26.65, 2], ['Jinan', '济南', 117.12, 36.65, 2], ['Shijiazhuang', '石家庄', 114.51, 38.04, 2], ['Taiyuan', '太原', 112.55, 37.87, 2],
+  ['Hong Kong', '香港', 114.17, 22.32, 2], ['Taipei', '台北', 121.56, 25.04, 2], ['Suzhou', '苏州', 120.62, 31.30, 2], ['Ningbo', '宁波', 121.55, 29.87, 2],
+].map(([en, zh, lon, lat, rank]) => ({ en, zh, ll: [lon, lat], rank }));
+
 // Manufacturing cities [key, English, 中文, lon, lat, extra aliases]
 const C = (k, en, zh, lon, lat, ...alias) => ({ key: k, en, zh, ll: [lon, lat], alias });
 const CITIES = [
@@ -83,4 +95,4 @@ function rates(options = []) {
   return { '40HQ': box('FCL_40HQ', 5300), '40GP': box('FCL_40GP', 5000), '20GP': box('FCL_20GP', 3800), lcl: lcl ? { perCbm: lcl.rate, min: lcl.min, fees: lcl.fees } : { perCbm: 95, min: 0, fees: 650 }, fromLogistics: options.some((o) => o.active !== false && /^FCL_|^LCL$/.test(o.mode)) };
 }
 
-module.exports = { PORT_GEO, VIEWS, CITIES, CITY, cityOf, km, rates, CAPS: Object.fromEntries(PL.BOXES.map((b) => [b.code, b.cap])), LCL_MAX: PL.LCL_MAX || 15 };
+module.exports = { PORT_GEO, VIEWS, REF, CITIES, CITY, cityOf, km, rates, CAPS: Object.fromEntries(PL.BOXES.map((b) => [b.code, b.cap])), LCL_MAX: PL.LCL_MAX || 15 };
