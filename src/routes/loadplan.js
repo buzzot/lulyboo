@@ -17,6 +17,8 @@ const BOX = {
   '20GP': { name: "20' GP", cap: 25, inner: 33.2, cols: 6, rows: 5 },
   '40GP': { name: "40' GP", cap: 55, inner: 67.7, cols: 12, rows: 5 },
   '40HQ': { name: "40' HQ", cap: 65, inner: 76.4, cols: 12, rows: 6 },
+  // Less than container load: no box to fill, priced per freight ton (W/M = the larger of m³ and tonnes).
+  LCL: { name: 'LCL', cap: 15, lcl: true, zone: [12, 20] },
 };
 const STATUSES = ['planned', 'requested', 'booked'];
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
@@ -41,7 +43,7 @@ async function containerIndex(db) {
   const labelFor = (line) => {
     const c = line?.container_id && byId[line.container_id];
     if (!c) return null;
-    return { c, text: [`${portName(c.port)} · Container ${c.no}`, BOX[c.box]?.name || c.box, c.sailing ? `ETD ${PL.short(c.sailing.etd)}` : null, c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Quotes requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
+    return { c, text: [`${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no}`, c.box === 'LCL' ? null : BOX[c.box]?.name || c.box, c.sailing ? `ETD ${PL.short(c.sailing.etd)}` : null, c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Quotes requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
   };
   return { byId, labelFor };
 }
@@ -86,9 +88,10 @@ function loadPlanRoutes(router, { db, config }) {
       files: (Array.isArray(q.files) ? q.files : []).map((f, i) => ({ name: f.name, url: `${BASE}/quotes/${q.id}/files/${i}`, inline: /^(image\/|application\/pdf)/.test(f.type || '') })),
     }));
     const data = {
-      base: BASE, port, today: day, box: BOX,
+      base: BASE, port, portName: portName(port), today: day, box: BOX,
       orders: here.map((o, i) => ({
         id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', qty: Number(o.qty) || 0,
+        cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, color: COLORS[i % COLORS.length],
       })),
@@ -110,7 +113,7 @@ function loadPlanRoutes(router, { db, config }) {
           <aside class="card lp-pool-card"><h2 class="sec">Not loaded yet</h2><div class="sub" data-lp-poolmeta></div>
             <div class="lp-pool" data-lp-pool></div>
             <p class="sub lp-note">Lines without volume can't be loaded — type the CBM from the supplier's packing list first. It's saved to the PO.</p></aside>
-          <div class="lp-main"><div data-lp-containers></div><button type="button" class="lp-add" data-lp-add>+ Add container</button></div>
+          <div class="lp-main"><div data-lp-containers></div><div class="lp-tip" data-lp-tip hidden></div><button type="button" class="lp-add" data-lp-add>+ Add container</button></div>
         </div>
         <div class="lp-toast" data-lp-toast role="status" aria-live="polite"></div>
         <dialog class="rp-modal" data-lp-req aria-labelledby="lp-req-t"><form data-lp-req-form>
@@ -125,6 +128,7 @@ function loadPlanRoutes(router, { db, config }) {
             <label>CC <input name="cc" type="text" placeholder="optional, e.g. yourself — comma separated" autocomplete="off"></label>
             <label>Subject <input name="subject" type="text" required><span class="sub lp-hint">The reference (LBQ-…) is added for each forwarder.</span></label>
             <label class="cp-chk lp-req-chk"><input type="checkbox" name="contacts" value="1" data-lp-req-contacts> Include supplier contact details (for pickup / CFS delivery)</label>
+            <label class="cp-chk lp-req-chk" data-lp-req-bothrow hidden><input type="checkbox" name="both" value="1" data-lp-req-both> Also ask for a 20' GP price, to compare with LCL</label>
             <label>Message <textarea name="body" rows="18" required></textarea><span class="sub lp-hint">{contact} becomes each forwarder's contact name.</span></label>
             <div class="rp-actions"><button class="btn" data-lp-req-send>Send requests</button><button type="button" class="btn ghost" data-lp-req-close>Cancel</button><span class="sub" data-lp-req-note></span></div>
           </div></form></dialog>
@@ -212,7 +216,7 @@ function loadPlanRoutes(router, { db, config }) {
   router.get(`${BASE}/containers/:id/request`, json(async (req) => {
     const c = await getContainer(req.params.id);
     const facts = await containerFacts(c);
-    const draft = Q.rfqText({ container: c, ...facts, contacts: req.query.contacts === '1', by: req.staff?.name || '' });
+    const draft = Q.rfqText({ container: c, ...facts, contacts: req.query.contacts === '1', both: req.query.both === '1', by: req.staff?.name || '' });
     const sent = await db.list('plan_quotes', { filters: { container_id: c.id } }).catch(() => []);
     const fws = (await fwList()).map((f) => ({ id: f.id, company: f.company, contact: f.contact_name || '', email: f.email, sent: sent.some((q) => q.forwarder_id === f.id) }));
     return { draft: { ...draft, cc: c.request_cc || '' }, forwarders: fws };

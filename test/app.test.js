@@ -2385,6 +2385,51 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
 });
 
+test('load containers: LCL shipment — W/M totals, LCL quote request with CFS questions and optional 20GP price', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const B = '/admin/logistics/planning';
+  const j = async (p, form) => JSON.parse((await req(base, form ? 'POST' : 'GET', p, { cookie, form })).text);
+  const s1 = await db.insert('suppliers', { name: 'Yantian Toys', contact_name: 'Ken Wu', email: 'ken@ytoys.cn', address: '8 Factory Rd, Shenzhen' });
+  const o1 = await db.insert('plan_orders', { supplier_id: s1.id, po: 'PO7001', product: 'Plush Bear', qty: 1200, cartons: 50, cbm: 4.2, gross_kg: 5100, carton_l_cm: 60, carton_w_cm: 40, carton_h_cm: 35, ready_date: d(10), port: 'CNYTN' });
+  const o2 = await db.insert('plan_orders', { supplier_id: s1.id, po: 'PO7002', product: 'Teether', qty: 3000, cbm: 2.8, ready_date: d(12), port: 'CNYTN' });
+
+  const c = (await j(`${B}/containers`, { port: 'CNYTN', box: 'LCL' })).container;
+  assert.equal(c.box, 'LCL');
+  for (const o of [o1, o2]) assert.ok((await j(`${B}/assign`, { order: o.id, container: c.id })).ok);
+  const raw = (await req(base, 'GET', `${B}/load?port=CNYTN`, { cookie })).text;
+  assert.match(raw, /data-lp-tip/); assert.match(raw, /data-lp-req-both/);
+  const data = JSON.parse(raw.match(/data-loadplan="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  assert.ok(data.box.LCL.lcl); assert.equal(data.containers[0].box, 'LCL');
+  const d1 = data.orders.find((o) => o.po === 'PO7001'); assert.equal(d1.kg, 5100); assert.equal(d1.cartons, 50); assert.deepEqual(d1.carton, [60, 40, 35]);
+
+  const Q = require('../src/quotes');
+  assert.equal(Q.freightTons(4.2, 5100), 5.1); assert.equal(Q.freightTons(7, 2000), 7);
+  let dr = (await j(`${B}/containers/${c.id}/request?contacts=1&both=0`)).draft;
+  assert.match(dr.subject, /^Request for LCL quotation – 7\.00 m³ \/ 5,100 kg, Yantian → Los Angeles \/ Long Beach/);
+  assert.match(dr.body, /per W\/M[\s\S]*minimum charge/); assert.match(dr.body, /CFS warehouse address and the cargo delivery cut-off/);
+  assert.match(dr.body, /Chargeable:\s+7\.00 m³ — weight to be confirmed/);    // PO7002 has no weight
+  assert.match(dr.body, /carton 60 × 40 × 35 cm/); assert.match(dr.body, /PO7002[^\n]*\n[^\n]*cartons to be confirmed/);
+  assert.match(dr.body, /SUPPLIER CONTACTS \(for CFS delivery\)[\s\S]*ken@ytoys\.cn[\s\S]*8 Factory Rd/);
+  assert.doesNotMatch(dr.body, /20' GP/);
+  await db.update('plan_orders', { id: o2.id }, { gross_kg: 900, cartons: 30 });
+  dr = (await j(`${B}/containers/${c.id}/request?both=1`)).draft;
+  assert.match(dr.body, /Chargeable:\s+7\.00 W\/M \(by volume\)/);
+  assert.match(dr.body, /also quote 1 × 20' GP \(FCL\)/); assert.match(dr.body, /Mode:\s+LCL \(consolidated\) — please also quote 20' GP/);
+  assert.doesNotMatch(dr.body, /ken@ytoys\.cn/);
+
+  // switch to a 20' GP and back; labels in Orders
+  assert.ok((await j(`${B}/containers/${c.id}`, { box: '20GP' })).ok);
+  assert.ok((await j(`${B}/containers/${c.id}`, { box: 'LCL' })).ok);
+  assert.equal((await j(`${B}/containers/${c.id}`, { box: 'LCLX' })).ok, false);
+  const LP = require('../src/routes/loadplan');
+  const ci = await LP.containerIndex(db);
+  assert.match(ci.labelFor(db.tables.plan_orders.find((o) => o.id === o1.id)).text, /^Yantian · LCL shipment 1 · Planned$/);
+});
+
 test('PO / packing list upload: AI adds product lines, packing → product, volume from quantity', async (t) => {
   process.env.ANTHROPIC_API_KEY = 'sk-test';
   const realFetch = global.fetch; let answer = null; const prompts = [];

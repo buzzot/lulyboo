@@ -31,7 +31,8 @@ const greetName = (f) => (f?.contact_name ? f.contact_name.trim() : `${f?.compan
  * Formal request-for-quotation text for one container. `{contact}` in the body is replaced per forwarder.
  * Returns { subject, body } — the code is appended to the subject when sending.
  */
-function rfqText({ container, box, lines, sups, sailing, contacts = false, by = '' }) {
+function rfqText({ container, box, lines, sups, sailing, contacts = false, both = false, by = '' }) {
+  if (box && box.lcl) return lclText({ container, lines, sups, sailing, contacts, both, by });
   const sum = (k) => lines.reduce((a, l) => a + (Number(l[k]) || 0), 0);
   const has = (k) => lines.some((l) => Number(l[k]) > 0);
   const dates = lines.map((l) => l.ready_date).filter(Boolean).sort();
@@ -64,6 +65,56 @@ function rfqText({ container, box, lines, sups, sailing, contacts = false, by = 
   return { subject, body };
 }
 
+/** Freight tons for LCL: the larger of volume (m³) and weight (tonnes). */
+const freightTons = (cbm, kg) => Math.max(Number(cbm) || 0, (Number(kg) || 0) / 1000);
+
+/** Request for an LCL (consolidated) quotation: rate per W/M, minimum, CFS warehouse and cut-off. */
+function lclText({ container, lines, sups, sailing, contacts, both, by }) {
+  const sum = (k) => lines.reduce((a, l) => a + (Number(l[k]) || 0), 0);
+  const has = (k) => lines.some((l) => Number(l[k]) > 0);
+  const allHave = (k) => lines.every((l) => Number(l[k]) > 0);
+  const dates = lines.map((l) => l.ready_date).filter(Boolean).sort();
+  const ready = dates[dates.length - 1] || null;
+  const dest = sailing ? `${portName(sailing.destination)} (${sailing.destination})` : 'Los Angeles (USLAX) or Long Beach (USLGB)';
+  const nSup = Object.keys(sups).length;
+  const cbm = sum('cbm'); const kg = sum('gross_kg'); const ctn = sum('cartons');
+  const size = (l) => ([l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].every((x) => Number(x) > 0) ? `carton ${[l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].map((x) => +Number(x).toFixed(1)).join(' × ')} cm` : null);
+  const pl = lines.map((l, i) => `${i + 1}. ${l.po} — ${sups[l.supplier_id]?.name || 'Supplier'}${l.product ? ` — ${l.product}` : ''}\n   ${[l.qty ? `${int(l.qty)} pcs` : null, l.cartons ? `${int(l.cartons)} cartons` : 'cartons to be confirmed', size(l), l.cbm ? `${n2(l.cbm)} m³${l.cbm_estimated ? ' (estimated)' : ''}` : null, l.gross_kg ? `${int(l.gross_kg)} kg` : 'weight to be confirmed', l.ready_date ? `ready ${longDate(l.ready_date)}` : null].filter(Boolean).join(' · ')}`);
+  const total = [`${int(sum('qty'))} pcs`, has('cartons') ? `${int(ctn)} cartons` : null, `${n2(cbm)} m³`, has('gross_kg') ? `${int(kg)} kg` : null].filter(Boolean).join(' · ');
+  const wm = allHave('gross_kg') ? `${n2(freightTons(cbm, kg))} W/M (${cbm >= kg / 1000 ? 'by volume' : 'by weight'})` : `${n2(cbm)} m³ — weight to be confirmed`;
+  const contactBlock = Object.values(sups).map((x) => [`• ${x.name}`, x.contact_name ? `  Contact: ${x.contact_name}` : null, x.email ? `  Email: ${x.email}` : null, x.phone ? `  Phone: ${x.phone}` : null, x.address ? `  Address: ${x.address}` : null].filter(Boolean).join('\n'));
+  const subject = `Request for LCL quotation – ${n2(cbm)} m³${has('gross_kg') ? ` / ${int(kg)} kg` : ''}, ${portName(container.port)} → ${sailing ? portName(sailing.destination) : 'Los Angeles / Long Beach'}${ready ? `, cargo ready ${PL.short(ready)}` : ''}`;
+  const asks = [
+    'LCL ocean freight rate in USD per W/M (per m³ or per 1,000 kg, whichever is greater) and the minimum charge',
+    'Origin charges (CFS, documentation, customs clearance) and destination charges, itemised',
+    'CFS warehouse address and the cargo delivery cut-off date for the sailing',
+    'Consolidation service / carrier, ETD, ETA and transit time',
+    'Free time at destination and the validity of your quotation',
+  ];
+  if (both) asks.push("For comparison, please also quote 1 × 20' GP (FCL) from the same port, with the same details");
+  const body = [
+    'Dear {contact},', '',
+    'We would like to request your best quotation for an LCL (less than container load) shipment, described below. Kindly reply to this email, keeping the reference in the subject line, and include:', '',
+    ...asks.map((a, i) => `  ${i + 1}. ${a}`), '',
+    'SHIPMENT DETAILS',
+    `Mode:               LCL (consolidated)${both ? " — please also quote 20' GP" : ''}`,
+    `Volume:             ${n2(cbm)} m³`,
+    `Gross weight:       ${has('gross_kg') ? `${int(kg)} kg` : 'to be confirmed'}`,
+    `Cartons:            ${has('cartons') ? int(ctn) : 'to be confirmed'}`,
+    `Chargeable:         ${wm}`,
+    `Port of loading:    ${portName(container.port)} (${container.port}), China`,
+    `Port of discharge:  ${dest}, USA`,
+    `Preferred sailing:  ${sailing ? [sailing.carrier, `ETD ${longDate(sailing.etd)}`].filter(Boolean).join(' · ') + ' — alternatives welcome' : 'first available consolidation after the cargo-ready date'}`,
+    `Cargo ready:        ${ready ? longDate(ready) : 'to be confirmed'}`,
+    `Shippers:           ${nSup} supplier${nSup > 1 ? 's — each will deliver to your CFS warehouse' : ' — will deliver to your CFS warehouse'}`, '',
+    'PACKING LIST', ...pl, `Total: ${total}`,
+    ...(contacts ? ['', 'SUPPLIER CONTACTS (for CFS delivery)', ...contactBlock] : []),
+    '', `We would appreciate your reply by ${longDate(replyBy(3))}.`, '',
+    'Kind regards,', '', by || 'Lulyboo Logistics', 'Lulyboo',
+  ].join('\n');
+  return { subject, body };
+}
+
 // ── reading a reply ─────────────────────────────────────────────────────────
 const TOOL = {
   name: 'record_quote',
@@ -75,7 +126,7 @@ const TOOL = {
       declined: { type: 'boolean', description: 'True when the forwarder says they cannot quote / have no space' },
       currency: { type: 'string', description: 'Currency of the rates, e.g. USD' },
       ocean_usd: { type: 'number', description: 'Ocean freight for the container in USD (base rate)' },
-      total_usd: { type: 'number', description: 'All-in total in USD for the container including origin and destination charges that are stated. Do not invent charges.' },
+      total_usd: { type: 'number', description: 'All-in total in USD for the shipment (the container, or for LCL: rate × W/M or the minimum, plus charges) including origin and destination charges that are stated. Do not invent charges.' },
       charges: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, amount: { type: 'number' }, currency: { type: 'string' }, per: { type: 'string', description: 'per container, per BL, per shipment…' } }, required: ['name'] } },
       carrier: { type: 'string' }, vessel: { type: 'string', description: 'Vessel and voyage' },
       etd: { type: 'string', description: 'YYYY-MM-DD' }, eta: { type: 'string', description: 'YYYY-MM-DD' },
@@ -147,4 +198,4 @@ async function handleQuoteEmail({ db, from, subject, text, files = [] }) {
   return { matched: true, quote: q.id, status: patch.status };
 }
 
-module.exports = { CODE_RE, newCode, quoteAddress, greetName, rfqText, replyBy, TOOL, readQuote, quoteFields, handleQuoteEmail, longDate };
+module.exports = { freightTons, lclText, CODE_RE, newCode, quoteAddress, greetName, rfqText, replyBy, TOOL, readQuote, quoteFields, handleQuoteEmail, longDate };

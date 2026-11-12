@@ -1146,6 +1146,9 @@
   var cById = function (id) { for (var i = 0; i < D.containers.length; i++) if (D.containers[i].id === id) return D.containers[i]; return null; };
   var sById = function (id) { for (var i = 0; i < D.sailings.length; i++) if (D.sailings[i].id === id) return D.sailings[i]; return null; };
   var itemsOf = function (c) { return D.orders.filter(function (o) { return o.container === c.id; }); };
+  var cName = function (c) { return (D.box[c.box] && D.box[c.box].lcl ? 'LCL shipment ' : 'Container ') + c.no; };
+  var sumOf = function (c, k) { return itemsOf(c).reduce(function (a, o) { return a + (o[k] || 0); }, 0); };
+  var LCLC = (D.box.LCL || { cap: 15 }).cap, ZONE = (D.box.LCL && D.box.LCL.zone) || [12, 20];
   var usedOf = function (c) { return itemsOf(c).reduce(function (a, o) { return a + (o.cbm || 0); }, 0); };
   function toast(t) { if (!toastEl) return; toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastEl._t); toastEl._t = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
   function post(url, data) {
@@ -1163,7 +1166,7 @@
       '<div class="sub">' + esc([o.supplier, o.product, o.qty ? int(o.qty) + ' pcs' : ''].filter(Boolean).join(' · ')) + '</div>' +
       '<div class="lp-r3"><span>' + (o.ready ? 'Ready ' + esc(o.readyText) : 'No ready date') + '</span><span class="cp-tag ' + st.tag + '">' + esc(st.label) + '</span></div>' +
       (no ? '<div class="lp-vol"><input type="number" step="0.01" min="0" inputmode="decimal" placeholder="m³" aria-label="Volume of ' + esc(o.po) + ' in m³" data-lp-v="' + o.id + '"><button type="button" class="btn small" data-lp-savecbm="' + o.id + '">Save</button><small>volume required</small></div>' : '') +
-      (D.containers.length && !no ? '<select class="lp-quick" data-lp-quick="' + o.id + '" aria-label="Load ' + esc(o.po) + ' into"><option value="">Load into…</option>' + D.containers.map(function (c, i) { return '<option value="' + c.id + '">Container ' + c.no + ' · ' + esc(D.box[c.box].name) + '</option>'; }).join('') + '</select>' : '') +
+      (D.containers.length && !no ? '<select class="lp-quick" data-lp-quick="' + o.id + '" aria-label="Load ' + esc(o.po) + ' into"><option value="">Load into…</option>' + D.containers.map(function (c, i) { return '<option value="' + c.id + '">' + esc(cName(c)) + (D.box[c.box].lcl ? '' : ' · ' + esc(D.box[c.box].name)) + '</option>'; }).join('') + '</select>' : '') +
       '</div>';
   }
   function renderPool() {
@@ -1203,8 +1206,53 @@
   }
   function findQuote(cid, qid) { var c = cById(cid); if (!c) return null; for (var i = 0; i < c.quotes.length; i++) if (c.quotes[i].id === qid) return c.quotes[i]; return null; }
 
+  function ctlHTML(c) {
+    return '<div class="lp-ctl"><select data-lp-box="' + c.id + '" aria-label="Container type">' + Object.keys(D.box).map(function (b) { return '<option value="' + b + '"' + (b === c.box ? ' selected' : '') + '>' + esc(D.box[b].lcl ? 'LCL (shared container)' : D.box[b].name) + '</option>'; }).join('') + '</select>' +
+      '<select data-lp-sail="' + c.id + '" aria-label="Sailing"><option value="">' + (D.sailings.length ? 'Choose sailing…' : 'No sailings loaded') + '</option>' + D.sailings.map(function (s) { return '<option value="' + s.id + '"' + (s.id === c.sailing ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('') + '</select>' +
+      '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+      '<button type="button" class="icon-btn" title="Remove" aria-label="Remove ' + esc(cName(c)) + '" data-lp-del="' + c.id + '">×</button></div>';
+  }
+  function chipsHTML(items) {
+    return items.length ? '<div class="lp-chips">' + items.map(function (o) { return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-id="' + o.id + '"><i></i><b>' + esc(o.po) + '</b>' + esc((o.product ? ' ' + o.product + ' · ' : ' ') + n2(o.cbm) + ' m³') + '<button type="button" class="lp-x" data-lp-out="' + o.id + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>'; }).join('') + '</div>' : '';
+  }
+  function footHTML(c, items, sail, canReq, why) {
+    var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
+    return '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
+      '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
+      '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (canReq ? '' : ' disabled title="' + esc(why) + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>';
+  }
+  function statusTag(c) { return c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' : c.status === 'requested' ? ' <span class="cp-tag wait">Quotes requested</span>' : ''; }
+  // LCL: no box to fill — a carton pile per PO, totals and the chargeable freight tons (W/M).
+  function lclHTML(c) {
+    var items = itemsOf(c), u = usedOf(c), kg = sumOf(c, 'kg'), ctn = sumOf(c, 'cartons'), sail = sById(c.sailing), warns = [];
+    var allKg = items.length && items.every(function (o) { return o.kg > 0; }), wm = Math.max(u, kg / 1000);
+    var piles = items.map(function (o) {
+      var n = Math.max(1, Math.min(48, Math.round((o.cbm || 0) / 0.25))), anim = fresh[o.id], b = '';
+      for (var i = 0; i < n; i++) b += '<i class="lp-lc' + (anim ? ' anim' : '') + '" style="animation-delay:' + (anim ? Math.min(i, 30) * 30 : 0) + 'ms"></i>';
+      return '<div class="lp-pile" style="--c:' + o.color + '" title="' + esc(o.po + ' · ' + n2(o.cbm) + ' m³' + (o.cartons ? ' · ' + int(o.cartons) + ' cartons' : '')) + '"><div class="lp-pilebox">' + b + '</div><span>' + esc(o.po) + '</span></div>';
+    }).join('');
+    if (items.length) {
+      if (u >= ZONE[1]) warns.push('<div class="lp-warn">' + n2(u) + " m³ is container size — a 20' GP (" + D.box['20GP'].cap + ' m³) is usually cheaper. <button type="button" class="link small" data-lp-switch="' + c.id + '" data-box="20GP">Switch to 20\' GP</button></div>');
+      else if (u >= ZONE[0]) warns.push('<div class="lp-warn">Between ' + ZONE[0] + ' and ' + ZONE[1] + " m³ a 20' GP can cost about the same as LCL — ask forwarders for both when you request quotes.</div>");
+      else warns.push('<div class="lp-warn soft">Typical LCL size — sharing a container is usually cheapest below about ' + LCLC + ' m³.</div>');
+      var noKg = items.filter(function (o) { return !o.kg; }), noCtn = items.filter(function (o) { return !o.cartons; });
+      if (noKg.length) warns.push('<div class="lp-warn">' + esc(noKg.map(function (o) { return o.po; }).join(', ')) + ' — gross weight missing. LCL is charged by volume or weight, whichever is greater, so add it from the packing list.</div>');
+      if (noCtn.length) warns.push('<div class="lp-warn soft">' + esc(noCtn.map(function (o) { return o.po; }).join(', ')) + ' — carton count missing. The CFS warehouse checks cartons on delivery.</div>');
+      var est = items.filter(function (o) { return o.est; }); if (est.length) warns.push('<div class="lp-warn soft">' + esc(est.map(function (o) { return o.po; }).join(', ')) + ' volume is estimated from carton size — confirm with the packing list.</div>');
+      if (sail) { var late = items.filter(function (o) { return o.ready && o.ready > sail.etd; }); if (late.length) warns.push('<div class="lp-warn">' + esc(late.map(function (o) { return o.po; }).join(', ')) + (late.length > 1 ? ' are' : ' is') + " ready after this sailing's ETD.</div>"); }
+    }
+    var stat = function (v, l, sub) { return '<div class="lp-st"><b>' + v + '</b><span>' + l + '</span>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>'; };
+    return '<section class="card lp-c lp-lcl" data-c="' + c.id + '">' +
+      '<div class="lp-ch"><h2>' + esc(cName(c)) + statusTag(c) + '</h2>' + ctlHTML(c) + '</div>' +
+      '<div class="lp-stage lp-lclstage" data-lp-drop="' + c.id + '"><div class="lp-lbl3">LCL · shares a container with other shippers · goods go to the forwarder\'s CFS warehouse</div>' +
+        (items.length ? '<div class="lp-piles">' + piles + '</div>' : '<div class="lp-dropmsg lp-lcldrop">Drop POs here</div>') + '</div>' +
+      '<div class="lp-stats">' + stat(n2(u) + ' m³', 'Volume') + stat(allKg ? int(kg) + ' kg' : kg ? int(kg) + ' kg <i class="sub">+?</i>' : '—', 'Gross weight') + stat(ctn ? int(ctn) + (items.some(function (o) { return !o.cartons; }) ? ' <i class="sub">+?</i>' : '') : '—', 'Cartons') +
+        stat(items.length ? n2(allKg ? wm : u) + ' W/M' : '—', 'Freight tons', items.length ? (allKg ? (u >= kg / 1000 ? 'charged by volume' : 'charged by weight') : 'weight missing — by volume so far') : 'the larger of m³ and tonnes') + '</div>' +
+      chipsHTML(items) + warns.join('') + quotesHTML(c) + footHTML(c, items, sail, items.length > 0, 'Load POs first') + '</section>';
+  }
   function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
   function containerHTML(c, idx) {
+    if (D.box[c.box] && D.box[c.box].lcl) return lclHTML(c);
     var t = D.box[c.box], items = itemsOf(c), u = usedOf(c), pct = u / t.cap * 100, over = u > t.cap;
     var W = c.box === '20GP' ? Math.round(stageWidth() * 0.55) : stageWidth();
     var cutW = W - 48, rowH = Math.max(18, Math.min(30, Math.round(cutW / t.cols * 0.5))), cutH = t.rows * rowH, H = cutH + 26;
@@ -1228,14 +1276,10 @@
     if (over) warns.push('<div class="lp-warn bad">Over by ' + n2(u - t.cap) + ' m³ — move a PO out' + (c.box === '40GP' ? " or switch to 40' HQ" : c.box === '20GP' ? " or switch to 40' GP" : '') + '.</div>');
     if (sail) { var late = items.filter(function (o) { return o.ready && o.ready > sail.etd; }); if (late.length) warns.push('<div class="lp-warn">' + esc(late.map(function (o) { return o.po; }).join(', ')) + (late.length > 1 ? ' are' : ' is') + " ready after this sailing's ETD.</div>"); }
     var noCbm = items.filter(function (o) { return o.est; }); if (noCbm.length) warns.push('<div class="lp-warn soft">' + esc(noCbm.map(function (o) { return o.po; }).join(', ')) + ' volume is estimated from carton size — confirm with the packing list.</div>');
-    if (!over && items.length && c.box !== '20GP' && u <= D.box['20GP'].cap) warns.push("<div class=\"lp-warn soft\">Only " + n2(u) + " m³ — a 20' GP or LCL may be cheaper.</div>");
-    var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
+    if (!over && items.length && u <= LCLC) warns.push('<div class="lp-warn soft">Only ' + n2(u) + ' m³ — LCL (sharing a container) is usually cheaper. <button type="button" class="link small" data-lp-switch="' + c.id + '" data-box="LCL">Switch to LCL</button></div>');
+    else if (!over && items.length && c.box !== '20GP' && u <= D.box['20GP'].cap) warns.push("<div class=\"lp-warn soft\">Only " + n2(u) + " m³ — a 20' GP may be cheaper.</div>");
     return '<section class="card lp-c" data-c="' + c.id + '">' +
-      '<div class="lp-ch"><h2>Container ' + c.no + (c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' : c.status === 'requested' ? ' <span class="cp-tag wait">Quotes requested</span>' : '') + '</h2><div class="lp-ctl">' +
-        '<select data-lp-box="' + c.id + '" aria-label="Container type">' + Object.keys(D.box).map(function (b) { return '<option value="' + b + '"' + (b === c.box ? ' selected' : '') + '>' + esc(D.box[b].name) + '</option>'; }).join('') + '</select>' +
-        '<select data-lp-sail="' + c.id + '" aria-label="Sailing"><option value="">' + (D.sailings.length ? 'Choose sailing…' : 'No sailings loaded') + '</option>' + D.sailings.map(function (s) { return '<option value="' + s.id + '"' + (s.id === c.sailing ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('') + '</select>' +
-        '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
-        '<button type="button" class="icon-btn" title="Remove container" aria-label="Remove container ' + c.no + '" data-lp-del="' + c.id + '">×</button></div></div>' +
+      '<div class="lp-ch"><h2>' + esc(cName(c)) + statusTag(c) + '</h2>' + ctlHTML(c) + '</div>' +
       '<div class="lp-stage" data-lp-drop="' + c.id + '"><div class="lp-box" style="width:' + W + 'px;height:' + H + 'px">' +
         '<div class="lp-lbl">' + esc(t.name) + ' · ' + t.cap + ' m³ practical load</div><div class="lp-lbl2" style="left:' + (W - 70) + 'px">door →</div>' +
         '<div class="lp-shell"></div><div class="lp-door"></div>' +
@@ -1243,17 +1287,15 @@
         '<div class="lp-cut"><div class="lp-grid" style="background-size:' + cw + 'px ' + ch + 'px"></div>' + inside + (items.length ? '' : '<div class="lp-dropmsg">Drop POs here</div>') + '</div>' +
       '</div></div>' +
       '<div class="lp-fill"><div class="lp-track"><i class="' + lvl + '" style="width:' + Math.min(pct, 100) + '%"></i></div><div class="lp-fnum">' + n2(u) + ' / ' + t.cap + ' m³<small>' + Math.round(pct) + '% full · ' + n2(Math.max(0, t.cap - u)) + ' m³ left</small></div></div>' +
-      (items.length ? '<div class="lp-chips">' + items.map(function (o) { return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-id="' + o.id + '"><i></i><b>' + esc(o.po) + '</b>' + esc((o.product ? ' ' + o.product + ' · ' : ' ') + n2(o.cbm) + ' m³') + '<button type="button" class="lp-x" data-lp-out="' + o.id + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>'; }).join('') + '</div>' : '') +
-      warns.join('') + quotesHTML(c) +
-      '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + items.length + ' line' + (items.length > 1 ? 's' : '') + '</b> · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
-        '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
-        '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (items.length && !over ? '' : ' disabled title="' + (over ? 'Container is over capacity' : 'Load POs first') + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>' +
-
+      chipsHTML(items) + warns.join('') + quotesHTML(c) + footHTML(c, items, sail, items.length && !over, over ? 'Container is over capacity' : 'Load POs first') +
       '</section>';
   }
   function render() {
     renderPool();
     boxesEl.innerHTML = D.containers.length ? D.containers.map(containerHTML).join('') : '<div class="card lp-none"><p>No containers yet at this port.</p></div>';
+    var tip = root.querySelector('[data-lp-tip]'), waiting = D.orders.filter(function (o) { return !o.container; }).reduce(function (a, o) { return a + (o.cbm || 0); }, 0);
+    var hasLcl = D.containers.some(function (c) { return D.box[c.box] && D.box[c.box].lcl; });
+    if (tip) { tip.hidden = !(waiting > 0 && waiting <= LCLC && !hasLcl); tip.innerHTML = tip.hidden ? '' : '<span>Only <b>' + n2(waiting) + ' m³</b> waiting at ' + esc(D.portName || D.port) + ' — not enough for a container. Plan it as LCL?</span><button type="button" class="btn small" data-lp-addlcl>Add LCL shipment</button>'; }
     fresh = {};
   }
 
@@ -1261,7 +1303,7 @@
     var o = byId(id), c = cById(cid); if (!o || !c || o.container === cid) return;
     if (!o.cbm) { toast('Add the volume first'); return; }
     o.container = cid; fresh[id] = 1; render();
-    var t = D.box[c.box]; if (usedOf(c) > t.cap) toast(o.po + " doesn't fit — " + n2(usedOf(c) - t.cap) + ' m³ over');
+    var t = D.box[c.box]; if (!t.lcl && usedOf(c) > t.cap) toast(o.po + " doesn't fit — " + n2(usedOf(c) - t.cap) + ' m³ over');
     post(D.base + '/assign', { order: id, container: cid }).catch(fail);
   }
   function unload(id) { var o = byId(id); if (!o || !o.container) return; o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).catch(fail); }
@@ -1286,6 +1328,7 @@
   root.addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (!b) return; var id;
     if ((id = b.getAttribute('data-lp-out'))) { unload(id); return; }
+    if ((id = b.getAttribute('data-lp-switch'))) { var cs = cById(id), nb = b.getAttribute('data-box'); cs.box = nb; itemsOf(cs).forEach(function (o) { fresh[o.id] = 1; }); render(); toast(cName(cs) + ' — now ' + (D.box[nb].lcl ? 'LCL' : D.box[nb].name)); post(D.base + '/containers/' + id, { box: nb }).catch(fail); return; }
     if ((id = b.getAttribute('data-lp-savecbm'))) {
       var inp = root.querySelector('[data-lp-v="' + id + '"]'), v = parseFloat(String(inp.value).replace(',', '.'));
       if (!(v > 0)) { toast('Enter the volume in m³'); inp.focus(); return; }
@@ -1316,10 +1359,11 @@
     if (!fws.length) rq.querySelector('[data-lp-fw-add]').open = true;
   }
   var checkedFws = function () { return Array.prototype.map.call(rq.querySelectorAll('[data-lp-fw-list] input:checked'), function (i) { return i.value; }); };
-  function rqDraft(contacts) {
+  function rqDraft() {
     var keep = rq.querySelector('[data-lp-fw-list] input') ? checkedFws() : null;
+    var contacts = rq.querySelector('[data-lp-req-contacts]').checked, both = rq.querySelector('[data-lp-req-both]').checked;
     rq.querySelector('[data-lp-req-loading]').hidden = false; rq.querySelector('[data-lp-req-fields]').hidden = true;
-    return fetch(D.base + '/containers/' + rqId + '/request' + (contacts ? '?contacts=1' : ''), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+    return fetch(D.base + '/containers/' + rqId + '/request?contacts=' + (contacts ? 1 : 0) + '&both=' + (both ? 1 : 0), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) throw new Error(j.error || 'Could not prepare the request');
       var f = rqForm.elements; fws = j.forwarders || [];
       if (!f.cc.value) f.cc.value = j.draft.cc || '';
@@ -1332,9 +1376,14 @@
     root.addEventListener('click', function (e) {
       var b = e.target.closest('[data-lp-request]'); if (!b) return;
       rqId = b.getAttribute('data-lp-request'); rqForm.reset(); rq.querySelector('[data-lp-fw-list]').innerHTML = ''; rq.querySelector('[data-lp-req-note]').textContent = '';
-      if (rq.showModal) rq.showModal(); rqDraft(false);
+      var rc = cById(rqId), lcl = !!(rc && D.box[rc.box] && D.box[rc.box].lcl), u = rc ? usedOf(rc) : 0;
+      rq.querySelector('#lp-req-t').textContent = lcl ? 'Request LCL quotations' : 'Request quotations';
+      rq.querySelector('[data-lp-req-bothrow]').hidden = !lcl;
+      rq.querySelector('[data-lp-req-contacts]').checked = lcl; // CFS delivery: forwarders need the factories
+      rq.querySelector('[data-lp-req-both]').checked = lcl && u >= ZONE[0] && u < ZONE[1];
+      if (rq.showModal) rq.showModal(); rqDraft();
     });
-    rq.addEventListener('change', function (e) { if (e.target.hasAttribute('data-lp-req-contacts')) rqDraft(e.target.checked); });
+    rq.addEventListener('change', function (e) { if (e.target.hasAttribute('data-lp-req-contacts') || e.target.hasAttribute('data-lp-req-both')) rqDraft(); });
     rq.addEventListener('click', function (e) {
       if (e.target.closest('[data-lp-req-close]') || e.target === rq) { rq.close(); return; }
       var add = e.target.closest('[data-lp-fw-save]'); if (!add) return;
@@ -1389,10 +1438,12 @@
   }
 
   var addBtn = document.querySelector('[data-lp-add]');
-  if (addBtn) addBtn.addEventListener('click', function () {
-    addBtn.disabled = true;
-    post(D.base + '/containers', { port: D.port, box: '40GP' }).then(function (j) { D.containers.push(j.container); render(); addBtn.disabled = false; }).catch(function (x) { addBtn.disabled = false; toast(x.message); });
-  });
+  function addBox(box, btn) {
+    btn.disabled = true;
+    post(D.base + '/containers', { port: D.port, box: box }).then(function (j) { D.containers.push(j.container); render(); btn.disabled = false; }).catch(function (x) { btn.disabled = false; toast(x.message); });
+  }
+  if (addBtn) addBtn.addEventListener('click', function () { addBox('40GP', addBtn); });
+  root.addEventListener('click', function (e) { var b = e.target.closest('[data-lp-addlcl]'); if (b) addBox('LCL', b); });
   var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(render, 150); });
   render();
 })();
