@@ -1,11 +1,12 @@
 'use strict';
-// Shipment confirmation & shipping documents.
+// Shipment confirmation & shipping documents — by email only.
 //   1. Each supplier in a planned container (or LCL shipment) gets one request on the loading date
 //      (container loading_date, or ETD − 3 days), sent at 9:00 China time. The subject carries LBS-XXXXX.
-//   2. The supplier replies with attachments (inbound docs@…, matched by the code) or uses a no-login upload page.
-//   3. AI reads the packing list: cartons, gross weight, m³, carton size, container / seal / B/L numbers.
+//   2. The supplier replies with the documents attached (inbound docs@…, matched by the code).
+//   3. AI reads the packing list: cartons, gross weight, m³, carton size, container / seal / B/L numbers, or a new date.
 //   4. You review planned vs actual and accept: the PO lines get the actual figures and the shipment is kept for stats.
-//   Reminders go out 2 and 4 days after the request while nothing has come back.
+//   No reply: reminders 2 and 4 days after the request. Reply with documents missing: follow-ups that ask only for
+//   what is missing (2 days after the last reply, then 3 days later). The bill of lading is not chased before ETD + 3.
 
 const crypto = require('node:crypto');
 const AI = require('./ai');
@@ -26,39 +27,49 @@ const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
 const int = (v) => Number(v || 0).toLocaleString('en-US');
 const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Math.round(Number(v) * 1000) / 1000);
 const LEAD_DAYS = 3;            // loading date = ETD − 3 days when none is set
-const REMIND_AFTER = [2, 4];    // days after the request
-const LINK_DAYS = 60;           // upload link stays valid this long after the request
+const REMIND_AFTER = [2, 4];    // no reply: days after the request
+const FOLLOW_AFTER = [2, 3];    // reply with documents missing: days after the last reply, then after the 1st follow-up
+const BL_AFTER_ETD = 3;         // the B/L is issued after sailing
 const SEND_HOUR = 9;            // China time
+const day10 = (v) => (v ? String(v).slice(0, 10) : null);
 
 /** Date and hour in China (UTC+8), where suppliers are. */
 function chinaNow(now = new Date()) { const d = new Date(now.getTime() + 8 * 3600e3); return { day: d.toISOString().slice(0, 10), hour: d.getUTCHours() }; }
 const daysBetween = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
 
-/** Required documents per mode: [plan_files kind, label, hint]. */
+/** Documents per mode: [plan_files kind, label, what to ask, optional]. Optional ones are asked once, never chased. */
 const REQUIRED = {
-  FCL: [['Invoice', 'Commercial invoice', ''], ['Packing list', 'Packing list', 'cartons, gross weight and m³ per PO'], ['Loading photos', 'Loading photos', 'door open, door closed with the seal'], ['Bill of lading', 'Bill of lading', 'draft or final — usually 1–3 days after sailing']],
-  LCL: [['Warehouse receipt', 'Warehouse receipt (FCR)', 'from the CFS warehouse'], ['Invoice', 'Commercial invoice', ''], ['Packing list', 'Packing list', 'cartons, gross weight and m³ per PO'], ['Bill of lading', 'House bill of lading', 'when available']],
-  '': [['Invoice', 'Commercial invoice', ''], ['Packing list', 'Packing list', 'cartons, gross weight and m³ per PO'], ['Bill of lading', 'Bill of lading', 'or tracking details']],
+  FCL: [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'Bill of lading', 'Bill of lading (draft or final)'], ['Loading photos', 'Loading photos', 'Loading photos (door open, and door closed with the seal)', true]],
+  LCL: [['Warehouse receipt', 'Warehouse receipt (FCR)', 'Warehouse receipt (FCR) from the CFS warehouse'], ['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'House bill of lading', 'House bill of lading (draft or final)']],
+  '': [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'Bill of lading', 'Bill of lading or tracking details']],
 };
 const required = (sc) => REQUIRED[sc?.mode || ''] || REQUIRED[''];
+const CONFIRM = { FCL: 'Confirmation that the container is loaded, with the container number and seal number', LCL: 'Confirmation that the goods were delivered to the CFS warehouse, with the delivery date', '': 'Confirmation of the shipment date, with the container or tracking number' };
+const confirmed = (sc) => !!(sc.confirmed_at && (sc.mode !== 'FCL' || sc.container_no));
+
 const STATUS = {
   scheduled: { label: 'Scheduled', tag: 'plan' }, sent: { label: 'Waiting for supplier', tag: 'wait' }, received: { label: 'To review', tag: 'plan' },
   complete: { label: 'Complete', tag: 'ok' }, cancelled: { label: 'Cancelled', tag: 'done' },
 };
-/** Status for display: sent + past the last reminder → overdue. */
+/** Status for display. `missing` (stored) = required documents not in yet. */
 function stateOf(sc, day) {
-  if (sc.status === 'sent' && sc.sent_at && daysBetween(String(sc.sent_at).slice(0, 10), day) > REMIND_AFTER[REMIND_AFTER.length - 1]) return { key: 'overdue', label: `Overdue ${daysBetween(String(sc.sent_at).slice(0, 10), day)} d`, tag: 'bad' };
+  if (sc.status === 'sent' && sc.sent_at && daysBetween(day10(sc.sent_at), day) > REMIND_AFTER[REMIND_AFTER.length - 1]) return { key: 'overdue', label: `Overdue ${daysBetween(day10(sc.sent_at), day)} d`, tag: 'bad' };
+  const miss = (sc.missing || []).length;
+  if ((sc.status === 'received' || sc.status === 'complete') && miss && (sc.followups || 0) >= FOLLOW_AFTER.length && sc.last_followup_at && daysBetween(day10(sc.last_followup_at), day) >= FOLLOW_AFTER[FOLLOW_AFTER.length - 1]) return { key: 'docs_missing', label: 'Documents missing', tag: 'bad' };
+  if (sc.status === 'complete' && miss) return { key: 'complete', label: 'Accepted · documents missing', tag: 'wait' };
   return { key: sc.status, ...(STATUS[sc.status] || { label: sc.status, tag: 'plan' }) };
 }
-const logEntry = (text) => ({ at: new Date().toISOString(), text: String(text).slice(0, 400) });
-const withLog = (sc, text) => [...(Array.isArray(sc.log) ? sc.log : []), logEntry(text)].slice(-60);
+const logEntry = (text, at = new Date()) => ({ at: at.toISOString(), text: String(text).slice(0, 400) });
+const withLog = (sc, text, at) => [...(Array.isArray(sc.log) ? sc.log : []), logEntry(text, at)].slice(-60);
 
 /** Loading date of a container: set by you, or ETD − 3 days. */
 function loadingDate(c, sailing) {
-  if (c?.loading_date) return String(c.loading_date).slice(0, 10);
-  return sailing?.etd ? PL.addDays(String(sailing.etd).slice(0, 10), -LEAD_DAYS) : null;
+  if (c?.loading_date) return day10(c.loading_date);
+  return sailing?.etd ? PL.addDays(day10(sailing.etd), -LEAD_DAYS) : null;
 }
 const modeOf = (c) => (!c ? '' : c.box === 'LCL' ? 'LCL' : 'FCL');
+/** Earliest day to chase the bill of lading: ETD + 3, or loading date + 6. */
+const blFrom = (sc, sailing) => (sailing?.etd ? PL.addDays(day10(sailing.etd), BL_AFTER_ETD) : sc.due_date ? PL.addDays(day10(sc.due_date), LEAD_DAYS + BL_AFTER_ETD) : null);
 
 /** Planned figures of the lines, kept so the actual figures can be compared later. */
 const plannedOf = (lines) => lines.map((l) => ({ id: l.id, po: l.po, product: l.product || '', qty: num(l.qty), cartons: num(l.cartons), gross_kg: num(l.gross_kg), cbm: num(l.cbm), carton: [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].every((x) => Number(x) > 0) ? [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].map(Number) : null }));
@@ -77,17 +88,15 @@ async function syncScheduled(db, day) {
     const lines = ld ? (await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => [])) : [];
     const bySup = {};
     for (const l of lines) (bySup[l.supplier_id] = bySup[l.supplier_id] || []).push(l);
-    // suppliers taken out of the container: drop requests that haven't gone out yet
     for (const x of mine.filter((m) => m.status === 'scheduled' && !bySup[m.supplier_id])) await db.remove('ship_confirmations', { id: x.id });
-    if (!ld || daysBetween(ld, day) > 14) continue; // nothing to plan, or long past
+    if (!ld || daysBetween(ld, day) > 14) continue;
     for (const [sid, ls] of Object.entries(bySup)) {
       const ex = mine.find((m) => m.supplier_id === sid && m.status !== 'cancelled');
       const patch = { pos: posOf(ls), order_ids: ls.map((l) => l.id), mode: modeOf(c), planned: plannedOf(ls), updated_at: new Date().toISOString() };
       if (!ex) {
-        await db.insert('ship_confirmations', { code: newCode(), token: newToken(), supplier_id: sid, container_id: c.id, due_date: ld, status: 'scheduled', reminders: 0, log: [logEntry(`Scheduled for ${PL.short(ld)} (${c.loading_date ? 'loading date' : `ETD − ${LEAD_DAYS} days`})`)], created_at: new Date().toISOString(), ...patch });
+        await db.insert('ship_confirmations', { code: newCode(), token: newToken(), supplier_id: sid, container_id: c.id, due_date: ld, status: 'scheduled', reminders: 0, followups: 0, missing: required({ mode: modeOf(c) }).filter((r) => !r[3]).map((r) => r[0]), log: [logEntry(`Scheduled for ${PL.short(ld)} (${c.loading_date ? 'loading date' : `ETD − ${LEAD_DAYS} days`})`)], created_at: new Date().toISOString(), ...patch });
         created++;
       } else if (ex.status === 'scheduled') {
-        // a supplier-reported new date wins over the plan
         await db.update('ship_confirmations', { id: ex.id }, { ...patch, due_date: ex.new_date || ld });
       }
     }
@@ -104,11 +113,45 @@ async function factsOf(db, sc) {
   if (!lines.length && (sc.pos || []).length) lines = (await db.list('plan_orders', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((l) => sc.pos.some((p) => PL.normPo(p) === PL.normPo(l.po)));
   return { supplier, c, sailing, lines };
 }
+const filesOf = async (db, sc) => (sc.id ? (await db.list('plan_files', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((f) => f.shipment_id === sc.id) : []);
 
-function linkFor(config, sc) { return `${config.publicUrl}/ship/${sc.token}`; }
+/**
+ * Document checklist right now: each document with its state.
+ *   have · miss (chase now) · later (B/L before ETD + 3) · opt (optional, not received)
+ */
+function checklistOf(sc, files, sailing, day) {
+  const bl = blFrom(sc, sailing);
+  const out = [];
+  if (!confirmed(sc)) out.push({ key: 'confirm', label: sc.mode === 'FCL' ? 'Container and seal number' : 'Shipment confirmation', ask: CONFIRM[sc.mode || ''], state: 'miss' });
+  for (const [kind, label, ask, optional] of required(sc)) {
+    const have = files.some((f) => f.kind === kind);
+    const state = have ? 'have' : optional ? 'opt' : kind === 'Bill of lading' && bl && day < bl ? 'later' : 'miss';
+    out.push({ key: kind, label, ask, state, from: state === 'later' ? bl : null });
+  }
+  return out;
+}
+const missingKinds = (list) => list.filter((x) => (x.state === 'miss' || x.state === 'later') && x.key !== 'confirm').map((x) => x.key);
 
-/** The email to the supplier (English). */
-function composeEmail(config, sc, { supplier, c, sailing, lines }, { reminder = 0 } = {}) {
+/** When the next automatic follow-up goes out (China date), or null. */
+function nextFollowup(sc, list) {
+  if (sc.paused || !['received', 'complete'].includes(sc.status)) return null;
+  const chase = list.filter((x) => x.state === 'miss' || x.state === 'later');
+  if (!chase.length) return null;
+  if (sc.next_followup) return day10(sc.next_followup);
+  const n = sc.followups || 0;
+  if (n >= FOLLOW_AFTER.length) return null;
+  const base = n === 0 ? (sc.received_at ? PL.addDays(day10(sc.received_at), FOLLOW_AFTER[0]) : null) : (sc.last_followup_at ? PL.addDays(day10(sc.last_followup_at), FOLLOW_AFTER[n]) : null);
+  if (!base) return null;
+  const firstNow = chase.filter((x) => x.state === 'miss').length ? base : null;
+  const bl = chase.find((x) => x.state === 'later')?.from;
+  return firstNow || (bl && bl > base ? bl : base);
+}
+
+/**
+ * Editable parts of the email for one kind: request · reminder · missing.
+ * items: [{ text, state, on }] — what we ask for; received: labels already in.
+ */
+function draftParts(sc, { supplier, c, sailing, lines }, { kind = 'request', list = [] } = {}) {
   const mode = sc.mode || '';
   const date = sc.due_date ? PL.short(sc.due_date) : 'today';
   const pos = (sc.pos || []).join(', ');
@@ -116,56 +159,101 @@ function composeEmail(config, sc, { supplier, c, sailing, lines }, { reminder = 
   const shipment = c
     ? [mode === 'LCL' ? 'LCL (shared container)' : `FCL, ${c.box === '20GP' ? "20' GP" : c.box === '40HQ' ? "40' HQ" : "40' GP"}`, `${portName(c.port)}${sailing ? ` → ${portName(sailing.destination)}` : ''}`, sailing?.carrier, sailing?.etd ? `ETD ${PL.short(sailing.etd)}` : null].filter(Boolean).join(' · ')
     : '';
-  const intro = mode === 'LCL'
-    ? `According to our plan, the goods below are delivered to the forwarder's CFS warehouse on ${date}. Please confirm the delivery and send us the shipping documents.`
+  const tail = `${/^po/i.test(pos) ? '' : 'PO '}${pos}${where ? ` – ${where}` : ''}${sc.due_date ? `, ${PL.short(sc.due_date)}` : ''}`;
+  const plan = mode === 'LCL'
+    ? `According to our plan, the goods below are delivered to the forwarder's CFS warehouse on ${date}. Please confirm the delivery and reply to this email with the shipping documents attached.`
     : mode === 'FCL'
-      ? `According to our plan, the goods below are loaded into the container on ${date}. Please confirm the loading and send us the shipping documents.`
-      : 'Please confirm the shipment of the goods below and send us the shipping documents.';
-  const asks = mode === 'LCL'
-    ? ['Confirmation that the goods were delivered to the CFS warehouse, with the delivery date', 'Warehouse receipt (FCR) from the CFS', 'Commercial invoice', 'Packing list with cartons, gross weight and volume (m³) per PO', 'House bill of lading copy when available']
-    : mode === 'FCL'
-      ? ['Confirmation that the container is loaded, with the container number and seal number', 'Commercial invoice', 'Packing list with cartons, gross weight and volume (m³) per PO', 'Loading photos (door open, and door closed with the seal)', 'Bill of lading copy when available']
-      : ['Confirmation of the shipment date, with the container or tracking number', 'Commercial invoice', 'Packing list with cartons, gross weight and volume (m³) per PO', 'Bill of lading copy when available'];
+      ? `According to our plan, the goods below are loaded into the container on ${date}. Please confirm the loading and reply to this email with the shipping documents attached.`
+      : 'Please confirm the shipment of the goods below and reply to this email with the shipping documents attached.';
+  const all = [{ text: CONFIRM[mode], state: '', key: 'confirm' }, ...required(sc).map(([k, , ask, opt]) => ({ text: ask, state: opt ? 'opt' : '', key: k }))];
+  const stateOfKey = (k) => list.find((x) => x.key === k)?.state;
+  let subject; let intro; let items; let listLabel = 'Please send';
+  if (kind === 'missing') {
+    subject = `Missing shipping documents – ${tail}`;
+    intro = 'Thank you for the documents you sent. We are still missing the documents below for this shipment — please reply to this email with them attached.';
+    listLabel = 'Still missing';
+    items = all.map((x) => { const st = stateOfKey(x.key) || (x.key === 'confirm' ? 'have' : 'miss'); const later = list.find((y) => y.key === x.key)?.from; return { text: x.text, state: st, on: st === 'miss', note: st === 'later' && later ? `not before ${PL.short(later)}` : '' }; });
+  } else if (kind === 'reminder') {
+    subject = `Reminder: Shipment confirmation & documents – ${tail}`;
+    intro = `This is a friendly reminder: we have not received the shipment confirmation and documents yet.\n\n${plan}`;
+    items = all.map((x) => { const st = stateOfKey(x.key) === 'have' ? 'have' : x.state === 'opt' ? 'opt' : 'miss'; return { text: x.text, state: st, on: st !== 'have' }; });
+  } else {
+    subject = `Shipment confirmation & documents – ${tail}`;
+    intro = plan;
+    items = all.map((x) => ({ text: x.text, state: x.state, on: true }));
+  }
+  const received = list.filter((x) => x.state === 'have').map((x) => (x.key === 'confirm' ? (sc.container_no ? `Container ${sc.container_no}` : 'Shipment confirmation') : x.label));
+  if (sc.container_no && !received.some((r) => /^Container /.test(r))) received.push(`Container ${sc.container_no}`);
   const rows = lines.map((l) => ({ po: l.po, product: l.product || '', qty: l.qty ? int(l.qty) : '', cartons: l.cartons ? int(l.cartons) : '', cbm: l.cbm ? n2(l.cbm) : '' }));
-  const subject = `${reminder ? 'Reminder: ' : ''}Shipment confirmation & documents – PO ${pos}${where ? ` – ${where}` : ''}${sc.due_date ? `, ${PL.short(sc.due_date)}` : ''} [${sc.code}]`;
-  const lead = reminder ? `This is a friendly reminder: we have not received the shipment confirmation and documents yet.\n\n${intro}` : intro;
-  const e = shipmentEmail({ name: supplier?.contact_name || supplier?.name || '', intro: lead, rows, shipment, asks, link: linkFor(config, sc), delayNote: 'If the shipment is delayed, please use the same link and tell us the new date.' });
-  return { subject, ...e };
+  return { subject, intro, defaultIntro: intro, items, listLabel, received, rows, shipment, name: supplier?.contact_name || supplier?.name || '' };
 }
 
-/** Send the request (or a reminder) now. */
-async function sendRequest(db, config, sc, { reminder = 0, by = null, at = new Date() } = {}) {
+const CLOSING = 'Please reply to this email with the files attached and keep the reference in the subject. If the shipment date has changed, just tell us the new date in your reply.';
+/** Finished email: parts + edits ({ subject, intro, items: [text], received: bool }). The code always ends the subject. */
+function composeEmail(sc, parts, edits = {}) {
+  const d = { ...parts, ...Object.fromEntries(Object.entries(edits).filter(([, v]) => v !== undefined && v !== null && v !== '')) };
+  const subject = `${String(d.subject).replace(CODE_RE, '').replace(/\[\s*\]/g, '').trim()} [${sc.code}]`;
+  const asks = (edits.items ? edits.items : parts.items.filter((x) => x.on).map((x) => x.text)).map((x) => String(x).replace(/^\s*(\d+[.)]|[-•*])\s*/, '').trim()).filter(Boolean);
+  const received = edits.received === false ? [] : parts.received;
+  return { subject, ...shipmentEmail({ name: d.name, intro: d.intro, rows: d.rows, shipment: d.shipment, listLabel: d.listLabel, asks, received, closing: CLOSING }) };
+}
+
+const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+/**
+ * Send a request, reminder or missing-documents follow-up now.
+ * `edits` from the popup: { to: [], cc: [], subject, intro, items: [text], received: bool }. Without `to`: the supplier's
+ * email and portal users (automatic run).
+ */
+async function sendRequest(db, config, sc, { kind = 'request', by = null, at = new Date(), edits = null } = {}) {
   const facts = await factsOf(db, sc);
   if (!facts.supplier) throw new Error('Supplier not found');
   const P = require('./projects');
-  const to = await P.supplierRecipients(db, facts.supplier);
-  if (!to.length) throw new Error(`${facts.supplier.name} has no email address`);
-  const m = composeEmail(config, sc, facts, { reminder });
-  await sendEmail(config, { to, cc: reminder ? [] : P.ownerEmails(), subject: m.subject, text: m.text, html: m.html, replyTo: [docsAddress()] });
+  const to = edits?.to ? [...new Set(edits.to.map((e) => String(e).trim().toLowerCase()).filter(Boolean))] : await P.supplierRecipients(db, facts.supplier);
+  const ccIn = edits?.cc ? edits.cc.map((e) => String(e).trim().toLowerCase()).filter(Boolean) : null;
+  const bad = [...to, ...(ccIn || [])].find((e) => !EMAIL_RE.test(e)); if (bad) throw new Error(`Check this email address: ${bad}`);
+  if (!to.length) throw new Error(`${facts.supplier.name} has no email address — add one in the To field`);
+  const cc = ccIn ? [...new Set(ccIn)].filter((e) => !to.includes(e)) : kind === 'request' ? P.ownerEmails() : [];
+  const list = checklistOf(sc, await filesOf(db, sc), facts.sailing, chinaNow(at).day);
+  const parts = draftParts(sc, facts, { kind, list });
+  if (kind === 'missing' && !edits?.items && !parts.items.some((x) => x.on)) return { skipped: true };
+  const m = composeEmail(sc, parts, edits || {});
+  await sendEmail(config, { to, cc, subject: m.subject, text: m.text, html: m.html, replyTo: [docsAddress()] });
   const now = at.toISOString();
-  const patch = reminder
-    ? { reminders: (sc.reminders || 0) + 1, last_reminded_at: now, log: withLog(sc, `Reminder ${reminder} sent to ${to.join(', ')}`), updated_at: now }
-    : { status: sc.status === 'received' || sc.status === 'complete' ? sc.status : 'sent', sent_at: now, sent_to: to.join(', '), reminders: 0, planned: plannedOf(facts.lines), log: withLog(sc, `Request sent to ${to.join(', ')}${by ? ` by ${by}` : ''}`), updated_at: now };
+  const who = `${to.join(', ')}${by ? ` by ${by}` : ''}`;
+  const patch = kind === 'missing'
+    ? { followups: (sc.followups || 0) + 1, last_followup_at: now, next_followup: null, log: withLog(sc, `Follow-up ${(sc.followups || 0) + 1} — asked for ${(edits?.items || parts.items.filter((x) => x.on).map((x) => x.text)).length} missing item(s), sent to ${who}`, at), updated_at: now }
+    : kind === 'reminder'
+      ? { reminders: (sc.reminders || 0) + 1, last_reminded_at: now, log: withLog(sc, `Reminder ${(sc.reminders || 0) + 1} sent to ${who}`, at), updated_at: now }
+      : { status: sc.status === 'received' || sc.status === 'complete' ? sc.status : 'sent', sent_at: now, sent_to: to.join(', '), reminders: 0, planned: plannedOf(facts.lines), log: withLog(sc, `Request sent to ${who}`, at), updated_at: now };
   await db.update('ship_confirmations', { id: sc.id }, patch);
-  return { to };
+  return { to, cc };
 }
 
-/** Hourly: schedule, send what is due (9:00 China time), and remind. */
+/** Hourly: schedule, send what is due (9:00 China time), remind, and follow up on missing documents. */
 async function runShipConfirmations({ db, config, now = new Date() }) {
   const { day, hour } = chinaNow(now);
   await syncScheduled(db, day);
   const all = await db.list('ship_confirmations').catch(() => []);
-  let sent = 0; let reminded = 0;
-  for (const sc of all.filter((x) => x.status === 'scheduled' && x.due_date && (x.due_date < day || (x.due_date === day && hour >= SEND_HOUR)))) {
+  let sent = 0; let reminded = 0; let followed = 0;
+  if (hour < SEND_HOUR) return { sent, reminded, followed };
+  for (const sc of all.filter((x) => x.status === 'scheduled' && x.due_date && day10(x.due_date) <= day)) {
     try { await sendRequest(db, config, sc, { at: now }); sent++; } catch (e) { await db.update('ship_confirmations', { id: sc.id }, { log: withLog(sc, `Could not send: ${e.provider?.reason || e.message}`), updated_at: new Date().toISOString() }).catch(() => null); console.error('Shipment request failed:', e.message); }
   }
-  for (const sc of all.filter((x) => x.status === 'sent' && x.sent_at)) {
-    const n = sc.reminders || 0; const age = daysBetween(String(sc.sent_at).slice(0, 10), day);
-    if (n < REMIND_AFTER.length && age >= REMIND_AFTER[n] && hour >= SEND_HOUR) {
-      try { await sendRequest(db, config, sc, { reminder: n + 1, at: now }); reminded++; } catch (e) { console.error('Shipment reminder failed:', e.message); }
+  for (const sc of all.filter((x) => x.status === 'sent' && x.sent_at && !x.paused)) {
+    const n = sc.reminders || 0;
+    if (n < REMIND_AFTER.length && daysBetween(day10(sc.sent_at), day) >= REMIND_AFTER[n]) {
+      try { await sendRequest(db, config, sc, { kind: 'reminder', at: now }); reminded++; } catch (e) { console.error('Shipment reminder failed:', e.message); }
     }
   }
-  return { sent, reminded };
+  for (const sc of all.filter((x) => ['received', 'complete'].includes(x.status) && !x.paused)) {
+    const f = await factsOf(db, sc);
+    const list = checklistOf(sc, await filesOf(db, sc), f.sailing, day);
+    const next = nextFollowup(sc, list);
+    if (next && next <= day && list.some((x) => x.state === 'miss')) {
+      try { const r = await sendRequest(db, config, sc, { kind: 'missing', at: now }); if (!r.skipped) followed++; } catch (e) { console.error('Shipment follow-up failed:', e.message); }
+    }
+  }
+  return { sent, reminded, followed };
 }
 
 // ── reading documents ───────────────────────────────────────────────────────
@@ -273,9 +361,14 @@ async function receive(db, config, sc, { from = '', text = '', files = [], form 
     Object.assign(patch, { status: sc.status === 'complete' ? 'complete' : 'received' });
     if (facts.loaded || facts.container_no || kept.length) patch.confirmed_at = sc.confirmed_at || now;
     for (const k of ['container_no', 'seal_no', 'bl_no', 'loaded_on']) if (facts[k]) patch[k] = facts[k];
-    note = `${by ? `${by}:` : from ? 'Reply' : 'Upload'}${by ? '' : ' received'}${kept.length ? ` with ${kept.length} file${kept.length > 1 ? 's' : ''} (${[...new Set(kept.map((f) => f.kind))].join(', ')})` : ''}${facts.loaded ? ' — confirmed shipped' : ''}`;
+    note = `${by ? `${by}:` : 'Reply received'}${kept.length ? ` with ${kept.length} file${kept.length > 1 ? 's' : ''} (${[...new Set(kept.map((f) => f.kind))].join(', ')})` : ''}${facts.loaded ? ' — confirmed shipped' : ''}`;
   }
+  if (!by && !delayed) Object.assign(patch, { followups: 0, next_followup: null, last_followup_at: null }); // a supplier reply starts the follow-up cycle again
+  if (by) patch.received_at = sc.received_at || now; // your own upload doesn't count as the supplier's reply
   patch.log = withLog(sc, note);
+  const nsc = { ...sc, ...patch };
+  const f = await factsOf(db, nsc);
+  patch.missing = missingKinds(checklistOf(nsc, await filesOf(db, nsc), f.sailing, chinaNow().day));
   await db.update('ship_confirmations', { id: sc.id }, patch);
   // confirmed → the PO lines are shipped
   if (!delayed && patch.confirmed_at) for (const id of sc.order_ids || []) await db.update('plan_orders', { id }, { shipped: true, updated_at: now }).catch(() => null);
@@ -346,7 +439,7 @@ async function accept(db, sc, { values = {}, updateProducts = false, by = null }
 }
 
 /** Request for one supplier's PO right away (e.g. a PO shipped without a container plan). */
-async function createFor(db, { supplierId, po }) {
+async function createFor(db, { supplierId, po, dryRun = false }) {
   const lines = (await db.list('plan_orders', { filters: { supplier_id: supplierId } })).filter((l) => PL.normPo(l.po) === PL.normPo(po));
   if (!lines.length) throw new Error('Purchase order not found');
   const cIds = [...new Set(lines.map((l) => l.container_id).filter(Boolean))];
@@ -356,11 +449,11 @@ async function createFor(db, { supplierId, po }) {
   if (ex) return ex;
   const sameC = c ? (await db.list('plan_orders', { filters: { container_id: c.id } })).filter((l) => l.supplier_id === supplierId) : lines;
   const sailing = c?.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
-  return db.insert('ship_confirmations', { code: newCode(), token: newToken(), supplier_id: supplierId, container_id: c?.id || null, mode: modeOf(c), pos: posOf(sameC), order_ids: sameC.map((l) => l.id), planned: plannedOf(sameC), due_date: loadingDate(c, sailing) || PL.today(), status: 'scheduled', reminders: 0, log: [logEntry('Created by hand')], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+  const row = { code: newCode(), token: newToken(), supplier_id: supplierId, container_id: c?.id || null, mode: modeOf(c), followups: 0, missing: required({ mode: modeOf(c) }).filter((r) => !r[3]).map((r) => r[0]), pos: posOf(sameC), order_ids: sameC.map((l) => l.id), planned: plannedOf(sameC), due_date: loadingDate(c, sailing) || PL.today(), status: 'scheduled', reminders: 0, log: [logEntry('Created by hand')], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  return dryRun ? { ...row, id: null, code: 'LBS-NEW', token: '…' } : db.insert('ship_confirmations', row);
 }
 
 /** Upload link still valid? */
-const linkValid = (sc) => sc && sc.status !== 'cancelled' && (!sc.sent_at || Date.now() - Date.parse(sc.sent_at) < LINK_DAYS * 864e5);
 
 /** Per supplier: shipments, average days to documents, volume accuracy. */
 function supplierStats(rows) {
@@ -376,4 +469,4 @@ function supplierStats(rows) {
   return Object.fromEntries(Object.entries(by).map(([k, s]) => [k, { n: s.n, days: avg(s.days), vol: avg(s.vol), kg: s.kg, cbm: s.cbm }]));
 }
 
-module.exports = { factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, linkFor, linkValid, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };
+module.exports = { REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };

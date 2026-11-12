@@ -2430,12 +2430,12 @@ test('load containers: LCL shipment — W/M totals, LCL quote request with CFS q
   assert.match(ci.labelFor(db.tables.plan_orders.find((o) => o.id === o1.id)).text, /^Yantian · LCL shipment 1 · Planned$/);
 });
 
-test('shipping documents: request on the loading date, supplier reply read by AI, review & accept, upload page, reminders', async (t) => {
+test('shipping documents: request on the loading date, reply by email read by AI, follow-ups for missing documents, draft editor, accept', async (t) => {
   process.env.RESEND_API_KEY = 're_test';
-  const realFetch = global.fetch; const sent = [];
+  const realFetch = global.fetch; const sent = []; let aiAnswer = null;
   global.fetch = async (url, opts = {}) => {
     if (String(url).includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response('{"id":"em_1"}', { status: 200 }); }
-    if (String(url).includes('api.anthropic.com')) return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_shipment', input: { loaded: true, loaded_on: '2026-12-01', container_no: 'CSNU 6184207', seal_no: 'cn4471902', lines: [{ po: '800018', product: 'Teether Ball Toy', qty: 8028, cartons: 335, gross_kg: 3912, cbm: 11.02, carton_l_cm: 50, carton_w_cm: 38, carton_h_cm: 35, units_per_carton: 24 }], summary: 'Container loaded; CI and PL attached.' } }] }), { status: 200 });
+    if (String(url).includes('api.anthropic.com')) return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_shipment', input: aiAnswer }] }), { status: 200 });
     return realFetch(url, opts);
   };
   const db = seedDb();
@@ -2445,84 +2445,128 @@ test('shipping documents: request on the loading date, supplier reply read by AI
   const SD = require('../src/shipdocs');
   const config = { publicUrl: 'http://t' };
   const h = await db.insert('suppliers', { name: 'Huanger', contact_name: 'Lin Wei', email: 'sales@huanger.cn' });
-  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'booked', loading_date: '2026-12-01', created_at: new Date().toISOString() });
+  const sail = await db.insert('sailings', { origin: 'CNYTN', destination: 'USLGB', carrier: 'COSCO', etd: '2026-12-04', transit_days: 15 });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'booked', loading_date: '2026-12-01', sailing_id: sail.id, created_at: new Date().toISOString() });
   const o = await db.insert('plan_orders', { supplier_id: h.id, po: '800018', product: 'Teether Ball Toy', qty: 8028, cartons: 335, cbm: 10.15, carton_l_cm: 48, carton_w_cm: 38, carton_h_cm: 35, ready_date: '2026-11-28', port: 'CNYTN', container_id: c.id });
   await db.insert('products', { supplier_id: h.id, product_name: 'Teether Ball Toy', carton_l_cm: 48, carton_w_cm: 38, carton_h_cm: 35 });
+  const run = (iso) => SD.runShipConfirmations({ db, config, now: new Date(iso) });
 
-  // 8:30 China time: scheduled, not sent; 9:30: sent
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-01T00:30:00Z') });
+  // 8:30 China time: scheduled, not sent; 9:30: sent — English, reply by email, no link
+  await run('2026-12-01T00:30:00Z');
   assert.equal(db.tables.ship_confirmations.length, 1); assert.equal(db.tables.ship_confirmations[0].status, 'scheduled'); assert.equal(sent.length, 0);
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-01T01:30:00Z') });
+  await run('2026-12-01T01:30:00Z');
   const sc = db.tables.ship_confirmations[0];
   assert.equal(sc.status, 'sent'); assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].to, ['sales@huanger.cn']);
   assert.match(sent[0].subject, /^Shipment confirmation & documents – PO 800018 – Yantian, Dec 1 \[LBS-[A-Z0-9]{5}\]$/);
   assert.match(sent[0].text, /^Dear Lin Wei,/); assert.match(sent[0].text, /container number and seal number/); assert.match(sent[0].text, /Loading photos/);
-  assert.match(sent[0].text, new RegExp(`http://t/ship/${sc.token}`)); assert.doesNotMatch(sent[0].text + sent[0].html, /[一-鿿]/);
+  assert.match(sent[0].text, /reply to this email with the files attached/i);
+  assert.doesNotMatch(sent[0].text + sent[0].html, /\/ship\/|upload them here/); assert.doesNotMatch(sent[0].text + sent[0].html, /[一-鿿]/);
   assert.ok([].concat(sent[0].reply_to).includes('docs@in.lulyboo.space'));
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-01T05:30:00Z') });
-  assert.equal(sent.length, 1);                                                                  // not twice
+  await run('2026-12-01T05:30:00Z');
+  assert.equal(sent.length, 1);
 
-  // reminders on day 2 and day 4, not more
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-03T02:00:00Z') });
+  // no reply: reminders on day 2 and 4, then overdue
+  await run('2026-12-03T02:00:00Z');
   assert.equal(sent.length, 2); assert.match(sent[1].subject, /^Reminder: /); assert.equal(sc.reminders, 1);
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-04T02:00:00Z') });
-  assert.equal(sent.length, 2);
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-05T02:00:00Z') });
-  assert.equal(sent.length, 3);
-  await SD.runShipConfirmations({ db, config, now: new Date('2026-12-09T02:00:00Z') });
-  assert.equal(sent.length, 3);
+  await run('2026-12-04T02:00:00Z'); assert.equal(sent.length, 2);
+  await run('2026-12-05T02:00:00Z'); assert.equal(sent.length, 3);
+  await run('2026-12-09T02:00:00Z'); assert.equal(sent.length, 3);
   assert.equal(SD.stateOf(sc, '2026-12-09').key, 'overdue');
 
-  // the supplier replies with the packing list → AI reads it
+  // the supplier replies with invoice + packing list → AI reads the figures; the B/L is still missing
   process.env.ANTHROPIC_API_KEY = 'sk-test';
+  aiAnswer = { loaded: true, loaded_on: '2026-12-01', container_no: 'CSNU 6184207', seal_no: 'cn4471902', lines: [{ po: '800018', product: 'Teether Ball Toy', qty: 8028, cartons: 335, gross_kg: 3912, cbm: 11.02, carton_l_cm: 50, carton_w_cm: 38, carton_h_cm: 35, units_per_carton: 24 }], summary: 'Container loaded; CI and PL attached.' };
   const before = sent.length;
   const out = await SD.handleShipEmail({ db, config, from: 'Lin Wei <sales@huanger.cn>', subject: `RE: Shipment confirmation [${sc.code}]`, text: 'Container loaded today.', files: [{ name: 'PL 800018.pdf', buffer: Buffer.from('%PDF-1.4 x'), type: 'application/pdf' }, { name: 'CI-HG-1107.pdf', buffer: Buffer.from('%PDF-1.4 y'), type: 'application/pdf' }] });
   assert.ok(out.matched); assert.equal(sc.status, 'received'); assert.equal(sc.container_no, 'CSNU6184207'); assert.equal(sc.seal_no, 'CN4471902');
   assert.deepEqual(db.tables.plan_files.filter((f) => f.shipment_id === sc.id).map((f) => f.kind).sort(), ['Invoice', 'Packing list']);
+  assert.deepEqual(sc.missing, ['Bill of lading']);
   assert.ok(db.tables.plan_orders.find((x) => x.id === o.id).shipped);
-  assert.ok(sent.length > before && sent.some((m) => /\[Shipping documents\] Huanger/.test(m.subject)));      // owner told
+  assert.ok(sent.slice(before).some((m) => /\[Shipping documents\] Huanger/.test(m.subject)));
   assert.equal((await SD.handleShipEmail({ db, config, from: 'x@y.cn', subject: 'RE: LBS-ZZZZZ', text: '' })).matched, false);
 
-  // PO page: shipment section with the comparison; list page; dashboard
-  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800018`, { cookie })).text;
-  assert.match(po, /id="shipment"/); assert.match(po, /To review/); assert.match(po, /10\.15 m³[\s\S]*11\.02 m³[\s\S]*\+8\.6%/); assert.match(po, /48×38×35 cm[\s\S]*50×38×35 cm/);
-  assert.match(po, /Bill of lading[\s\S]*Missing/); assert.match(po, /value="CSNU6184207"/);
-  const list = (await req(base, 'GET', '/admin/orders/shipping', { cookie })).text;
-  assert.match(list, /Huanger/); assert.match(list, /Yantian · Container 1 · 40&#39; HQ/); assert.match(list, /To review/);
-  assert.match((await req(base, 'GET', '/admin', { cookie })).text, /Shipping documents to review/);
+  // follow-up for the B/L: not before ETD + 3 (Dec 7) and 2 days after the reply; photos are optional, never chased
+  sc.received_at = '2026-12-02T03:00:00Z';
+  const n0 = sent.length;
+  await run('2026-12-05T02:00:00Z'); assert.equal(sent.length, n0);                                  // B/L too early
+  await run('2026-12-07T02:00:00Z');
+  assert.equal(sent.length, n0 + 1);
+  const fu = sent[sent.length - 1];
+  assert.match(fu.subject, /^Missing shipping documents – PO 800018/);
+  assert.match(fu.text, /Still missing:\n  1\. Bill of lading \(draft or final\)\n\nAlready received — thank you: Commercial invoice, Packing list, Container CSNU6184207/);
+  assert.doesNotMatch(fu.text, /Loading photos/);
+  assert.equal(sc.followups, 1);
+  await run('2026-12-08T02:00:00Z'); assert.equal(sent.length, n0 + 1);
+  await run('2026-12-10T02:00:00Z'); assert.equal(sent.length, n0 + 2); assert.equal(sc.followups, 2);
+  await run('2026-12-20T02:00:00Z'); assert.equal(sent.length, n0 + 2);
+  assert.equal(SD.stateOf(sc, '2026-12-20').key, 'docs_missing');
 
-  // accept → PO lines get the actual figures, container its number, product its packing
-  const acc = await req(base, 'POST', `/admin/orders/shipping/${sc.id}/accept`, { cookie, form: { container_no: 'csnu6184207', seal_no: 'CN4471902', bl_no: '', loaded_on: '2026-12-01', products: '1' } });
+  // PO page: follow-ups box, checklist states, comparison; list page; dashboard
+  sc.last_followup_at = new Date(Date.now() - 5 * 864e5).toISOString();                         // pages use today's date
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800018`, { cookie })).text;
+  assert.match(po, /id="shipment"/); assert.match(po, /Follow-ups/); assert.match(po, /optional · not chased/);
+  assert.match(po, /10\.15 m³[\s\S]*11\.02 m³[\s\S]*\+8\.6%/); assert.match(po, /48×38×35 cm[\s\S]*50×38×35 cm/);
+  assert.match(po, /data-sd-open data-kind="missing"/); assert.doesNotMatch(po, /\/ship\//);
+  assert.match((await req(base, 'GET', '/admin/orders/shipping', { cookie })).text, /Huanger[\s\S]*Documents missing/);
+  assert.match((await req(base, 'GET', '/admin', { cookie })).text, /Shipments with documents still missing/);
+  assert.equal((await req(base, 'GET', `/ship/${sc.token}`)).status, 404);                          // no public upload page
+
+  // draft editor: missing documents — received ticked off, B/L ticked; you can edit and send
+  await db.update('sailings', { id: sail.id }, { etd: '2026-01-05' });                                                                        // B/L due by now (pages use today's date)
+  const mj = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=missing&id=${sc.id}`, { cookie })).text);
+  assert.ok(mj.ok, mj.error); assert.deepEqual(mj.kinds, ['request', 'reminder', 'missing']); assert.equal(mj.code, sc.code);
+  assert.deepEqual(mj.items.filter((x) => x.on).map((x) => x.text), ['Bill of lading (draft or final)']);
+  assert.deepEqual(mj.items.filter((x) => x.state === 'have').map((x) => x.text).length, 3);              // confirmation, CI, PL
+  assert.equal(mj.items.find((x) => /Loading photos/.test(x.text)).state, 'opt');
+  assert.match(mj.received.join(), /Commercial invoice/); assert.equal(mj.greet, 'Lin Wei'); assert.match(mj.fixed, /800018 · Teether Ball Toy/);
+  const sj = JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: new URLSearchParams([['kind', 'missing'], ['id', sc.id], ['to', 'sales@huanger.cn,docs@huanger.cn'], ['cc', ''], ['subject', 'B/L please – PO 800018'], ['intro', 'Hello Lin, we still need the B/L.'], ['item', 'Bill of lading (draft or final)'], ['item', 'Certificate of origin'], ['received', '0']]).toString() })).text);
+  assert.ok(sj.ok, sj.error);
+  const last = sent[sent.length - 1];
+  assert.deepEqual(last.to, ['sales@huanger.cn', 'docs@huanger.cn']); assert.equal(last.cc, undefined);
+  assert.match(last.subject, /^B\/L please – PO 800018 \[LBS-[A-Z0-9]{5}\]$/);
+  assert.match(last.text, /Hello Lin, we still need the B\/L\.[\s\S]*Still missing:\n  1\. Bill of lading \(draft or final\)\n  2\. Certificate of origin/);
+  assert.doesNotMatch(last.text, /Already received/);
+  assert.equal(JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: { kind: 'reminder', id: sc.id, to: 'not-an-email', subject: 'x', intro: 'y', item: 'z' } })).text).ok, false);
+  assert.equal(JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: { kind: 'reminder', id: sc.id, to: 'a@b.cn', subject: 'x', intro: 'y' } })).text).ok, false);   // nothing to ask for
+
+  // pause / move the next follow-up
+  assert.equal((await req(base, 'POST', `/admin/orders/shipping/${sc.id}/pause`, { cookie, form: { value: '1' } })).status, 303);
+  assert.equal(sc.paused, true);
+  assert.equal((await req(base, 'POST', `/admin/orders/shipping/${sc.id}/next`, { cookie, form: { date: '2026-12-30' } })).status, 303);
+  assert.equal(sc.next_followup, '2026-12-30');
+
+  // the B/L arrives → nothing missing; accept saves the actual figures
+  aiAnswer = { bl_no: 'COSU6402718830', summary: 'B/L attached.' };
+  await SD.handleShipEmail({ db, config, from: 'sales@huanger.cn', subject: `RE: [${sc.code}]`, text: 'B/L attached', files: [{ name: 'BL COSU6402718830.pdf', buffer: Buffer.from('%PDF bl'), type: 'application/pdf' }] });
+  assert.deepEqual(sc.missing, []); assert.equal(sc.bl_no, 'COSU6402718830'); assert.equal(sc.followups, 0);
+  const acc = await req(base, 'POST', `/admin/orders/shipping/${sc.id}/accept`, { cookie, form: { container_no: 'csnu6184207', seal_no: 'CN4471902', bl_no: 'COSU6402718830', loaded_on: '2026-12-01', products: '1' } });
   assert.equal(acc.status, 303);
   const line = db.tables.plan_orders.find((x) => x.id === o.id);
   assert.equal(line.cbm, 11.02); assert.equal(line.gross_kg, 3912); assert.equal(line.carton_l_cm, 50); assert.equal(line.cbm_estimated, false);
   assert.equal(db.tables.plan_containers[0].container_no, 'CSNU6184207');
   assert.equal(db.tables.products[0].carton_l_cm, 50);
-  assert.equal(sc.status, 'complete'); assert.equal(sc.actual.cbm, 11.02); assert.equal(sc.actual.planned_cbm, 10.15);
+  assert.equal(sc.status, 'complete'); assert.equal(SD.stateOf(sc, '2026-12-20').key, 'complete'); assert.equal(sc.actual.cbm, 11.02);
   assert.match((await req(base, 'GET', '/admin/orders/shipping?tab=complete', { cookie })).text, /Supplier shipping record[\s\S]*Huanger[\s\S]*\+8\.6%/);
 
-  // a PO without a container plan: request by hand; the supplier reports a delay on the upload page
-  const o2 = await db.insert('plan_orders', { supplier_id: h.id, po: '800020', product: 'Bath Duck', qty: 500, cbm: 1.2, port: 'CNYTN' });
-  assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800020`, { cookie })).text, /Request shipping documents now/);
-  assert.equal((await req(base, 'POST', '/admin/orders/shipping/request', { cookie, form: { supplier: h.id, po: '800020' } })).status, 303);
-  const sc2 = db.tables.ship_confirmations.find((x) => x.pos.includes('800020'));
-  assert.equal(sc2.status, 'sent'); assert.equal(sc2.mode, ''); assert.match(sent[sent.length - 1].text, /Confirmation of the shipment date/);
-  const up = await req(base, 'GET', `/ship/${sc2.token}`);
-  assert.equal(up.status, 200); assert.match(up.text, /Confirm shipment/); assert.match(up.text, /800020/); assert.doesNotMatch(up.text, /中文/);
-  assert.equal((await req(base, 'GET', '/ship/not-a-real-token-123456')).status, 404);
-  assert.equal((await req(base, 'POST', `/ship/${sc2.token}`, { form: { state: 'delayed', new_date: '2026-12-20', reason: 'packaging' } })).status, 303);
-  assert.equal(sc2.status, 'scheduled'); assert.equal(sc2.due_date, '2026-12-20'); assert.ok(!db.tables.plan_orders.find((x) => x.id === o2.id).shipped);
-  // then uploads the documents on the page
-  const fd = new FormData();
-  fd.append('state', 'loaded'); fd.append('loaded_on', '2026-12-20'); fd.append('container_no', 'TGHU 1234567');
-  fd.append('f_Invoice', new Blob([Buffer.from('%PDF-1.4 z')], { type: 'application/pdf' }), 'invoice.pdf');
+  // a PO without a container plan: draft by PO (nothing saved), send; a delay by email re-plans it
   delete process.env.ANTHROPIC_API_KEY;
-  const r2 = await fetch(`${base}/ship/${sc2.token}`, { method: 'POST', body: fd, redirect: 'manual' });
-  assert.equal(r2.status, 303);
-  assert.equal(sc2.status, 'received'); assert.equal(sc2.container_no, 'TGHU1234567');
-  assert.ok(db.tables.plan_files.some((f) => f.shipment_id === sc2.id && f.kind === 'Invoice'));
-  assert.ok(db.tables.plan_orders.find((x) => x.id === o2.id).shipped);
+  const o2 = await db.insert('plan_orders', { supplier_id: h.id, po: '800020', product: 'Bath Duck', qty: 500, cbm: 1.2, port: 'CNYTN' });
+  await db.insert('supplier_users', { supplier_id: h.id, name: 'Amy Zhou', email: 'amy@huanger.cn', status: 'active' });
+  assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800020`, { cookie })).text, /Request shipping documents now/);
+  const nBefore = db.tables.ship_confirmations.length;
+  const dj = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=request&supplier=${h.id}&po=800020`, { cookie })).text);
+  assert.ok(dj.ok, dj.error); assert.equal(db.tables.ship_confirmations.length, nBefore); assert.deepEqual(dj.kinds, ['request']);
+  assert.deepEqual(dj.to.map((x) => [x.email, x.on]), [['sales@huanger.cn', true], ['amy@huanger.cn', false]]);
+  assert.ok(dj.items.every((x) => x.on)); assert.match(dj.items[0].text, /Confirmation of the shipment date/);
+  const s2 = JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: new URLSearchParams([['kind', 'request'], ['supplier', h.id], ['po', '800020'], ['to', 'sales@huanger.cn'], ['subject', dj.subject], ['intro', dj.intro], ...dj.items.map((x) => ['item', x.text])]).toString() })).text);
+  assert.ok(s2.ok, s2.error);
+  const sc2 = db.tables.ship_confirmations.find((x) => x.id === s2.id);
+  assert.equal(sc2.status, 'sent'); assert.equal(sc2.mode, '');
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  aiAnswer = { delayed: true, new_date: '2026-12-20', summary: 'Shipment moved to Dec 20.' };
+  await SD.handleShipEmail({ db, config, from: 'sales@huanger.cn', subject: `RE: [${sc2.code}]`, text: 'Sorry, shipping on Dec 20 instead.' });
+  assert.equal(sc2.status, 'scheduled'); assert.equal(sc2.due_date, '2026-12-20'); assert.ok(!db.tables.plan_orders.find((x) => x.id === o2.id).shipped);
 
   // Load containers: loading date can be set
   assert.ok(JSON.parse((await req(base, 'POST', `/admin/logistics/planning/containers/${c.id}`, { cookie, form: { loading_date: '2026-12-02' } })).text).ok);

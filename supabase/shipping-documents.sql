@@ -39,3 +39,10 @@ alter table public.plan_files add column if not exists shipment_id uuid referenc
 alter table public.plan_containers add column if not exists loading_date date;
 alter table public.plan_containers add column if not exists container_no text;
 alter table public.plan_containers add column if not exists seal_no text;
+
+-- Shipment confirmations v2 (run once): follow-ups for missing documents, pause
+alter table public.ship_confirmations add column if not exists missing          jsonb default '[]';
+alter table public.ship_confirmations add column if not exists followups        int default 0;
+alter table public.ship_confirmations add column if not exists last_followup_at timestamptz;
+alter table public.ship_confirmations add column if not exists next_followup    date;
+alter table public.ship_confirmations add column if not exists paused           boolean default false;

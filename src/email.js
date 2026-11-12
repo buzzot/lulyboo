@@ -229,29 +229,27 @@ function noticeEmail({ title, companyName, en, zh, button, link }) {
   };
 }
 
-/** Shipment confirmation request to a supplier: PO table, what to send, upload button (English). */
-function shipmentEmail({ name, intro, rows = [], shipment, asks = [], link, delayNote }) {
+/** Shipment confirmation / documents email to a supplier (English, reply by email). */
+function shipmentEmail({ name, intro, rows = [], shipment, listLabel = 'Please send', asks = [], received = [], closing }) {
   const td = 'padding:7px 9px;border:1px solid #ece6e4;font-size:13px;line-height:19px;';
   const table = rows.length ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:6px;">
 <tr>${['PO', 'Product', 'Qty', 'Cartons', 'm³'].map((h, i) => `<td style="${td}background:#faf6f5;font-weight:600;${i > 1 ? 'text-align:right;' : ''}">${h}</td>`).join('')}</tr>
 ${rows.map((r) => `<tr><td style="${td}">${esc(r.po)}</td><td style="${td}">${esc(r.product)}</td><td style="${td}text-align:right;">${esc(r.qty)}</td><td style="${td}text-align:right;">${esc(r.cartons)}</td><td style="${td}text-align:right;">${esc(r.cbm)}</td></tr>`).join('')}</table>` : '';
   const paras = (t) => esc(t).split(/\n{2,}/).map((x) => `<p style="margin:0 0 12px;font-size:15px;line-height:24px;">${x.replace(/\n/g, '<br>')}</p>`).join('');
-  const text = [`Dear ${name || 'Sir or Madam'},`, '', intro, '', ...rows.map((r) => `- PO ${r.po}${r.product ? ` · ${r.product}` : ''}${r.qty ? ` · ${r.qty} pcs` : ''}${r.cartons ? ` · ${r.cartons} cartons` : ''}${r.cbm ? ` · ${r.cbm} m³` : ''}`), ...(shipment ? ['', `Shipment: ${shipment}`] : []), '', 'Please send:', ...asks.map((a, i) => `  ${i + 1}. ${a}`), '', `Reply to this email with the files attached, or upload them here (no login needed):\n${link}`, '', delayNote || '', '', 'Thank you,', 'Lulyboo Sourcing'].join('\n');
+  const label = (t) => `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#73777d;text-transform:uppercase;letter-spacing:.05em;">${esc(t)}</p>`;
+  const text = [`Dear ${name || 'Sir or Madam'},`, '', intro, '', ...rows.map((r) => `- ${/^po/i.test(r.po) ? '' : 'PO '}${r.po}${r.product ? ` · ${r.product}` : ''}${r.qty ? ` · ${r.qty} pcs` : ''}${r.cartons ? ` · ${r.cartons} cartons` : ''}${r.cbm ? ` · ${r.cbm} m³` : ''}`), ...(shipment ? ['', `Shipment: ${shipment}`] : []),
+    ...(asks.length ? ['', `${listLabel}:`, ...asks.map((x, i) => `  ${i + 1}. ${x}`)] : []), ...(received.length ? ['', `Already received — thank you: ${received.join(', ')}`] : []), '', closing || '', '', 'Thank you,', 'Lulyboo Sourcing'].join('\n');
   return {
     text,
     html: layout({
       english: true,
-      preheader: 'Please confirm the shipment and send the shipping documents',
+      preheader: asks.length ? `${listLabel}: ${asks.slice(0, 3).join(', ')}` : 'Shipment confirmation and documents',
       body: `<tr><td style="padding:30px 0 0;"><h1 style="margin:0;font-size:25px;line-height:33px;font-weight:600;">Shipment confirmation &amp; documents</h1></td></tr>
 <tr><td style="padding:20px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:24px;">Dear ${esc(name || 'Sir or Madam')},</p>${paras(intro)}${table}
 ${shipment ? `<p style="margin:12px 0 0;font-size:14px;line-height:22px;"><b>Shipment:</b> ${esc(shipment)}</p>` : ''}</td></tr>
-<tr><td style="padding:18px 0 0;"><p style="margin:0 0 6px;font-size:12px;line-height:18px;color:#73777d;text-transform:uppercase;letter-spacing:.05em;">Please send</p>
-<ol style="margin:0;padding-left:20px;font-size:15px;line-height:25px;">${asks.map((a) => `<li>${esc(a)}</li>`).join('')}</ol></td></tr>
-<tr><td style="padding:20px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:24px;">Reply to this email with the files attached, or upload them here — no login needed:</p>
-<table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
-<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:13px 22px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">Confirm &amp; upload documents</a></td></tr></table></td></tr>
-<tr><td style="padding:18px 0 30px;">${delayNote ? `<p style="margin:0 0 12px;font-size:13px;line-height:21px;color:#62676e;">${esc(delayNote)}</p>` : ''}<p style="margin:0;font-size:15px;line-height:24px;">Thank you,<br>Lulyboo Sourcing</p>
-<p style="margin:14px 0 0;font-size:12px;line-height:20px;color:#73777d;">If the button doesn't work, open this link: <a href="${esc(link)}" style="color:#62676e;">${esc(link)}</a></p></td></tr>`,
+${asks.length ? `<tr><td style="padding:18px 0 0;">${label(listLabel)}<ol style="margin:0;padding-left:20px;font-size:15px;line-height:25px;">${asks.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></td></tr>` : ''}
+${received.length ? `<tr><td style="padding:16px 0 0;">${label('Already received — thank you')}<p style="margin:0;font-size:14px;line-height:22px;color:#2f8a4c;">${received.map((x) => `✓ ${esc(x)}`).join(' &nbsp;·&nbsp; ')}</p></td></tr>` : ''}
+<tr><td style="padding:20px 0 30px;">${closing ? `<p style="margin:0 0 14px;font-size:15px;line-height:24px;">${esc(closing)}</p>` : ''}<p style="margin:0;font-size:15px;line-height:24px;">Thank you,<br>Lulyboo Sourcing</p></td></tr>`,
     }),
   };
 }

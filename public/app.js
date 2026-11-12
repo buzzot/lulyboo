@@ -1873,3 +1873,98 @@
     }
   });
 })();
+
+// Shipping documents: draft editor popup for a request, reminder or missing-documents follow-up.
+(function () {
+  var dlg = document.querySelector('[data-sd-dlg]'); if (!dlg) return;
+  var form = dlg.querySelector('[data-sd-form]'), el = form.elements, cur = null, draft = null;
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var q = function (s) { return dlg.querySelector(s); };
+  var EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+  var TAG = { have: ['have', 'Received'], miss: ['miss', 'Missing'], later: ['later', 'Later'], opt: ['opt', 'Optional'] };
+  function chip(email, label, on) {
+    return '<span class="sd-chip' + (on ? '' : ' off') + '" data-email="' + esc(email) + '"' + (on ? '' : ' title="Click to add"') + '>' + esc(email) + (label ? ' <small>' + esc(label) + '</small>' : '') + (on ? '<button type="button" aria-label="Remove ' + esc(email) + '">×</button>' : '') + '</span>';
+  }
+  function addChip(box, v) {
+    v.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (e) {
+      if (box.querySelector('[data-email="' + e.toLowerCase().replace(/"/g, '') + '"]')) return;
+      box.querySelector('[data-sd-add]').insertAdjacentHTML('beforebegin', chip(e.toLowerCase(), EMAIL.test(e) ? '' : 'check address', true));
+      if (!EMAIL.test(e)) box.querySelector('[data-email="' + e.toLowerCase().replace(/"/g, '') + '"]').classList.add('bad');
+    });
+  }
+  function itemRow(it) {
+    var t = TAG[it.state];
+    return '<div class="sd-it' + (it.on ? '' : ' off') + '"><input type="checkbox"' + (it.on ? ' checked' : '') + ' aria-label="Include"><input type="text" value="' + esc(it.text) + '" aria-label="Document">' +
+      (it.note ? '<span class="sd-it-n">' + esc(it.note) + '</span>' : '') + (t ? '<span class="sd-st2 ' + t[0] + '">' + t[1] + '</span>' : '') + '<button type="button" class="sd-rm" title="Remove" aria-label="Remove">×</button></div>';
+  }
+  function fill(j) {
+    draft = j;
+    q('[data-sd-title]').textContent = j.title; q('[data-sd-ctx]').textContent = j.ctx;
+    q('[data-sd-tabs]').innerHTML = j.kinds.length > 1 ? j.kinds.map(function (k) { return '<button type="button" data-sd-kind="' + k + '" class="' + (k === j.kind ? 'on' : '') + '">' + { request: 'First request', reminder: 'Reminder', missing: 'Missing documents' }[k] + '</button>'; }).join('') : '';
+    q('[data-sd-tabs]').hidden = j.kinds.length < 2;
+    var to = q('[data-sd-to]'), cc = q('[data-sd-cc]');
+    to.querySelectorAll('.sd-chip').forEach(function (c) { c.remove(); }); cc.querySelectorAll('.sd-chip').forEach(function (c) { c.remove(); });
+    to.querySelector('[data-sd-add]').insertAdjacentHTML('beforebegin', j.to.map(function (t) { return chip(t.email, t.label, t.on); }).join(''));
+    if (j.cc.length) { cc.querySelector('[data-sd-add]').insertAdjacentHTML('beforebegin', j.cc.map(function (e) { return chip(e, '', true); }).join('')); q('[data-sd-ccrow]').hidden = false; } else q('[data-sd-ccrow]').hidden = true;
+    el.subject.value = j.subject; q('[data-sd-code]').textContent = '[' + j.code + ']';
+    el.intro.value = j.intro; q('[data-sd-greet]').innerHTML = 'Starts with <b>Dear ' + esc(j.greet) + ',</b>';
+    q('[data-sd-fixed]').innerHTML = j.fixed ? '<i aria-hidden="true">▦</i><span><b>PO table added automatically</b> — ' + esc(j.fixed) + '</span>' : '';
+    q('[data-sd-listlbl]').textContent = j.listLabel;
+    q('[data-sd-items]').innerHTML = j.items.map(itemRow).join('') + '<div class="sd-addline"><input type="text" placeholder="+ Add a line, e.g. Certificate of origin" aria-label="Add a line"><button type="button">Add</button></div>';
+    q('[data-sd-rcvrow]').hidden = !(j.kind === 'missing' && j.received.length); q('[data-sd-rcv]').checked = true; q('[data-sd-rcvlist]').textContent = j.received.join(', ');
+    q('[data-sd-sum]').textContent = j.after || '';
+    q('[data-sd-send]').textContent = j.kind === 'request' ? 'Send request' : 'Send'; q('[data-sd-send]').disabled = false; q('[data-sd-note]').textContent = '';
+    q('[data-sd-loading]').hidden = true; q('[data-sd-fields]').hidden = false; q('[data-sd-actions]').hidden = false;
+  }
+  function load(kind) {
+    cur.kind = kind; q('[data-sd-loading]').hidden = false; q('[data-sd-loading]').textContent = 'Preparing the email…'; q('[data-sd-fields]').hidden = true; q('[data-sd-actions]').hidden = true;
+    var p = new URLSearchParams({ kind: kind }); ['id', 'supplier', 'po'].forEach(function (k) { if (cur[k]) p.set(k, cur[k]); });
+    fetch('/admin/orders/shipping/draft?' + p, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'Could not prepare the email'); cur.kind = j.kind; fill(j);
+    }).catch(function (x) { q('[data-sd-loading]').textContent = x.message; });
+  }
+  document.addEventListener('submit', function (e) {
+    var f = e.target.closest && e.target.closest('[data-sd-open]'); if (!f) return; e.preventDefault();
+    cur = { id: f.getAttribute('data-id') || '', supplier: f.getAttribute('data-supplier') || '', po: f.getAttribute('data-po') || '' };
+    q('[data-sd-tabs]').innerHTML = ''; if (dlg.showModal) dlg.showModal(); load(f.getAttribute('data-kind') || 'request');
+  }, true);
+  dlg.addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.closest('[data-sd-close]') || t === dlg) { dlg.close(); return; }
+    var k = t.closest('[data-sd-kind]'); if (k) { if (k.getAttribute('data-sd-kind') !== cur.kind) load(k.getAttribute('data-sd-kind')); return; }
+    if (t.closest('[data-sd-cc-open]')) { q('[data-sd-ccrow]').hidden = false; q('[data-sd-cc] [data-sd-add]').focus(); return; }
+    if (t.closest('[data-sd-reset]')) { el.intro.value = draft.intro; return; }
+    if (t.matches('.sd-chip button')) { t.parentNode.remove(); return; }
+    var off = t.closest('.sd-chip.off'); if (off) { off.classList.remove('off'); off.removeAttribute('title'); off.insertAdjacentHTML('beforeend', '<button type="button" aria-label="Remove">×</button>'); return; }
+    if (t.closest('.sd-rcp') && !t.closest('.sd-chip')) { t.closest('.sd-rcp').querySelector('[data-sd-add]').focus(); return; }
+    if (t.matches('.sd-rm')) { t.parentNode.remove(); return; }
+    if (t.matches('.sd-addline button')) { var i = t.parentNode.querySelector('input'); if (!i.value.trim()) return; t.parentNode.insertAdjacentHTML('beforebegin', itemRow({ text: i.value.trim(), state: '', on: true })); i.value = ''; i.focus(); }
+  });
+  dlg.addEventListener('change', function (e) { if (e.target.matches('.sd-it input[type=checkbox]')) e.target.parentNode.classList.toggle('off', !e.target.checked); });
+  dlg.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t.matches('[data-sd-add]') && (e.key === 'Enter' || e.key === ',' || e.key === ';') && t.value.trim()) { e.preventDefault(); addChip(t.closest('.sd-rcp'), t.value); t.value = ''; return; }
+    if (t.matches('[data-sd-add]') && e.key === 'Backspace' && !t.value) { var last = t.closest('.sd-rcp').querySelectorAll('.sd-chip:not(.off)'); if (last.length) last[last.length - 1].remove(); return; }
+    if (t.matches('.sd-addline input') && e.key === 'Enter') { e.preventDefault(); t.parentNode.querySelector('button').click(); return; }
+    if (e.key === 'Enter' && t.matches('input[type=text]')) e.preventDefault();
+  });
+  dlg.addEventListener('focusout', function (e) { var t = e.target; if (t.matches('[data-sd-add]') && t.value.trim()) { addChip(t.closest('.sd-rcp'), t.value); t.value = ''; } });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var note = q('[data-sd-note]'), btn = q('[data-sd-send]');
+    var emails = function (box) { return Array.prototype.map.call(box.querySelectorAll('.sd-chip:not(.off)'), function (c) { return c.getAttribute('data-email'); }); };
+    var to = emails(q('[data-sd-to]')), cc = emails(q('[data-sd-cc]'));
+    var items = Array.prototype.filter.call(dlg.querySelectorAll('.sd-it'), function (r) { return r.querySelector('input[type=checkbox]').checked; }).map(function (r) { return r.querySelector('input[type=text]').value.trim(); }).filter(Boolean);
+    if (!to.length) { note.textContent = 'Add at least one recipient'; return; }
+    var bad = to.concat(cc).filter(function (x) { return !EMAIL.test(x); }); if (bad.length) { note.textContent = 'Check this email address: ' + bad[0]; return; }
+    if (!items.length) { note.textContent = 'Tick at least one document to ask for'; return; }
+    btn.disabled = true; note.textContent = 'Sending…';
+    var body = new URLSearchParams({ kind: cur.kind, id: cur.id, supplier: cur.supplier, po: cur.po, to: to.join(','), cc: cc.join(','), subject: el.subject.value, intro: el.intro.value, received: q('[data-sd-rcvrow]').hidden || q('[data-sd-rcv]').checked ? '1' : '0' });
+    items.forEach(function (x) { body.append('item', x); });
+    fetch('/admin/orders/shipping/send', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) throw new Error(j.error || 'Could not send');
+        note.textContent = '✓ Sent to ' + j.sent.join(', '); setTimeout(function () { location.hash = 'shipment'; location.reload(); }, 900);
+      }).catch(function (x) { btn.disabled = false; note.textContent = x.message; });
+  });
+})();
