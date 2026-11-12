@@ -187,7 +187,6 @@ function planningRoutes(router, { db, config }) {
     if (view === 'map') body = await mapView({ open, sups, day, thisWeek, by: req.query.by, poUrl });
     else if (view === 'port') {
       // one card per PO: lines of the same supplier + PO at this port, placed in the week of the latest ready date
-      const sailAll = await db.list('sailings', { filters: { etd: ['gte', day] }, order: 'etd.asc' }).catch(() => []);
       const RANK = { overdue: 0, waiting: 1, production: 2, ready: 3, shipped: 4 };
       const poGroups = {};
       for (const o of open) {
@@ -212,7 +211,6 @@ function planningRoutes(router, { db, config }) {
           const ctn = g.lines.map((o) => ci.labelFor(o)).find(Boolean);
           g.ctn = ctn || null;
           if (ctn?.c?.sailing) g.etd = { etd: ctn.c.sailing.etd, carrier: ctn.c.sailing.carrier, planned: true };
-          else if (k !== '?') { const from = !g.ready || g.ready < day ? day : g.ready; const sl = sailAll.find((x) => x.origin === k && x.etd >= from); if (sl) g.etd = { etd: sl.etd, carrier: sl.carrier, planned: false }; }
           const wk = !g.ready ? 'nodate' : g.ready < thisWeek ? thisWeek : PL.weekStart(g.ready);
           ((portWeeks[k] = portWeeks[k] || {})[wk] = portWeeks[k]?.[wk] || []).push(g);
         }
@@ -231,7 +229,7 @@ function planningRoutes(router, { db, config }) {
             ${many ? html`<details class="cp-more"><summary>+ ${g.lines.length - 3} more products</summary>${g.lines.slice(3).map(item)}</details>` : ''}</div>
           ${g.lines.length > 1 ? html`<div class="cp-po-tot"><span><b>${int(g.qty)}</b> pcs</span><span><b>${n2(g.cbm)} m³</b>${g.noCbm ? html` <em>+ ${g.noCbm} without CBM</em>` : ''}</span></div>` : ''}
           <div class="cp-po-d"><span>${g.ready ? html`Ready <b>${PL.short(g.ready)}</b>` : 'No ready date'}${g.split ? html` <em title="Its products are ready in different weeks">· split dates</em>` : ''}</span>
-            ${g.etd ? html`<span class="cp-po-ar">→</span><span>ETD <b>${PL.short(g.etd.etd)}</b> <span class="sub">${g.etd.carrier}${g.etd.planned ? '' : ' · first sailing'}</span></span>` : ''}
+            ${g.etd ? html`<span class="cp-po-ar">→</span><span>ETD <b>${PL.short(g.etd.etd)}</b> <span class="sub">${g.etd.carrier}</span></span>` : ''}
             ${g.waiting.length ? html`<span class="cp-po-w">Needs: ${g.waiting.join(', ')}</span>` : ''}
             ${g.ctn ? html`<a class="cp-po-c" href="${g.ctn.url}">📦 ${BOXN(g.ctn.c)}</a>` : ''}</div>
         </article>`;
