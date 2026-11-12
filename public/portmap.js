@@ -42,7 +42,7 @@
   /** Extra trucking (estimate) when a supplier delivers to a port farther away than its original one. */
   function truck(l, port) { if (!l.ll || port === l.home) return 0; var d = km(l.ll, PORTS[port].ll) - km(l.ll, PORTS[l.home].ll); return d <= 0 ? 0 : Math.round((90 + d * 1.15) * Math.max(1, l.cbm / 20)); }
   function total() { return codes.reduce(function (a, k) { return a + pack(vol(k)).cost; }, 0) + LOTS.reduce(function (a, l) { return a + truck(l, l.port); }, 0); }
-  function movable(l, port) { return l.ll && !l.locked && l.cbm > 0 && port !== l.port && km(l.ll, PORTS[port].ll) <= 420; }
+  function movable(l, port) { return l.ll && !l.locked && l.cbm > 0 && port !== l.port && km(l.ll, PORTS[port].ll) <= 1700; }
   function bestMove() {
     var base = total(), best = null;
     function tryIt(group, k) { var old = group.map(function (x) { return x.port; }); group.forEach(function (x) { x.port = k; }); var c = total(); group.forEach(function (x, i) { x.port = old[i]; }); var sv = base - c; if (sv > 150 && (!best || sv > best.save)) best = { moves: group.map(function (x) { return [x, k]; }), save: sv }; }
@@ -66,31 +66,77 @@
     return out;
   }
 
-  // ── map panels ──
-  var regions = D.regions.map(function (r) {
-    var a = pj([r.bb[0][0], r.bb[1][1]]), b = pj([r.bb[1][0], r.bb[0][1]]);
-    r.vb = [a[0], a[1], b[0] - a[0], b[1] - a[1]];
-    var box = document.createElement('div'); box.className = 'pm-region'; box.innerHTML = '<h4>' + esc(r.title) + '</h4>';
-    root.querySelector('[data-pm-regions]').appendChild(box);
-    r.svg = el('svg', { viewBox: r.vb.join(' '), preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': r.title + ' map' }, box);
-    var lg = el('g', {}, r.svg); Object.keys(G.paths).forEach(function (n) { el('path', { d: G.paths[n], class: 'pm-land' + (n === 'China' ? '' : ' other') }, lg); });
-    r.legs = el('g', {}, r.svg); r.sug = el('g', {}, r.svg); r.sups = el('g', {}, r.svg); r.ports = el('g', {}, r.svg);
-    r.u = function () { var b = r.svg.getBoundingClientRect(); return 1 / Math.min((b.width || 420) / r.vb[2], (b.height || 380) / r.vb[3]); };
-    r.svg.addEventListener('pointermove', function (e) { if (!drag || drag.r !== r) return; var p = svgPt(r, e); drag.line.setAttribute('x2', p[0]); drag.line.setAttribute('y2', p[1]); var k = nearPort(r, p); Array.prototype.forEach.call(r.ports.children, function (g) { g.classList.toggle('drop', g.getAttribute('data-port') === k && k !== drag.l.port); }); });
-    r.svg.addEventListener('pointerup', function (e) { if (!drag || drag.r !== r) return; var k = nearPort(r, svgPt(r, e)), l = drag.l; drag = null; if (k && k !== l.port) move([l], k); else drawMap(); });
-    return r;
+  // ── one map: zoom (wheel / pinch / buttons) and pan (drag the empty map) ──
+  function vbOf(bb) { var a = pj([bb[0][0], bb[1][1]]), b = pj([bb[1][0], bb[0][1]]); return [a[0], a[1], b[0] - a[0], b[1] - a[1]]; }
+  var V = D.views, FULL = vbOf(V.all.bb);
+  var box = root.querySelector('[data-pm-map]');
+  var r = { bb: V.all.bb, vb: FULL.slice() };
+  r.svg = el('svg', { viewBox: r.vb.join(' '), preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': 'Map of China’s coast with loading ports and suppliers' }, box);
+  var lg = el('g', {}, r.svg); Object.keys(G.paths).forEach(function (n) { el('path', { d: G.paths[n], class: 'pm-land' + (n === 'China' ? '' : ' other') }, lg); });
+  r.legs = el('g', {}, r.svg); r.sug = el('g', {}, r.svg); r.sups = el('g', {}, r.svg); r.ports = el('g', {}, r.svg);
+  r.u = function () { var b = r.svg.getBoundingClientRect(); return 1 / Math.min((b.width || 800) / r.vb[2], (b.height || 560) / r.vb[3]); };
+  var regions = [r];
+  var raf = null;
+  function setVb(vb, now) {
+    var minW = FULL[2] / 12, maxW = FULL[2] * 1.05, asp = vb[3] / vb[2];
+    var w = Math.max(minW, Math.min(maxW, vb[2])), h = w * asp, cx = vb[0] + vb[2] / 2, cy = vb[1] + vb[3] / 2;
+    cx = Math.max(FULL[0], Math.min(FULL[0] + FULL[2], cx)); cy = Math.max(FULL[1], Math.min(FULL[1] + FULL[3], cy));
+    r.vb = [cx - w / 2, cy - h / 2, w, h]; r.svg.setAttribute('viewBox', r.vb.join(' '));
+    if (now) { drawMap(); drawInsetBox(); } else if (!raf) raf = requestAnimationFrame(function () { raf = null; drawMap(); drawInsetBox(); });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-pm-zoom-to]'), function (b) { b.classList.remove('on'); });
+  }
+  function zoomAt(f, p) { p = p || [r.vb[0] + r.vb[2] / 2, r.vb[1] + r.vb[3] / 2]; var w = r.vb[2] * f, h = r.vb[3] * f; if (w < FULL[2] / 12 || w > FULL[2] * 1.05) { if (f > 1) return setVb(FULL); return; } setVb([p[0] - (p[0] - r.vb[0]) * f, p[1] - (p[1] - r.vb[1]) * f, w, h]); }
+  function zoomTo(key) { setVb(vbOf(V[key].bb), true); var b = root.querySelector('[data-pm-zoom-to="' + key + '"]'); if (b) b.classList.add('on'); }
+  r.svg.addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(Math.exp((e.ctrlKey ? 0.01 : 0.0018) * e.deltaY), svgPt(r, e)); }, { passive: false });
+  var pan = null, pinch = {};
+  r.svg.addEventListener('pointerdown', function (e) {
+    pinch[e.pointerId] = [e.clientX, e.clientY];
+    if (drag || e.target.closest('.pm-sup, .pm-port')) return;
+    pan = { x: e.clientX, y: e.clientY, vb: r.vb.slice(), id: e.pointerId }; r.svg.setPointerCapture(e.pointerId); r.svg.classList.add('panning');
+  });
+  r.svg.addEventListener('pointermove', function (e) {
+    if (drag) { var p = svgPt(r, e); drag.line.setAttribute('x2', p[0]); drag.line.setAttribute('y2', p[1]); var k = nearPort(r, p); Array.prototype.forEach.call(r.ports.children, function (g) { g.classList.toggle('drop', g.getAttribute('data-port') === k && k !== drag.l.port); }); return; }
+    var ids = Object.keys(pinch);
+    if (ids.length === 2 && pinch[e.pointerId]) { // two-finger pinch on touch screens
+      var o = ids.map(function (i) { return pinch[i]; }), d0 = Math.hypot(o[0][0] - o[1][0], o[0][1] - o[1][1]); pinch[e.pointerId] = [e.clientX, e.clientY];
+      var n = ids.map(function (i) { return pinch[i]; }), d1 = Math.hypot(n[0][0] - n[1][0], n[0][1] - n[1][1]);
+      if (d0 && d1) zoomAt(d0 / d1, svgPt(r, { clientX: (n[0][0] + n[1][0]) / 2, clientY: (n[0][1] + n[1][1]) / 2 })); pan = null; return;
+    }
+    if (!pan || pan.id !== e.pointerId) return;
+    var b = r.svg.getBoundingClientRect(), sc = Math.min(b.width / r.vb[2], b.height / r.vb[3]);
+    setVb([pan.vb[0] - (e.clientX - pan.x) / sc, pan.vb[1] - (e.clientY - pan.y) / sc, pan.vb[2], pan.vb[3]]);
+  });
+  function endPointer(e) {
+    delete pinch[e.pointerId];
+    if (drag) { var k = nearPort(r, svgPt(r, e)), l = drag.l; drag = null; if (k && k !== l.port) move([l], k); else drawMap(); return; }
+    if (pan && pan.id === e.pointerId) { pan = null; r.svg.classList.remove('panning'); }
+  }
+  r.svg.addEventListener('pointerup', endPointer); r.svg.addEventListener('pointercancel', endPointer);
+  root.addEventListener('click', function (e) {
+    var z = e.target.closest('[data-pm-zoom]'); if (z) { zoomAt(z.getAttribute('data-pm-zoom') === 'in' ? 0.7 : 1 / 0.7); return; }
+    var t = e.target.closest('[data-pm-zoom-to]'); if (t) zoomTo(t.getAttribute('data-pm-zoom-to'));
   });
   function inReg(r, ll) { return ll && ll[0] >= r.bb[0][0] && ll[0] <= r.bb[1][0] && ll[1] >= r.bb[0][1] && ll[1] <= r.bb[1][1]; }
   function svgPt(r, e) { var b = r.svg.getBoundingClientRect(), sc = Math.min(b.width / r.vb[2], b.height / r.vb[3]), ox = (b.width - r.vb[2] * sc) / 2, oy = (b.height - r.vb[3] * sc) / 2; return [r.vb[0] + (e.clientX - b.left - ox) / sc, r.vb[1] + (e.clientY - b.top - oy) / sc]; }
-  function nearPort(r, p) { var u = r.u(), best = null; codes.forEach(function (k) { var d = Math.hypot(PORTS[k].xy[0] - p[0], PORTS[k].xy[1] - p[1]); if (d < 32 * u && (!best || d < best.d)) best = { k: k, d: d }; }); return best && best.k; }
+  function nearPort(r, p) { var u = r.u(), best = null; codes.forEach(function (k) { var q = PORTS[k].dxy || PORTS[k].xy, d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < 32 * u && (!best || d < best.d)) best = { k: k, d: d }; }); return best && best.k; }
   function short(n) { return n.replace(/\b(Co\.?,?\s*Ltd\.?|Co\.|Ltd\.?|Limited|Import\s*&\s*Export|Trading|Industrial|Industry|Technology|Products?|Manufactur\w*|Factory|Plastic\s*&\s*Rubber|E-Commerce|Childcare|Houseware|Silicone)\b/gi, '').replace(/\(.*?\)/g, '').replace(/^(Guangdong|Zhejiang|Jiangsu|Fujian)\s+/i, '').replace(/[,.\s]+$/g, '').replace(/\s{2,}/g, ' ').trim(); }
 
+  function spreadPorts(u) {
+    codes.forEach(function (k) { PORTS[k].dxy = PORTS[k].xy.slice(); });
+    var min = 2 * 24 * u + 10 * u;
+    for (var it = 0; it < 4; it++) codes.forEach(function (a, i) { codes.forEach(function (b, j) {
+      if (j <= i) return; var A = PORTS[a].dxy, B = PORTS[b].dxy, dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy);
+      if (d >= min) return; if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+      var push = (min - d) / 2, ux = dx / d, uy = dy / d; A[0] -= ux * push; A[1] -= uy * push; B[0] += ux * push; B[1] += uy * push;
+    }); });
+  }
   function drawMap() {
     var hi = hoverIdea != null && lastIdeas[hoverIdea];
+    spreadPorts(r.u());
     regions.forEach(function (r) {
       var u = r.u(); r.legs.innerHTML = ''; r.sug.innerHTML = ''; r.sups.innerHTML = ''; r.ports.innerHTML = '';
-      LOTS.forEach(function (l) { if (!inReg(r, l.ll)) return; var p = PORTS[l.port]; el('line', { x1: l.xy[0], y1: l.xy[1], x2: p.xy[0], y2: p.xy[1], class: 'pm-leg', stroke: p.color, style: 'stroke-width:' + 1.4 * u + 'px' }, r.legs); });
-      if (hi) hi.moves.forEach(function (m) { if (!inReg(r, m[0].ll)) return; var p = PORTS[m[1]]; el('line', { x1: m[0].xy[0], y1: m[0].xy[1], x2: p.xy[0], y2: p.xy[1], class: 'pm-leg sug', style: 'stroke-width:' + 2.2 * u + 'px;stroke-dasharray:' + 5 * u + ' ' + 5 * u }, r.sug); });
+      LOTS.forEach(function (l) { if (!inReg(r, l.ll)) return; var p = PORTS[l.port]; el('line', { x1: l.xy[0], y1: l.xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-leg', stroke: p.color, style: 'stroke-width:' + 1.4 * u + 'px' }, r.legs); });
+      if (hi) hi.moves.forEach(function (m) { if (!inReg(r, m[0].ll)) return; var p = PORTS[m[1]]; el('line', { x1: m[0].xy[0], y1: m[0].xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-leg sug', style: 'stroke-width:' + 2.2 * u + 'px;stroke-dasharray:' + 5 * u + ' ' + 5 * u }, r.sug); });
       var labelled = {};
       LOTS.slice().sort(function (a, b) { return b.cbm - a.cbm; }).forEach(function (l) {
         if (!inReg(r, l.ll)) return;
@@ -104,7 +150,7 @@
           var key = Math.round(l.xy[0] / (14 * u)) + ':' + Math.round(l.xy[1] / (14 * u)), nth = labelled[key] = (labelled[key] || 0) + 1;
           // label away from the port when there is room for it, otherwise on the side that fits
           var label = short(l.name) + ' · ' + m3(l.cbm) + (l.port !== l.home ? ' ↪' : ''), w = (label.length * 6.1 + 8) * u + rad;
-          var roomL = l.xy[0] - r.vb[0], roomR = r.vb[0] + r.vb[2] - l.xy[0], awayRight = l.xy[0] > PORTS[l.port].xy[0];
+          var roomL = l.xy[0] - r.vb[0], roomR = r.vb[0] + r.vb[2] - l.xy[0], awayRight = l.xy[0] > PORTS[l.port].dxy[0];
           var left = awayRight ? (roomR >= w || roomR >= roomL) : !(roomL >= w || roomL > roomR);
           var t = el('text', { x: (left ? 1 : -1) * (rad + 4 * u), y: 4 * u + (nth - 1) * 13 * u, 'text-anchor': left ? 'start' : 'end', style: 'font-size:' + 11 * u + 'px;stroke-width:' + 3 * u + 'px' }, g);
           t.textContent = label;
@@ -115,11 +161,12 @@
       codes.forEach(function (k) {
         var p = PORTS[k]; if (!inReg(r, p.ll)) return;
         var f = fill(k), col = ringColor(f), R = 20 * u, C = 2 * Math.PI * R;
-        var g = el('g', { class: 'pm-port' + (k === sel ? ' sel' : ''), 'data-port': k, transform: 'translate(' + p.xy[0] + ',' + p.xy[1] + ')', tabindex: '0', role: 'button', 'aria-label': p.name + ': ' + m3(f.v) + ', ' + (f.p.mix.join(' + ') || 'nothing ready') }, r.ports);
+        if (Math.hypot(p.dxy[0] - p.xy[0], p.dxy[1] - p.xy[1]) > u) { el('line', { x1: p.xy[0], y1: p.xy[1], x2: p.dxy[0], y2: p.dxy[1], class: 'pm-tick', style: 'stroke-width:' + 1.2 * u + 'px' }, r.ports); el('circle', { cx: p.xy[0], cy: p.xy[1], r: 2.5 * u, class: 'pm-anchor' }, r.ports); }
+        var g = el('g', { class: 'pm-port' + (k === sel ? ' sel' : ''), 'data-port': k, transform: 'translate(' + p.dxy[0] + ',' + p.dxy[1] + ')', tabindex: '0', role: 'button', 'aria-label': p.name + ': ' + m3(f.v) + ', ' + (f.p.mix.join(' + ') || 'nothing ready') }, r.ports);
         el('circle', { r: R, class: 'bg', style: 'stroke-width:' + 7 * u + 'px' }, g);
-        el('circle', { r: R, class: 'ring', stroke: col, transform: 'rotate(-90)', 'stroke-dasharray': C * f.pct + ' ' + C, style: 'stroke-width:' + 7 * u + 'px' }, g);
+        if (f.pct > 0.005) el('circle', { r: R, class: 'ring', stroke: col, transform: 'rotate(-90)', 'stroke-dasharray': C * f.pct + ' ' + C, style: 'stroke-width:' + 7 * u + 'px' }, g);
         el('text', { class: 'pct', fill: col, style: 'font-size:' + 11 * u + 'px' }, g).textContent = f.v ? (f.onlyLcl ? 'LCL' : Math.round(f.pct * 100) + '%') : '—';
-        var west = codes.some(function (o) { return o !== k && inReg(r, PORTS[o].ll) && PORTS[o].ll[0] > p.ll[0] && Math.abs(PORTS[o].ll[0] - p.ll[0]) < 1.5; });
+        var west = codes.some(function (o) { return o !== k && PORTS[o].dxy[0] > p.dxy[0] && Math.abs(PORTS[o].dxy[0] - p.dxy[0]) < 160 * u && Math.abs(PORTS[o].dxy[1] - p.dxy[1]) < 60 * u; });
         var dx = (west ? -1 : 1) * (R + 7 * u), an = west ? 'end' : 'start', dy = (p.ll[1] < (r.bb[0][1] + r.bb[1][1]) / 2 ? 1 : -1) * 4 * u;
         el('text', { x: dx, y: dy - 2 * u, class: 'name', 'text-anchor': an, style: 'font-size:' + 13 * u + 'px;stroke-width:' + 4 * u + 'px' }, g).textContent = p.name;
         el('text', { x: dx, y: dy + 12 * u, class: 'vol', 'text-anchor': an, style: 'font-size:' + 11 * u + 'px;stroke-width:' + 4 * u + 'px' }, g).textContent = m3(f.v) + ' · ' + (f.p.mix.join(' + ') || 'nothing ready');
@@ -175,11 +222,18 @@
     codes.forEach(function (k) { var f = fill(k), b = document.createElement('button'); b.type = 'button'; b.className = 'pm-chip' + (k === sel ? ' sel' : ''); b.innerHTML = '<b><i style="background:' + PORTS[k].color + '"></i>' + esc(PORTS[k].name) + '</b><small>' + m3(f.v) + ' · ' + esc(f.p.mix.join(' + ') || '—') + '</small>'; b.addEventListener('click', function () { sel = k; draw(); }); stripEl.appendChild(b); });
     var t = document.createElement('div'); t.className = 'pm-chip tot'; t.innerHTML = '<b>' + money(total()) + '</b><small>est. ocean + extra trucking in this window</small>'; stripEl.appendChild(t);
   }
+  var insetBox = null, ip = null;
   function drawInset() {
-    var s = root.querySelector('[data-pm-inset]'); if (!s) return;
-    el('path', { d: G.inset.china, class: 'pm-inset-land' }, s); el('path', { d: G.inset.tw, class: 'pm-inset-land' }, s);
-    var ip = function (ll) { var r = Math.PI / 180; return [G.inset.t[0] + G.inset.s * ll[0] * r, G.inset.t[1] - G.inset.s * Math.log(Math.tan(Math.PI / 4 + ll[1] * r / 2))]; };
-    D.regions.forEach(function (r) { var a = ip([r.bb[0][0], r.bb[1][1]]), b = ip([r.bb[1][0], r.bb[0][1]]); el('rect', { x: a[0], y: a[1], width: b[0] - a[0], height: b[1] - a[1], class: 'pm-inset-box' }, s); });
+    var sv = root.querySelector('[data-pm-inset]'); if (!sv) return;
+    el('path', { d: G.inset.china, class: 'pm-inset-land' }, sv); el('path', { d: G.inset.tw, class: 'pm-inset-land' }, sv);
+    ip = function (ll) { var q = Math.PI / 180; return [G.inset.t[0] + G.inset.s * ll[0] * q, G.inset.t[1] - G.inset.s * Math.log(Math.tan(Math.PI / 4 + ll[1] * q / 2))]; };
+    insetBox = el('rect', { class: 'pm-inset-box' }, sv); drawInsetBox();
+  }
+  function unpj(x, y) { var q = Math.PI / 180; return [(x - G.TX) / G.S / q, (2 * Math.atan(Math.exp((G.TY - y) / G.S)) - Math.PI / 2) / q]; }
+  function drawInsetBox() {
+    if (!insetBox) return;
+    var a = ip(unpj(r.vb[0], r.vb[1])), b = ip(unpj(r.vb[0] + r.vb[2], r.vb[1] + r.vb[3]));
+    insetBox.setAttribute('x', a[0]); insetBox.setAttribute('y', a[1]); insetBox.setAttribute('width', Math.max(2, b[0] - a[0])); insetBox.setAttribute('height', Math.max(2, b[1] - a[1]));
   }
   function draw() { lastIdeas = ideas(); drawMap(); drawIdeas(); drawPort(); drawStrip(); }
 

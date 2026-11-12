@@ -12,12 +12,12 @@ const PORT_GEO = {
   CNYTN: { ll: [114.27, 22.58], name: 'Yantian', zh: '盐田 · Shenzhen', color: '#cf5a52' },
   CNCAN: { ll: [113.62, 22.74], name: 'Nansha', zh: '南沙 · Guangzhou', color: '#d08a1e' },
 };
-/** Map panels: the two areas where cargo can sensibly move between ports by truck. */
-const REGIONS = [
-  { id: 'east', title: 'East China · Shanghai & Ningbo', bb: [[118.4, 27.6], [123.5, 32.4]] },
-  { id: 'south', title: 'South China · Yantian & Nansha', bb: [[111.8, 21.6], [118.9, 25.1]] },
-];
-
+/** Map views: the whole coast, and quick zooms to the two port areas. */
+const VIEWS = {
+  all: { label: 'All ports', bb: [[111.4, 21.4], [123.8, 32.5]] },
+  east: { label: 'East China', bb: [[118.4, 27.6], [123.5, 32.4]] },
+  south: { label: 'South China', bb: [[111.8, 21.6], [118.9, 25.1]] },
+};
 // Manufacturing cities [key, English, 中文, lon, lat, extra aliases]
 const C = (k, en, zh, lon, lat, ...alias) => ({ key: k, en, zh, ll: [lon, lat], alias });
 const CITIES = [
@@ -83,4 +83,4 @@ function rates(options = []) {
   return { '40HQ': box('FCL_40HQ', 5300), '40GP': box('FCL_40GP', 5000), '20GP': box('FCL_20GP', 3800), lcl: lcl ? { perCbm: lcl.rate, min: lcl.min, fees: lcl.fees } : { perCbm: 95, min: 0, fees: 650 }, fromLogistics: options.some((o) => o.active !== false && /^FCL_|^LCL$/.test(o.mode)) };
 }
 
-module.exports = { PORT_GEO, REGIONS, CITIES, CITY, cityOf, km, rates, CAPS: Object.fromEntries(PL.BOXES.map((b) => [b.code, b.cap])), LCL_MAX: PL.LCL_MAX || 15 };
+module.exports = { PORT_GEO, VIEWS, CITIES, CITY, cityOf, km, rates, CAPS: Object.fromEntries(PL.BOXES.map((b) => [b.code, b.cap])), LCL_MAX: PL.LCL_MAX || 15 };

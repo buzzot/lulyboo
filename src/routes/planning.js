@@ -93,7 +93,7 @@ function planningRoutes(router, { db, config }) {
       if (o.container_id) lot.locked = true;
       lot.orders.push({ id: o.id, po: o.po, product: o.product || '', qty: o.qty != null && o.qty !== '' ? Number(o.qty) : null, cbm: Math.round(cbm * 100) / 100, ready: PL.short(o.ready_date), late: o.ready_date < day, url: poUrl(o), locked: !!o.container_id });
     }
-    const data = { ports: PM.PORT_GEO, regions: PM.REGIONS, caps: PM.CAPS, lclMax: PM.LCL_MAX, rates: PM.rates(options), lots: Object.values(lots).map((l) => ({ ...l, cbm: Math.round(l.cbm * 100) / 100 })), moveUrl: `${BASE}/map/move` };
+    const data = { ports: PM.PORT_GEO, views: PM.VIEWS, caps: PM.CAPS, lclMax: PM.LCL_MAX, rates: PM.rates(options), lots: Object.values(lots).map((l) => ({ ...l, cbm: Math.round(l.cbm * 100) / 100 })), moveUrl: `${BASE}/map/move` };
     const winLabel = (w) => (w.end ? `By ${PL.short(w.end)}` : 'All open');
     const unplaced = Object.values(noPlace);
     return html`<div class="pm" data-pm>
@@ -102,8 +102,11 @@ function planningRoutes(router, { db, config }) {
       <div class="pm-grid">
         <div class="pm-main">
           <div class="card pm-mapcard"><div class="pm-head"><svg class="pm-inset" data-pm-inset viewBox="0 0 150 120" aria-hidden="true"></svg>
-            <div class="pm-legend"><span><i class="dot"></i>Supplier · size = m³ · colour = its port</span><span><em></em>Suggested move</span><span><b class="ringk"></b>Port ring = next container fill</span><span class="sub">Click a port to see its suppliers · drag a supplier onto another port to move its orders</span></div></div>
-            <div class="pm-regions" data-pm-regions></div></div>
+            <div class="pm-legend"><span><i class="dot"></i>Supplier · size = m³ · colour = its port</span><span><em></em>Suggested move</span><span><b class="ringk"></b>Port ring = next container fill</span><span class="sub">Scroll or pinch to zoom, drag the map to pan · click a port to see its suppliers · drag a supplier onto any port to move its orders</span></div></div>
+            <div class="pm-map" data-pm-map>
+              <div class="pm-zoombar"><nav class="pm-views" aria-label="Zoom to">${Object.entries(PM.VIEWS).map(([k, v]) => html`<button type="button" class="${k === 'all' ? 'on' : ''}" data-pm-zoom-to="${k}">${v.label}</button>`)}</nav>
+                <span class="pm-zoom"><button type="button" data-pm-zoom="in" aria-label="Zoom in">+</button><button type="button" data-pm-zoom="out" aria-label="Zoom out">−</button></span></div>
+            </div></div>
           <div class="pm-strip" data-pm-strip></div>
         </div>
         <aside class="pm-side">
@@ -115,11 +118,11 @@ function planningRoutes(router, { db, config }) {
           <section class="card pm-card pm-how"><h3>How it decides</h3><ul>
             <li>Open orders at each port, ready in the chosen window, are packed into the cheapest mix of 40HQ, 40GP, 20GP and LCL (usable ${PM.CAPS['40HQ']} / ${PM.CAPS['40GP']} / ${PM.CAPS['20GP']} m³).</li>
             <li>Ocean costs: ${data.rates.fromLogistics ? html`your cheapest active rates in <a href="/admin/logistics">Logistics</a>` : html`example rates — add your forwarder rates in <a href="/admin/logistics">Logistics</a>`}. Trucking to a farther port is estimated from road distance; the forwarder confirms.</li>
-            <li>A move is suggested when it saves more than the extra trucking. Moving changes the loading port on those PO lines; tell the supplier and forwarder.</li></ul></section>
+            <li>A move is suggested when it saves more than the extra trucking — also across areas, e.g. Shenzhen → Ningbo, when the trucking pays for itself. Moving changes the loading port on those PO lines; tell the supplier and forwarder.</li></ul></section>
         </aside>
       </div>
       <script type="application/json" data-pm-data>${raw(JSON.stringify(data).replace(/</g, '\\u003c'))}</script>
-      <script src="/static/china-coast.js?v=1" defer></script><script src="/static/portmap.js?v=1" defer></script>
+      <script src="/static/china-coast.js?v=2" defer></script><script src="/static/portmap.js?v=2" defer></script>
     </div>`;
   }
 
