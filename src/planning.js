@@ -118,7 +118,7 @@ function tableText(rows) {
  * "Line amount …" is dropped (the Amount column has it). Returns { notes, po_terms }.
  */
 const TERM_RE = /^(payment( terms?)?|terms( of payment)?|deposit|balance|ship[\s-]?to|deliver(y)?( to| address| terms)?|ship(ping|ment)? (method|via|mode|terms)|ship via|incoterms?|fob|exw|cif|ddp|freight( terms)?|consignee|bill to)\b/i;
-const DROP_RE = /^(line )?(amount|total|subtotal)\b/i;
+const DROP_RE = /^(line )?(amount|total|subtotal)\b|^inspection( date)?\b/i; // already in the Amount / Inspection columns
 function splitTerms(notes, terms = null) {
   const sent = (t) => String(t || '').split(/(?<=[.;])\s+(?=[A-Z])/).map((x) => x.trim()).filter(Boolean);
   const keep = []; const t = sent(terms);

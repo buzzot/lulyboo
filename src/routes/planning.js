@@ -216,17 +216,17 @@ function planningRoutes(router, { db, config }) {
         }
       }
       const int = (v) => Number(v).toLocaleString('en-US');
-      const item = (o) => { const name = o.product && o.product !== o.sku ? o.product : ''; return html`<div class="cp-it">
+      const item = (o, one = false) => { const name = o.product && o.product !== o.sku ? o.product : ''; return html`<div class="cp-it">
         <div class="cp-it-n" title="${[o.sku, name].filter(Boolean).join(' · ') || '(whole PO)'}">${o.sku ? html`<b>${o.sku}</b>` : ''}${name ? html`<span>${name}</span>` : o.sku ? '' : html`<span>(whole PO)</span>`}</div>
         ${editBtn(o, 'cp-it-ed')}
-        <div class="cp-it-m"><span>${o.qty ? `${int(o.qty)} pcs` : '—'}</span><span class="${Number(o.cbm) > 0 ? '' : 'miss'}">${Number(o.cbm) > 0 ? html`${n2(o.cbm)} m³${o.cbm_estimated ? html`<i title="Calculated from the carton size">calc.</i>` : ''}` : 'CBM ?'}</span></div></div>`; };
+        <div class="cp-it-m${one ? ' cp-it-one' : ''}"><span>${o.qty ? (one ? html`<b>${int(o.qty)}</b> pcs` : `${int(o.qty)} pcs`) : '—'}</span><span class="${Number(o.cbm) > 0 ? '' : 'miss'}">${Number(o.cbm) > 0 ? html`${one ? html`<b>${n2(o.cbm)} m³</b>` : `${n2(o.cbm)} m³`}${o.cbm_estimated ? html`<i title="Calculated from the carton size">calc.</i>` : ''}` : 'CBM ?'}</span></div></div>`; };
       const poCard = (g) => {
         const docs = filesFor(g.supplier_id, g.po).length;
         const many = g.lines.length > 4;
         return html`<article class="cp-po" style="--c:${g.col}">
           <div class="cp-po-h"><div class="cp-po-id"><b>${g.sup?.name || 'Supplier'}</b><div class="sub">${poLink(g.lines[0], g.po)}${docs ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(g.po)}" title="Documents for ${g.po}">📎${docs}</a>` : ''} · ${g.lines.length} product${g.lines.length === 1 ? '' : 's'}</div></div>${tag(g.st)}</div>
-          <div class="cp-its">${(many ? g.lines.slice(0, 3) : g.lines).map(item)}
-            ${many ? html`<details class="cp-more"><summary>+ ${g.lines.length - 3} more products</summary>${g.lines.slice(3).map(item)}</details>` : ''}</div>
+          <div class="cp-its">${(many ? g.lines.slice(0, 3) : g.lines).map((o) => item(o, g.lines.length === 1))}
+            ${many ? html`<details class="cp-more"><summary>+ ${g.lines.length - 3} more products</summary>${g.lines.slice(3).map((o) => item(o))}</details>` : ''}</div>
           ${g.lines.length > 1 ? html`<div class="cp-po-tot"><span><b>${int(g.qty)}</b> pcs</span><span><b>${n2(g.cbm)} m³</b>${g.noCbm ? html` <em>+ ${g.noCbm} without CBM</em>` : ''}</span></div>` : ''}
           <div class="cp-po-d"><span>${g.ready ? html`Ready <b>${PL.short(g.ready)}</b>` : 'No ready date'}${g.split ? html` <em title="Its products are ready in different weeks">· split dates</em>` : ''}</span>
             ${g.etd ? html`<span class="cp-po-ar">→</span><span>ETD <b>${PL.short(g.etd.etd)}</b> <span class="sub">${g.etd.carrier}</span></span>` : ''}
@@ -467,7 +467,7 @@ function planningRoutes(router, { db, config }) {
     const num = (v) => { const x = Number(String(v ?? '').replace(/[^0-9.\-]/g, '')); return String(v ?? '').trim() && Number.isFinite(x) ? x : null; };
     const t = (v, n) => String(v ?? '').trim().slice(0, n) || null;
     const port = SC.PORT[f.port] ? f.port : null;
-    const shared = { port, ready_date: PL.isoDay(f.ready_date), production_status: t(f.production_status, 120), inspection_date: PL.isoDay(f.inspection_date), pending_from_us: t(f.pending_from_us, 200), shipped: f.shipped === '1' };
+    const shared = { port, ready_date: PL.isoDay(f.ready_date), production_status: t(f.production_status, 120), inspection_date: PL.isoDay(f.inspection_date), ...(PL.isoDay(f.inspection_date) ? { inspection_note: null } : {}), pending_from_us: t(f.pending_from_us, 200), shipped: f.shipped === '1' };
     const own = { product: t(f.product, 300), qty: num(f.qty), cbm: num(f.cbm), notes: t(f.notes, 1000) };
     const size = String(f.carton_size || '').match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)/);
     if (f.unit_price !== undefined) own.unit_price = num(f.unit_price);

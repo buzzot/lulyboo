@@ -2424,3 +2424,4 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .sd-mseg button{border:0;background:none;font:inherit;font-size:13px;font-weight:600;color:#666;padding:6px 14px;border-radius:7px;cursor:pointer}
 .sd-mseg button.on{background:#fff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 .sd-seg[hidden]{display:none}
+.cp-it-one{color:#1f1f1f}.cp-it-one b{font-weight:700}
