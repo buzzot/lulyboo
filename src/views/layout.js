@@ -203,16 +203,17 @@ function packingRows(product, opts) {
   </div>`;
 }
 
-function productFields(product = {}, { categories, slot } = {}) {
-  return GROUPS.map((g) => groupFields(product, g.id, { categories, slot: g.id === 'product' ? slot : null }));
+/** `skip`: group ids left out (supplier view of hidden pricing). `notes`: { groupId: html } shown next to the legend. */
+function productFields(product = {}, { categories, slot, skip = [], notes = {} } = {}) {
+  return GROUPS.filter((g) => !skip.includes(g.id)).map((g) => groupFields(product, g.id, { categories, slot: g.id === 'product' ? slot : null, note: notes[g.id] || null }));
 }
 
 /** One field group (product / pricing / packing / other) as a fieldset. */
 /** `slot`: extra cell placed after Subcategory (admin product page: Fill with AI). */
-function groupFields(product = {}, groupId, { categories, slot = null } = {}) {
+function groupFields(product = {}, groupId, { categories, slot = null, note = null } = {}) {
   return [GROUPS.find((x) => x.id === groupId)].map((g) => html`
     <fieldset class="group" data-group="${g.id}">
-      <legend>${t(g.en, g.cn)}</legend>
+      <legend>${t(g.en, g.cn)}${note ? html` ${note}` : ''}</legend>
       ${g.id === 'packing' ? packingRows(product, { categories }) : html`<div class="grid">
         ${PRODUCT_FIELDS.filter((f) => f.group === g.id).map((f) => html`
           <label class="${f.type === 'textarea' ? 'span2' : ''}">

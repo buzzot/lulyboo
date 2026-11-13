@@ -34,6 +34,15 @@ function missingInfo(p) {
   return miss;
 }
 
+/** Small tag on the Pricing & Terms legend: can the supplier see these values? */
+function pricingTag(p, supplier) {
+  const PV = require('../pricing-visibility');
+  if (PV.addedBySupplier(p)) return html`<span class="pa-tag own">Supplier's own product — visible to them</span>`;
+  return supplier?.show_pricing
+    ? html`<span class="pa-tag vis">Visible to ${supplier.name}</span> <a class="pa-chg" href="/admin/suppliers/${p.supplier_id}#portal-access">change</a>`
+    : html`<span class="pa-tag hid">🔒 Hidden from ${supplier?.name || 'the supplier'}</span> <a class="pa-chg" href="/admin/suppliers/${p.supplier_id}#portal-access">change</a>`;
+}
+
 function renderWorkspace(c) {
   const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, renderAnalysis } = c;
   const v = (x) => (x === null || x === undefined ? '' : x);
@@ -137,7 +146,7 @@ function renderWorkspace(c) {
       </form></dialog>
       <form method="post" enctype="multipart/form-data" action="/admin/products/${p.id}/edit" class="product-form" data-guard>
         <label class="photo-link-field"><span class="lbl">Supplier photo / catalog link</span><input name="photo_link" value="${p.photo_link || ''}" placeholder="https://"></label>
-        ${productFields(p, { categories: ctx.categoryNames, slot: html`<div class="aifill aifill-cell" data-aifill="/admin/products/${p.id}/ai-fill">
+        ${productFields(p, { categories: ctx.categoryNames, notes: { pricing: pricingTag(p, supplier) }, slot: html`<div class="aifill aifill-cell" data-aifill="/admin/products/${p.id}/ai-fill">
           <span class="lbl">Fill with AI</span>
           <div class="pk-ai aifill-z" data-aifill-drop>
             <span class="pk-ai-ic" aria-hidden="true">✦</span>

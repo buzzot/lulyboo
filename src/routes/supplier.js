@@ -10,6 +10,7 @@ const { getCtx, imagesFor } = require('../services');
 const { currentSupplierUser, passwordProblem, verifyPassword, hashPassword, startSession, MIN_PASSWORD } = require('../auth');
 const { saveProductImages, deleteImages } = require('../images');
 const IR = require('../import-review');
+const PV = require('../pricing-visibility');
 const { importResult } = IR;
 const ai = require('../ai');
 
@@ -67,12 +68,13 @@ function supplierRoutes(router, { db, config }) {
   const STATE_LABEL = { draft: ['Draft', '草稿'], submitted: ['Submitted', '已提交'], review: ['Under review', '审核中'], selected: ['Selected', '已选中'], closed: ['Closed', '已关闭'] };
   const stateIcon = { draft: 'filePen', submitted: 'check', review: 'clock', selected: 'checkCheck', closed: 'x' };
   const badge = (st) => html`<span class="status-badge st-${st}">${icon(stateIcon[st], 12)}${t(STATE_LABEL[st][0], STATE_LABEL[st][1])}</span>`;
-  const pctOf = (p, nImgs) => Math.round(((COMPLETE_KEYS.filter((k) => p[k] !== null && p[k] !== undefined && String(p[k]).trim() !== '').length + (nImgs || p.photo_link ? 1 : 0)) / (COMPLETE_KEYS.length + 1)) * 100);
+  // Completeness only counts what the supplier can see (no pricing on products Lulyboo added, unless shown).
+  const pctOf = (p, nImgs, priced = true) => { const keys = priced ? COMPLETE_KEYS : COMPLETE_KEYS.filter((k) => !PV.PRICING_KEYS.includes(k)); return Math.round(((keys.filter((k) => p[k] !== null && p[k] !== undefined && String(p[k]).trim() !== '').length + (nImgs || p.photo_link ? 1 : 0)) / (keys.length + 1)) * 100); };
 
   router.get('/portal', A(async (req, res) => {
     const all = (await db.list('products', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc' })).filter((p) => !p.archived_at);
     const imgs = await imagesFor(db, all.map((p) => p.id));
-    const rows = all.map((p) => ({ ...p, st: stateOf(p), pct: pctOf(p, imgs[p.id]?.length) }));
+    const rows = all.map((p) => { const priced = PV.supplierSeesPricing(req.supplier, p); return { ...(priced ? p : PV.withoutPricing(p)), priced, st: stateOf(p), pct: pctOf(p, imgs[p.id]?.length, priced) }; });
     const count = (k) => rows.filter((r) => r.st === k).length;
     const tab = ['draft', 'submitted', 'review', 'selected'].includes(req.query.status) ? req.query.status : 'all';
     const q = String(req.query.q || '').trim().toLowerCase();
@@ -114,7 +116,7 @@ function supplierRoutes(router, { db, config }) {
             <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="">` : html`<span class="noimg">${icon('camera', 18)}</span>`}</td>
             <td><a class="pname" href="${req.base}/products/${p.id}">${p.product_name}</a><div class="sub">${p.supplier_sku || ''}</div></td>
             <td>${p.category || '—'}</td>
-            <td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.num(p.moq)}</td>
+            <td class="r">${p.priced ? fmt.money(p.unit_price, p.currency) : '—'}</td><td class="r">${p.priced ? fmt.num(p.moq) : '—'}</td>
             <td>${badge(p.st)}</td>
             <td><div class="meter" title="${p.pct}%"><i style="width:${p.pct}%"></i></div><span class="sub">${p.pct}%</span></td>
             <td>${fmt.date(p.updated_at)}</td></tr>`)}</tbody></table></div>`
@@ -144,13 +146,15 @@ function supplierRoutes(router, { db, config }) {
     { id: 'review', en: 'Review', zh: '确认提交' },
   ];
 
-  function form(req, product, images = [], urls = {}, ctx, startStep = 0) {
+  function form(req, product, images = [], urls = {}, ctx, startStep = 0, { pricing = true } = {}) {
     const isNew = !product.id;
+    const steps = STEPS.filter((s) => pricing || s.id !== 'pricing');
+    const at = (id) => steps.findIndex((s) => s.id === id);
     const locked = !isNew && LOCKED.includes(product.status);
     const isDraft = isNew || product.is_draft;
     const opts = { categories: ctx.categoryNames };
     const action = isNew ? `${req.base}/products` : `${req.base}/products/${product.id}`;
-    const step = Math.min(Math.max(Number(startStep) || 0, 0), STEPS.length - 1);
+    const step = Math.min(Math.max(Number(startStep) || 0, 0), steps.length - 1);
     const heading = html`<div class="wiz-head">
         <div><div class="eyebrow">${isNew ? t('New catalog entry', '新增产品') : isDraft ? t('Draft', '草稿') : t('Submitted product', '已提交的产品')}</div>
         <h1>${isNew ? t('Add product', '新增产品') : product.product_name}</h1></div>
@@ -160,7 +164,7 @@ function supplierRoutes(router, { db, config }) {
       return html`${heading}<div class="flash info">${biText(LOCKED_MSG)}</div>
         <form class="product-form"><fieldset disabled>
           ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, disabled: true })}
-          ${productFields(product, opts)}
+          ${productFields(product, { ...opts, skip: pricing ? [] : ['pricing'] })}
         </fieldset></form>`;
     }
 
@@ -168,7 +172,7 @@ function supplierRoutes(router, { db, config }) {
       <form method="post" enctype="multipart/form-data" action="${action}" class="product-form wizard" data-wizard data-start="${step}">
         <input type="hidden" name="step" value="${step}" data-step-input>
         <nav class="stepper" aria-label="Steps">
-          ${STEPS.map((s, i) => html`<button type="button" class="step-tab" data-goto="${i}">
+          ${steps.map((s, i) => html`<button type="button" class="step-tab" data-goto="${i}">
             <span class="step-ico">${svg(s.id)}</span><span class="step-check" aria-hidden="true">✓</span>
             <span class="step-name">${t(s.en, s.zh)}</span></button>`)}
         </nav>
@@ -176,11 +180,11 @@ function supplierRoutes(router, { db, config }) {
         <section class="wstep" data-step="0" aria-label="Photos">
           ${photoSection({ images, urls, product, maxImages: MAX_IMAGES, deleteAction: (im) => `${req.base}/products/${product.id}/images/${im.id}/delete` })}
         </section>
-        <section class="wstep" data-step="1">${groupFields(product, 'product', opts)}
+        <section class="wstep" data-step="${at('product')}">${groupFields(product, 'product', opts)}
           <button type="button" class="btn ghost sm ai-btn" data-ai="describe" hidden>${icon('filePen', 14)} <span class="i-en">Draft with AI</span><span class="i-zh">AI 生成描述</span></button></section>
-        <section class="wstep" data-step="2">${groupFields(product, 'pricing', opts)}</section>
-        <section class="wstep" data-step="3">${groupFields(product, 'packing', opts)}</section>
-        <section class="wstep" data-step="4">
+        ${pricing ? html`<section class="wstep" data-step="${at('pricing')}">${groupFields(product, 'pricing', opts)}</section>` : ''}
+        <section class="wstep" data-step="${at('packing')}">${groupFields(product, 'packing', opts)}</section>
+        <section class="wstep" data-step="${at('review')}">
           ${groupFields(product, 'other', opts)}
           <div class="review-box" data-review data-photos="${images.length}">
             <h2>${t('Ready for review?', '准备好提交了吗？')}</h2>
@@ -189,8 +193,8 @@ function supplierRoutes(router, { db, config }) {
             <dl class="summary">
               <div><dt>${t('Product', '产品')}</dt><dd data-sum="product_name">—</dd></div>
               <div><dt>${t('Category', '类别')}</dt><dd data-sum="category">—</dd></div>
-              <div><dt>${t('Price', '价格')}</dt><dd data-sum="price">—</dd></div>
-              <div><dt>${t('MOQ', '起订量')}</dt><dd data-sum="moq">—</dd></div>
+              ${pricing ? html`<div><dt>${t('Price', '价格')}</dt><dd data-sum="price">—</dd></div>
+              <div><dt>${t('MOQ', '起订量')}</dt><dd data-sum="moq">—</dd></div>` : ''}
               <div><dt>${t('Master carton', '外箱')}</dt><dd data-sum="carton">—</dd></div>
               <div><dt>${t('Photos', '图片')}</dt><dd data-sum="photos">${images.length}</dd></div>
             </dl>
@@ -265,7 +269,7 @@ function supplierRoutes(router, { db, config }) {
       return res.html(page({ title: 'Add product', nav: nav('new'), req, flash: { type: 'error', msg: errors.join(' · ') }, body: form(req, row, [], {}, ctx, stepOf(fields)) }), 422);
     }
     const draft = action === 'draft';
-    const product = await db.insert('products', { ...row, supplier_id: req.supplier.id, source: 'form', is_draft: draft, submitted_at: draft ? null : new Date().toISOString() });
+    const product = await PV.insertProduct(db, { ...row, supplier_id: req.supplier.id, source: 'form', is_draft: draft, submitted_at: draft ? null : new Date().toISOString() }, 'supplier');
     const r = await saveProductImages(db, { supplierId: req.supplier.id, productId: product.id, files: files.images, maxImages: MAX_IMAGES });
     flash(res, r.errors.length ? 'warn' : 'ok', draft ? draftMsg(r) : submittedMsg(r));
     res.redirect(draft ? `${req.base}/products/${product.id}?step=${stepOf(fields)}` : req.base);
@@ -276,7 +280,9 @@ function supplierRoutes(router, { db, config }) {
     const ctx = await getCtx(db);
     const imgs = (await imagesFor(db, [p.id]))[p.id] || [];
     const urls = await db.storage.signedUrls(imgs.flatMap((i) => [i.path, i.thumb_path]));
-    res.html(page({ title: p.product_name, nav: nav(''), req, flash: takeFlash(req, res), body: form(req, { ...strip(p), status: p.status }, imgs, urls, ctx, req.query.step) }));
+    const priced = PV.supplierSeesPricing(req.supplier, p);
+    const shown = priced ? strip(p) : PV.withoutPricing(strip(p));
+    res.html(page({ title: p.product_name, nav: nav(''), req, flash: takeFlash(req, res), body: form(req, { ...shown, status: p.status }, imgs, urls, ctx, req.query.step, { pricing: priced }) }));
   }));
 
   router.post('/portal/products/:id', A(async (req, res) => {
@@ -289,7 +295,8 @@ function supplierRoutes(router, { db, config }) {
       return res.redirect(`${req.base}/products/${p.id}?step=${stepOf(fields)}`);
     }
     // A submitted product never goes back to draft; a draft becomes submitted on "Submit for review".
-    const patch = { ...row };
+    // Pricing the supplier can't see is never taken from their form (keeps Lulyboo's values as they are).
+    const patch = PV.supplierSeesPricing(req.supplier, p) ? { ...row } : PV.withoutPricing(row);
     if (p.is_draft && action === 'submit') { patch.is_draft = false; patch.submitted_at = new Date().toISOString(); }
     await db.update('products', { id: p.id }, patch);
     const existing = (await imagesFor(db, [p.id]))[p.id] || [];

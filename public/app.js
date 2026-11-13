@@ -752,13 +752,15 @@
       set('moq', val('f_moq'));
       set('carton', hasDims ? dims.join(' × ') + ' cm' + (val('f_units_per_carton') ? ' · ' + val('f_units_per_carton') + ' pcs' : '') : '');
       set('photos', String(photos));
+      // jump target = the step holding that field (the pricing step isn't there when Lulyboo keeps prices hidden)
+      var stepOfField = function (id) { var el = document.getElementById(id); var sec = el && el.closest('.wstep'); var i = sec ? steps.indexOf(sec) : -1; return i < 0 ? 0 : i; };
       var checks = [
-        [!!val('f_product_name'), 'Product name', '产品名称', 1],
-        [!!price, 'Unit price', '单价', 2],
+        [!!val('f_product_name'), 'Product name', '产品名称', stepOfField('f_product_name')],
+        document.getElementById('f_unit_price') ? [!!price, 'Unit price', '单价', stepOfField('f_unit_price')] : null,
         [photos > 0 || !!val('f_photo_link'), 'Photos or a photo link', '图片或图片链接', 0],
-        [hasDims && !!val('f_units_per_carton'), 'Carton size and units per carton', '外箱尺寸和装箱数', 3],
-        [!!val('f_carton_gw_kg'), 'Carton gross weight', '外箱毛重', 3],
-      ];
+        [hasDims && !!val('f_units_per_carton'), 'Carton size and units per carton', '外箱尺寸和装箱数', stepOfField('f_units_per_carton')],
+        [!!val('f_carton_gw_kg'), 'Carton gross weight', '外箱毛重', stepOfField('f_carton_gw_kg')],
+      ].filter(Boolean);
       var missing = checks.filter(function (c) { return !c[0]; });
       box.querySelector('[data-checklist]').innerHTML = (missing.length
         ? '<li class="hint">' + L('Missing (you can still submit, but complete quotes are reviewed first):', '尚未填写（仍可提交，但信息完整的报价会优先审核）：') + '</li>'

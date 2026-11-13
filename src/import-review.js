@@ -52,14 +52,14 @@ async function saveSourceFile(db, supplierId, source, errors) {
   }
 }
 
-async function insertParsed(db, parsed, supplierId, source = null) {
+async function insertParsed(db, parsed, supplierId, source = null, addedBy = 'supplier') {
   let inserted = 0; let photos = 0;
   const errors = [...parsed.errors];
   const doc = await saveSourceFile(db, supplierId, source, errors);
   const rows = parsed.products.map((p) => ({ ...p.row, supplier_id: supplierId, source: 'import', ...(doc ? { source_document_id: doc.id } : {}) }));
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
-    const saved = await db.insert('products', chunk);
+    const saved = await require('./pricing-visibility').insertProduct(db, chunk, addedBy);
     inserted += chunk.length;
     // Pictures that were embedded in the spreadsheet row go with the product they sit on.
     for (let k = 0; k < chunk.length; k++) {
@@ -80,10 +80,10 @@ async function insertParsed(db, parsed, supplierId, source = null) {
 }
 
 /** Parse and insert in one go (no review step). */
-async function runImport(db, file, supplierId) {
+async function runImport(db, file, supplierId, addedBy = 'supplier') {
   let parsed;
   try { parsed = parseUpload(file); } catch (e) { return failed(e.message); }
-  return insertParsed(db, parsed, supplierId, { name: file.name, buffer: file.buffer });
+  return insertParsed(db, parsed, supplierId, { name: file.name, buffer: file.buffer }, addedBy);
 }
 
 const failed = (message) => ({ inserted: 0, skipped: 0, photos: 0, errors: [{ rowNumber: 0, messages: [message] }] });
@@ -215,7 +215,7 @@ async function finishReview(db, supplierId, fields, view) {
   }
   if (!selected.size) return { page: reviewPage({ ...view, token, fileName: entry.name, parsed, values, selected, rowErrors, dup, supplierName, extra, notice: m('Tick at least one product to import.', '请至少勾选一个要导入的产品。') }) };
   if (Object.keys(rowErrors).length) return { page: reviewPage({ ...view, token, fileName: entry.name, parsed, values, selected, rowErrors, dup, supplierName, extra, notice: m('Fix the highlighted rows, then approve again.', '请先修正标红的行，然后再次确认导入。') }) };
-  const result = await insertParsed(db, { ...parsed, products: chosen }, supplierId, { name: entry.name, buffer: entry.buffer });
+  const result = await insertParsed(db, { ...parsed, products: chosen }, supplierId, { name: entry.name, buffer: entry.buffer }, view?.admin ? 'lulyboo' : 'supplier');
   staged.delete(stageKey(supplierId, token));
   return { done: result };
 }

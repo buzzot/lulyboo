@@ -906,3 +906,8 @@ alter table public.ship_confirmations add column if not exists paused           
 
 -- PO terms (run once): payment terms, ship-to and shipment method of a PO, kept apart from line notes
 alter table public.plan_orders add column if not exists po_terms text;
+
+-- Pricing visibility (run once): who added each product, and a per-supplier switch (off by default)
+alter table public.products  add column if not exists added_by text;            -- 'supplier' · 'lulyboo'
+alter table public.suppliers add column if not exists show_pricing boolean not null default false;
+update public.products set added_by = case when source = 'form' then 'supplier' else 'lulyboo' end where added_by is null;

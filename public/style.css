@@ -2432,3 +2432,14 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .cp-it-one{color:inherit}
 .lp-polink{font-weight:700;font-size:14px;color:inherit;text-decoration:none}
 .lp-polink:hover,.lp-polink:focus-visible{color:var(--brand,#cf5a52);text-decoration:none}
+/* pricing visibility */
+.pa-row{display:flex;gap:18px;align-items:flex-start;justify-content:space-between}
+.pa-row b{font-size:14px}.pa-row p{margin:4px 0 0;max-width:680px;line-height:1.5}
+.pa-stat{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 4px;font-size:12.5px;color:#555}.pa-stat b{font-size:12.5px}
+.pa-sw{position:relative;width:46px;height:26px;flex:none;border:0;border-radius:99px;background:#d9d5d0;cursor:pointer;padding:0;transition:background .15s;margin-top:2px}
+.pa-sw span{position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:3px;left:3px;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .15s}
+.pa-sw.on{background:#2f8a4c}.pa-sw.on span{left:23px}
+.pa-sw:focus-visible{outline:2px solid var(--brand,#cf5a52);outline-offset:2px}
+.pa-tag{display:inline-block;font-size:11.5px;font-weight:600;border-radius:99px;padding:2px 9px;margin-left:6px;vertical-align:2px;text-transform:none;letter-spacing:0}
+.pa-tag.hid{background:#f2f0ed;color:#6f6c68}.pa-tag.vis{background:#e8f4ec;color:#2f8a4c}.pa-tag.own{background:#eef4fb;color:#2f5f8f}
+.pa-chg{font-size:12px;font-weight:500;color:#b4554a;text-transform:none;letter-spacing:0}

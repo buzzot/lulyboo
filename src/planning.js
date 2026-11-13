@@ -461,7 +461,7 @@ async function addToCatalog(db, supplierId, lines, { source = 'po' } = {}) {
       status: 'Selected', source, is_draft: false, factory_notes: `Added from ${o.po}`,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
-    try { const p = await db.insert('products', row); prods.push(p); names.push(p.product_name); } catch { /* catalog is optional for planning */ }
+    try { const p = await require('./pricing-visibility').insertProduct(db, row, 'lulyboo'); prods.push(p); names.push(p.product_name); } catch { /* catalog is optional for planning */ }
   }
   return { added: names.length, names };
 }

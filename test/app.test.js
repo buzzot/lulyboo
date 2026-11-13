@@ -2385,6 +2385,56 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
 });
 
+test('pricing visibility: hidden on products Lulyboo added unless switched on; supplier can never overwrite it', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const { hashPassword } = require('../src/auth');
+  const s = await db.insert('suppliers', { name: 'Luckibuy', active: true });
+  await db.insert('supplier_users', { supplier_id: s.id, email: 'sales4@luckibuy.com', name: 'Amy', status: 'active', password_hash: await hashPassword('correct horse battery') });
+  const ours = await db.insert('products', { supplier_id: s.id, product_name: 'Heart Hook', unit_price: 1.04, currency: 'USD', moq: 5000, payment_terms: '30% deposit', incoterm: 'FOB', status: 'New', added_by: 'lulyboo', is_draft: false });
+  const theirs = await db.insert('products', { supplier_id: s.id, product_name: 'Teether Ring', unit_price: 0.86, currency: 'USD', moq: 3000, status: 'New', source: 'form', added_by: 'supplier', is_draft: false });
+  const legacy = await db.insert('products', { supplier_id: s.id, product_name: 'Old import', unit_price: 2.5, source: 'import', status: 'New', is_draft: false });
+  const sc = (await req(base, 'POST', '/login', { form: { email: 'sales4@luckibuy.com', password: 'correct horse battery' } })).cookies.filter((c) => c.startsWith('lb_sup=')).map((c) => c.split(';')[0]).join('; ');
+
+  // list: prices only on their own product
+  const list = (await req(base, 'GET', '/portal', { cookie: sc })).text;
+  assert.match(list, /\$0\.86/); assert.doesNotMatch(list, /\$1\.04|\$2\.50|5,000/);
+  // product Lulyboo added: no pricing section, no values in the page at all
+  const pg = (await req(base, 'GET', `/portal/products/${ours.id}`, { cookie: sc })).text;
+  assert.doesNotMatch(pg, /name="unit_price"|name="moq"|30% deposit|value="1\.04"/); assert.doesNotMatch(pg, /Pricing &amp; terms/);
+  assert.doesNotMatch((await req(base, 'GET', `/portal/products/${legacy.id}`, { cookie: sc })).text, /name="unit_price"|value="2\.5"/);
+  // own product: pricing as before
+  assert.match((await req(base, 'GET', `/portal/products/${theirs.id}`, { cookie: sc })).text, /name="unit_price"[^>]*value="0\.86"/);
+  // a crafted edit can't change hidden pricing
+  const ed = await req(base, 'POST', `/portal/products/${ours.id}`, { cookie: sc, form: { action: 'save', product_name: 'Heart Hook', unit_price: '0.01', moq: '1', payment_terms: '100% after delivery' } });
+  assert.equal(ed.status, 303);
+  const o = db.tables.products.find((x) => x.id === ours.id);
+  assert.equal(o.unit_price, 1.04); assert.equal(o.moq, 5000); assert.equal(o.payment_terms, '30% deposit');
+  // new product by the supplier is theirs
+  await req(base, 'POST', '/portal/products', { cookie: sc, form: { action: 'submit', product_name: 'Bath Duck', unit_price: '0.5', currency: 'USD' } });
+  assert.equal(db.tables.products.find((x) => x.product_name === 'Bath Duck').added_by, 'supplier');
+
+  // admin: switch + tag; switching on shows prices, and it is logged
+  const sp = (await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text;
+  assert.match(sp, /Portal access[\s\S]*<b>2<\/b> added by Lulyboo — pricing <b>hidden<\/b>[\s\S]*<b>2<\/b> added by the supplier/);
+  assert.match((await req(base, 'GET', `/admin/products/${ours.id}`, { cookie })).text, /🔒 Hidden from Luckibuy/);
+  assert.match((await req(base, 'GET', `/admin/products/${theirs.id}`, { cookie })).text, /Supplier&#39;s own product|Supplier's own product/);
+  assert.equal((await req(base, 'POST', `/admin/suppliers/${s.id}/pricing`, { cookie, form: { value: '1' } })).status, 303);
+  assert.equal(db.tables.suppliers.find((x) => x.id === s.id).show_pricing, true);
+  assert.ok(db.tables.supplier_activities.some((a) => /^Pricing shown to the supplier by/.test(a.summary)));
+  assert.match((await req(base, 'GET', `/portal/products/${ours.id}`, { cookie: sc })).text, /name="unit_price"[^>]*value="1\.04"/);
+  assert.match((await req(base, 'GET', '/portal', { cookie: sc })).text, /\$1\.04/);
+  await req(base, 'POST', `/admin/suppliers/${s.id}/pricing`, { cookie, form: { value: '0' } });
+  assert.doesNotMatch((await req(base, 'GET', '/portal', { cookie: sc })).text, /\$1\.04/);
+
+  // products created from a PO by Lulyboo are tagged
+  const PV = require('../src/pricing-visibility');
+  await PV.insertProduct(db, { supplier_id: s.id, product_name: 'From PO' }, 'lulyboo');
+  assert.equal(PV.supplierSeesPricing({ show_pricing: false }, db.tables.products.find((x) => x.product_name === 'From PO')), false);
+});
+
 test('PO page: payment terms / ship-to shown once, line amount dropped, old notes tidied', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db);

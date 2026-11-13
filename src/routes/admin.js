@@ -997,6 +997,21 @@ module.exports = function adminRoutes(router, { db, config }) {
           <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>
         </div></div>
       ${s.active ? '' : html`<div class="flash warn">Portal access is blocked for this supplier.</div>`}
+      ${(() => {
+        const PV = require('../pricing-visibility');
+        const mine = items.filter(({ product: p }) => !PV.addedBySupplier(p)).length;
+        const theirs = items.length - mine;
+        const last = acts.find((a) => /^Pricing (shown|hidden)/.test(a.summary || ''));
+        return html`<section class="card pa-card" id="portal-access"><h2>Portal access</h2>
+          <form method="post" action="/admin/suppliers/${s.id}/pricing" class="pa-row">
+            <div><b>Show pricing on products Lulyboo added</b>
+              <p class="muted small">Unit price, currency, incoterm, payment terms, MOQ, lead times and quote validity on products you created for this supplier (PO import, packing list, your imports). Products the supplier added themselves always show their own prices.</p>
+              <div class="pa-stat"><span><b>${mine}</b> added by Lulyboo — pricing <b>${s.show_pricing ? 'visible' : 'hidden'}</b></span><span><b>${theirs}</b> added by the supplier — always visible to them</span></div>
+              <div class="sub">${last ? `Last changed: ${last.summary.replace(/^Pricing (shown|hidden) to the supplier/, '').replace(/^ by /, 'by ')} · ${fmt.date(last.activity_date || last.created_at)}` : 'Last changed: never'}</div></div>
+            <input type="hidden" name="value" value="${s.show_pricing ? '0' : '1'}">
+            <button class="pa-sw ${s.show_pricing ? 'on' : ''}" role="switch" aria-checked="${s.show_pricing ? 'true' : 'false'}" aria-label="Show pricing on products Lulyboo added" title="${s.show_pricing ? 'Visible — click to hide' : 'Hidden — click to show'}"><span></span></button>
+          </form></section>`;
+      })()}
       <section class="card"><h2>Portal users</h2>
         <div class="table-wrap"><table class="list compact"><thead><tr><th>Email (login)</th><th>Name</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
         <tbody>${users.map((u) => html`<tr><td>${u.email}</td><td>${u.name || '—'}</td>
@@ -1133,6 +1148,19 @@ module.exports = function adminRoutes(router, { db, config }) {
     await db.update('supplier_users', { id: u.id }, { status: disable ? 'disabled' : 'active', session_version: (u.session_version || 1) + 1 });
     flash(res, 'ok', disable ? `${u.email} disabled and signed out` : `${u.email} enabled`);
     res.redirect(`/admin/suppliers/${u.supplier_id}`);
+  }));
+  // Pricing on products Lulyboo added: hidden from the supplier unless switched on here (logged).
+  router.post('/admin/suppliers/:id/pricing', G(async (req, res) => {
+    const s = await db.get('suppliers', req.params.id);
+    if (!s) throw new HttpError(404, 'Supplier not found');
+    const { fields } = await parseForm(req);
+    const on = fields.value === '1';
+    try { await db.update('suppliers', { id: s.id }, { show_pricing: on }); }
+    catch (e) { if (/show_pricing|column|PGRST204/i.test(e.message || '')) { flash(res, 'error', 'Run the latest supabase/schema.sql ("Pricing visibility") in Supabase first.'); return res.redirect(`/admin/suppliers/${s.id}#portal-access`); } throw e; }
+    const who = req.staff?.name || 'Owner';
+    await db.insert('supplier_activities', { supplier_id: s.id, type: 'Note', summary: `Pricing ${on ? 'shown' : 'hidden'} to the supplier by ${who} (products Lulyboo added)` }).catch(() => null);
+    flash(res, 'ok', on ? `${s.name} can now see pricing on products you added` : `Pricing on products you added is hidden from ${s.name}`);
+    res.redirect(`/admin/suppliers/${s.id}#portal-access`);
   }));
   router.post('/admin/suppliers/:id/toggle', G(async (req, res) => {
     const s = await db.get('suppliers', req.params.id);
