@@ -203,12 +203,13 @@ function packingRows(product, opts) {
   </div>`;
 }
 
-function productFields(product = {}, { categories } = {}) {
-  return GROUPS.map((g) => groupFields(product, g.id, { categories }));
+function productFields(product = {}, { categories, slot } = {}) {
+  return GROUPS.map((g) => groupFields(product, g.id, { categories, slot: g.id === 'product' ? slot : null }));
 }
 
 /** One field group (product / pricing / packing / other) as a fieldset. */
-function groupFields(product = {}, groupId, { categories } = {}) {
+/** `slot`: extra cell placed after Subcategory (admin product page: Fill with AI). */
+function groupFields(product = {}, groupId, { categories, slot = null } = {}) {
   return [GROUPS.find((x) => x.id === groupId)].map((g) => html`
     <fieldset class="group" data-group="${g.id}">
       <legend>${t(g.en, g.cn)}</legend>
@@ -218,7 +219,7 @@ function groupFields(product = {}, groupId, { categories } = {}) {
             <span class="lbl">${t(f.en, f.cn)}${f.required ? html`<b class="req">*</b>` : ''}</span>
             ${input(f, product[f.key], { categories })}
             ${f.help ? html`<small>${t(f.help[0], f.help[1])}</small>` : ''}
-          </label>`)}
+          </label>${slot && f.key === 'subcategory' ? slot : ''}`)}
       </div>`}
     </fieldset>`);
 }
