@@ -1669,11 +1669,26 @@
     z.addEventListener('dragleave', function (e) { if (!z.contains(e.relatedTarget)) z.classList.remove('over'); });
     z.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; z.classList.remove('over'); if (f) { e.preventDefault(); go(f, ta.value.trim()); } });
   })();
-  file.addEventListener('change', function () { send(file.files[0]); });
-  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
-  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
-  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
-  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; send(f); });
+  // Compact "Fill with AI" field: paste a screenshot / text, drop a file, or choose one
+  var aiText = box.querySelector('[data-aifill-text]'), aiRead = box.querySelector('[data-aifill-read]');
+  var shotFile = function (f, base) { return new File([f], base + '.' + ((f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')), { type: f.type }); };
+  var fileFromPaste = function (e) { var items = (e.clipboardData && e.clipboardData.items) || []; for (var i = 0; i < items.length; i++) if (items[i].kind === 'file') { var f = items[i].getAsFile(); if (f) return f; } return null; };
+  var sendMain = function (f, text) { send(f, { text: text }); if (f || text) { aiText.value = ''; aiRead.hidden = true; aiText.style.height = ''; } };
+  file.addEventListener('change', function () { if (file.files[0]) sendMain(file.files[0], aiText.value.trim()); });
+  box.querySelector('[data-aifill-choose]').addEventListener('click', function () { file.click(); });
+  aiText.addEventListener('paste', function (e) { var f = fileFromPaste(e); if (!f) return; e.preventDefault(); sendMain(f.name && f.name !== 'image.png' ? f : shotFile(f, 'pasted-screenshot'), aiText.value.trim()); });
+  aiText.addEventListener('input', function () { aiRead.hidden = !aiText.value.trim(); aiText.style.height = 'auto'; aiText.style.height = Math.min(aiText.scrollHeight, 160) + 'px'; });
+  aiText.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && aiText.value.trim()) { e.preventDefault(); sendMain(null, aiText.value.trim()); } });
+  aiRead.addEventListener('click', function () { if (aiText.value.trim()) sendMain(null, aiText.value.trim()); });
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { if ([].indexOf.call(e.dataTransfer.types || [], 'Files') < 0) return; e.preventDefault(); drop.classList.add('over'); }); });
+  drop.addEventListener('dragleave', function (e) { if (!drop.contains(e.relatedTarget)) drop.classList.remove('over'); });
+  drop.addEventListener('drop', function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; drop.classList.remove('over'); if (f) { e.preventDefault(); sendMain(f, aiText.value.trim()); } });
+  // ⌘V anywhere in the open Edit section (not inside another field) also works for screenshots
+  document.addEventListener('paste', function (e) {
+    var ed = document.getElementById('edit'); if (!ed || !ed.open || e.target === aiText) return;
+    if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable],[data-pk-ai],dialog')) return;
+    var f = fileFromPaste(e); if (!f) return; e.preventDefault(); sendMain(shotFile(f, 'pasted-screenshot'), '');
+  });
   pick.addEventListener('change', rows);
   rowsEl.addEventListener('change', count);
   rowsEl.addEventListener('input', function (e) { var k = e.target.getAttribute('data-v'); if (k) { var c = rowsEl.querySelector('input[data-k="' + k + '"]'); if (c && !c.disabled) { c.checked = true; count(); } } });
@@ -1696,7 +1711,7 @@
     var ed = document.getElementById('edit'); if (ed) ed.open = true;
     var first = document.querySelector('.aifill-hl'); if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
-  document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-aifill-open]')) setTimeout(function () { drop.scrollIntoView({ block: 'center' }); drop.focus(); }, 50); });
+  document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-aifill-open]')) setTimeout(function () { drop.scrollIntoView({ block: 'center' }); aiText.focus(); }, 50); });
 })();
 
 // Supplier holidays popup (CRM calendar + supplier portal): read a notice with AI or type the dates, check, save.

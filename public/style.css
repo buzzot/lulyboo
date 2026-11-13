@@ -2402,3 +2402,8 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .lp-chip-part{font-style:normal;font-size:11px;font-weight:700;color:#2f5f8f;background:none;padding:0}
 .lp-po .lp-r3{flex-wrap:wrap;row-gap:4px}
 .lp-menu{width:250px}.lp-menu span{white-space:nowrap}
+/* product page: compact "Fill with AI" field */
+.aifill-z{max-width:760px;margin:0}
+.aifill-z .aifill-keep{display:flex;align-items:center;gap:5px;margin:0 4px 0 2px;font-size:12px;color:#7a6a67;white-space:nowrap;cursor:pointer;font-weight:500}
+.aifill-z .aifill-keep input{margin:0}
+@media(max-width:640px){.aifill-z .aifill-keep{display:none}}

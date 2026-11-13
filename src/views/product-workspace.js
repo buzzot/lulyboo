@@ -128,13 +128,15 @@ function renderWorkspace(c) {
     </div>
     <details class="card fold" id="edit"><summary><h2 class="inline">Edit supplier data</h2><span class="muted small">Change what the supplier submitted. Photos and files are in Documents.</span></summary>
       <div class="aifill" data-aifill="/admin/products/${p.id}/ai-fill">
-        <label class="aifill-drop" data-aifill-drop tabindex="0">
-          <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xlsm,.csv" hidden data-aifill-file>
-          <span class="aifill-ic" aria-hidden="true">✦</span>
-          <span><b>Fill from a file with AI</b><small>Drop a spec sheet, quotation, PI, packing list or photo — you check every field before anything changes.</small></span>
-          <span class="btn ghost small">Choose file</span>
-        </label>
-        <label class="cp-chk aifill-keep"><input type="checkbox" data-aifill-keep checked> Also save the file to Documents</label>
+        <div class="pk-ai aifill-z" data-aifill-drop>
+          <span class="pk-ai-ic" aria-hidden="true">✦</span>
+          <textarea rows="1" class="pk-ai-in" data-aifill-text aria-label="Fill with AI: paste a screenshot or text, or drop a file" placeholder="Fill with AI — paste a screenshot or text (⌘V), or drop a spec sheet, PI or packing list"></textarea>
+          <button type="button" class="pk-ai-b pk-ai-go" data-aifill-read hidden>Read</button>
+          <button type="button" class="pk-ai-b" data-aifill-choose title="Choose a file">File</button>
+          <label class="aifill-keep" title="Keep the file in this product's Documents"><input type="checkbox" data-aifill-keep checked> Save to Documents</label>
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.xlsm,.csv" hidden data-aifill-file>
+          <span class="pk-ai-over" aria-hidden="true">Drop it here</span>
+        </div>
         <p class="aifill-status" data-aifill-status role="status" aria-live="polite"></p>
       </div>
       <dialog class="rp-modal aifill-dlg" data-aifill-dlg aria-labelledby="aifill-t"><form method="dialog" data-aifill-form>
