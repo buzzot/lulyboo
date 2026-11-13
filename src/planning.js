@@ -98,7 +98,8 @@ const TOOL = {
             order_type: { type: 'string', description: 'New item / Repeat order, if stated' },
             approved_by: { type: 'string' },
             port: { type: 'string', description: 'Port of loading if stated (e.g. Ningbo, Shanghai, Yantian, Nansha)' },
-            notes: { type: 'string' },
+            notes: { type: 'string', description: 'Only a remark about THIS product line (colour, packaging, special instruction). Never payment terms, ship-to, shipment method, incoterm or the line amount — those go in po_terms or are already in other fields. Usually empty.' },
+            po_terms: { type: 'string', description: 'Terms that apply to the whole PO, written once and identically on every line of that PO: payment terms, ship-to address, shipment method, incoterm. Short, e.g. "Payment: 30% deposit, 70% against BOL. Ship-to: Bake Warehouse, Irvine, CA. Method: Ocean."' },
           },
           required: ['po'],
         },
@@ -111,6 +112,18 @@ const MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg
 function tableText(rows) {
   return rows.map((r, i) => { const c = r.map((x) => String(x ?? '').replace(/\s+/g, ' ').trim()); while (c.length && !c[c.length - 1]) c.pop(); return c.some(Boolean) ? `R${i + 1}: ${c.join(' | ')}` : null; })
     .filter(Boolean).slice(0, 1500).join('\n').slice(0, 180000);
+}
+/**
+ * PO-level terms vs line notes. Sentences about payment, ship-to, shipment method or incoterm belong to the whole PO;
+ * "Line amount …" is dropped (the Amount column has it). Returns { notes, po_terms }.
+ */
+const TERM_RE = /^(payment( terms?)?|terms( of payment)?|deposit|balance|ship[\s-]?to|deliver(y)?( to| address| terms)?|ship(ping|ment)? (method|via|mode|terms)|ship via|incoterms?|fob|exw|cif|ddp|freight( terms)?|consignee|bill to)\b/i;
+const DROP_RE = /^(line )?(amount|total|subtotal)\b/i;
+function splitTerms(notes, terms = null) {
+  const sent = (t) => String(t || '').split(/(?<=[.;])\s+(?=[A-Z])/).map((x) => x.trim()).filter(Boolean);
+  const keep = []; const t = sent(terms);
+  for (const x of sent(notes)) { if (DROP_RE.test(x)) continue; if (TERM_RE.test(x)) { if (!t.some((y) => y.toLowerCase() === x.toLowerCase())) t.push(x); } else keep.push(x); }
+  return { notes: keep.join(' ') || null, po_terms: t.filter((x) => !DROP_RE.test(x)).join(' ') || null };
 }
 const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(String(v).replace(/[^0-9.\-]/g, '')); return Number.isFinite(n) ? n : null; };
 const txt = (v, n = 200) => { const s = String(v ?? '').trim(); return s ? s.slice(0, n) : null; };
@@ -135,7 +148,7 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
       po: txt(o.po, 60), product: txt(o.product, 300), sku: txt(o.sku, 80), qty: num(o.qty), cartons: num(o.cartons), cbm: num(o.cbm), gross_kg: num(o.gross_kg),
       ready_date: isoDay(o.ready_date), inspection_date: insp, inspection_note: insp ? null : txt(o.inspection_date, 80),
       production_status: txt(o.production_status, 120), pending_from_us: txt(o.pending_from_lulyboo, 200), order_type: txt(o.order_type, 60), approved_by: txt(o.approved_by, 60),
-      port_text: port, port: SC.portCode(port), notes: txt(o.notes, 500),
+      port_text: port, port: SC.portCode(port), ...splitTerms(txt(o.notes, 500), txt(o.po_terms, 500)),
       unit_price: num(o.unit_price), currency: txt(o.currency, 8),
       units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg),
     };
@@ -150,7 +163,7 @@ const normSku = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const normProd = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const PACK = ['units_per_carton', 'carton_l_cm', 'carton_w_cm', 'carton_h_cm', 'carton_gw_kg'];
 const PRICE = ['unit_price', 'currency'];
-const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes'];
+const FIELDS = ['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE, 'ready_date', 'inspection_date', 'inspection_note', 'production_status', 'pending_from_us', 'order_type', 'approved_by', 'port', 'port_text', 'notes', 'po_terms'];
 const LABEL = { unit_price: 'Cost', qty: 'Qty', cbm: 'CBM', cartons: 'Cartons', gross_kg: 'Weight', units_per_carton: 'Pcs/carton', carton_l_cm: 'Carton L', carton_w_cm: 'Carton W', carton_h_cm: 'Carton H', carton_gw_kg: 'Carton kg', ready_date: 'Ready', inspection_date: 'Inspection', production_status: 'Status', pending_from_us: 'Pending', port: 'Port' };
 
 /** For each incoming line: the existing rows it updates and what changes. */
@@ -190,10 +203,20 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
   let added = 0; let updated = 0;
   // columns added later (cost, packing): if the database doesn't have them yet, save without them
   let skip = [];
-  const strip = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !skip.includes(k)));
+  const strip = (row) => {
+    const r = { ...row };
+    if (skip.includes('po_terms') && r.po_terms) r.notes = [r.notes, r.po_terms].filter(Boolean).join(' '); // older database: terms stay in notes (shown once on the PO page)
+    return Object.fromEntries(Object.entries(r).filter(([k]) => !skip.includes(k)));
+  };
   const write = async (fn, row) => {
-    try { return await fn(strip(row)); }
-    catch (e) { if (!skip.length && /column|PGRST204/i.test(e.message || '')) { skip = [...PACK, ...PRICE]; return fn(strip(row)); } throw e; }
+    for (let i = 0; ; i++) {
+      try { return await fn(strip(row)); }
+      catch (e) {
+        if (i > 2 || !/column|PGRST204/i.test(e.message || '')) throw e;
+        const col = ((e.message || '').match(/'([a-z_]+)' column/) || [])[1];
+        skip = [...new Set([...skip, ...(col ? [col] : ['po_terms', ...PACK, ...PRICE])])];
+      }
+    }
   };
   for (const o of d) {
     const vals = {};
@@ -528,4 +551,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { splitTerms, DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

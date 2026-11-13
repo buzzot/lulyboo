@@ -119,6 +119,14 @@ module.exports = function orderRoutes(router, { db, config }) {
     const docs = files.filter((f) => f.supplier_id === supplier.id && (f.pos || []).some((x) => PL.normPo(x) === PL.normPo(poQ)));
     if (!p && !docs.length) throw new HttpError(404, 'Purchase order not found');
     const ls = p ? p.lines : [];
+    // PO-level terms (payment, ship-to, method) shown once; line notes only when they say something about that line
+    const split = ls.map((o) => ({ o, ...PL.splitTerms(o.notes, o.po_terms) }));
+    const terms = [...new Set(split.flatMap((x) => String(x.po_terms || '').split(/(?<=[.;])\s+(?=[A-Z])/).map((t) => t.trim().replace(/[.;]$/, '')).filter(Boolean)))];
+    const lineNotes = split.filter((x) => x.notes);
+    const oneNote = lineNotes.length > 1 && lineNotes.length === ls.length && new Set(lineNotes.map((x) => x.notes)).size === 1;
+    // tidy what older imports stored: terms out of the line notes (skipped quietly on a database without po_terms)
+    for (const x of split) if ((x.notes || null) !== (x.o.notes || null) || (x.po_terms || null) !== (x.o.po_terms || null)) await db.update('plan_orders', { id: x.o.id }, { notes: x.notes, po_terms: x.po_terms }).catch(() => null);
+    for (const x of split) { x.o.notes = x.notes; x.o.po_terms = x.po_terms; }
     const back = req.url;
     const prods = await db.list('products', { filters: { supplier_id: supplier.id } }).catch(() => []);
     const inCat = (o) => (o.product ? PL.catalogMatch(o, prods) : null);
@@ -128,7 +136,7 @@ module.exports = function orderRoutes(router, { db, config }) {
     res.html(page({
       title: `${poQ} · Purchase orders`, nav: adminNav('orders'), flash: takeFlash(req, res), wide: true, req,
       body: html`<nav class="crumb"><a href="/admin/orders">Purchase orders</a><span>›</span><a href="/admin/suppliers/${supplier.id}">${supplier.name}</a></nav>
-        <div class="cp-head"><div><h1>${p?.po || poQ} ${p ? tag(p.st) : ''}</h1><p class="muted">${supplier.name}${p?.ports.length ? ` · ${p.ports.map(portName).join(', ')}` : ''}${p?.first ? ` · ready ${p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`}` : ''}</p></div>
+        <div class="cp-head"><div><h1>${p?.po || poQ} ${p ? tag(p.st) : ''}</h1><p class="muted">${supplier.name}${p?.ports.length ? ` · ${p.ports.map(portName).join(', ')}` : ''}${p?.first ? ` · ready ${p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`}` : ''}</p>${terms.length ? html`<p class="or-terms">${terms.map((t, i) => { const m = t.match(/^([^:]{2,28}):\s*(.+)$/); return html`${i ? html`<span class="or-sep">·</span>` : ''}${m ? html`<span><b>${m[1]}</b> ${m[2]}</span>` : html`<span>${t}</span>`}`; })}</p>` : ''}</div>
           <div class="cp-head-r">${p ? html`<form method="post" action="/admin/orders/shipped" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><input type="hidden" name="value" value="${p.st === 'shipped' ? '0' : '1'}"><button class="btn ghost">${p.st === 'shipped' ? 'Mark not shipped' : 'Mark PO shipped'}</button></form><form method="post" action="/admin/orders/delete" class="inline" data-confirm="${`Delete ${p.po} and all its ${ls.length} line${ls.length === 1 ? '' : 's'}? Documents stay in Documents. This can't be undone.`}"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn danger-btn">Delete PO</button></form>` : ''}
             <a class="btn ghost" href="/admin/logistics/planning?supplier=${supplier.id}">Open in planning</a></div></div>
         ${p ? html`<div class="cp-kpis">
@@ -144,7 +152,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
             <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody></table></div>
-          ${ls.some((o) => o.notes) ? html`<div class="or-notes">${ls.filter((o) => o.notes).map((o) => html`<p><b>${o.product || 'Note'}:</b> ${o.notes}</p>`)}</div>` : ''}</section>` : ''}
+          ${lineNotes.length ? html`<div class="or-notes">${oneNote ? html`<p><b>Note:</b> ${lineNotes[0].notes}</p>` : lineNotes.map((x) => html`<p><b>${x.o.product || 'Note'}:</b> ${x.notes}</p>`)}</div>` : ''}</section>` : ''}
         ${shipSection}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
           ${docs.length ? html`<ul class="cp-filelist">${docs.map((f) => html`<li><span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>

@@ -2385,6 +2385,26 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
 });
 
+test('PO page: payment terms / ship-to shown once, line amount dropped, old notes tidied', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Luckibuy Trading' });
+  const terms = (amt) => `Payment terms: 30% deposit, 70% against BOL. Ship-to: Bake Warehouse, 15041 Bake Park Way, Irvine, CA 92618. Shipment method: Ocean Ship. Line amount $${amt}.`;
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO7700', product: 'Heart Hook - Pink', qty: 8040, notes: terms('8,361.60') });
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO7700', product: 'Heart Hook - Cream', qty: 5040, notes: `Cream colour box. ${terms('5,241.60')}` });
+  const page = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=PO7700`, { cookie })).text;
+  assert.equal((page.match(/30% deposit, 70% against BOL/g) || []).length, 1);
+  assert.match(page, /class="or-terms"[\s\S]*<b>Ship-to<\/b> Bake Warehouse/);
+  assert.doesNotMatch(page, /Line amount/);
+  assert.match(page, /<b>Heart Hook - Cream:<\/b> Cream colour box\./);
+  const [a, b] = db.tables.plan_orders;
+  assert.equal(a.notes, null); assert.match(a.po_terms, /^Payment terms: 30% deposit/); assert.equal(b.notes, 'Cream colour box.');
+  const PL = require('../src/planning');
+  assert.deepEqual(PL.splitTerms('Pink. Incoterm: FOB Ningbo.', null), { notes: 'Pink.', po_terms: 'Incoterm: FOB Ningbo.' });
+});
+
 test('load containers: products of one PO share a key and a colour, so the pool shows one card per PO', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db);

@@ -903,3 +903,6 @@ alter table public.ship_confirmations add column if not exists followups        
 alter table public.ship_confirmations add column if not exists last_followup_at timestamptz;
 alter table public.ship_confirmations add column if not exists next_followup    date;
 alter table public.ship_confirmations add column if not exists paused           boolean default false;
+
+-- PO terms (run once): payment terms, ship-to and shipment method of a PO, kept apart from line notes
+alter table public.plan_orders add column if not exists po_terms text;

@@ -2416,3 +2416,6 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .aifill-cell .aifill-keep{display:flex!important;align-items:center;gap:5px;margin:5px 0 0 2px;font-size:12px;color:#7a6a67;font-weight:500;cursor:pointer}
 .aifill-cell .aifill-keep input{margin:0;width:auto}
 .aifill-cell .aifill-status{margin-top:4px;font-size:12.5px}
+.or-terms{margin:6px 0 0;font-size:13px;color:#555;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+.or-terms b{font-weight:600;color:#333}
+.or-sep{color:#c4bfb9}
