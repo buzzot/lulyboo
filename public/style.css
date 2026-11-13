@@ -2419,3 +2419,8 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .or-terms{margin:6px 0 0;font-size:13px;color:#555;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
 .or-terms b{font-weight:600;color:#333}
 .or-sep{color:#c4bfb9}
+.sd-mode{display:flex;align-items:center;gap:10px;margin:12px 22px 0;font-size:13px;font-weight:600;color:#555}.sd-mode[hidden]{display:none}
+.sd-mseg{display:inline-flex;background:#f1efec;border-radius:9px;padding:3px}
+.sd-mseg button{border:0;background:none;font:inherit;font-size:13px;font-weight:600;color:#666;padding:6px 14px;border-radius:7px;cursor:pointer}
+.sd-mseg button.on{background:#fff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.sd-seg[hidden]{display:none}

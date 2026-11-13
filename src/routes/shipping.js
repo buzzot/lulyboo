@@ -68,7 +68,7 @@ function steps(sc, list, nfiles) {
   const done = (k) => ({ sent: !!sc.sent_at, loaded: !!sc.confirmed_at, docs: nfiles > 0, review: sc.status === 'complete', complete: sc.status === 'complete' && !(sc.missing || []).length }[k]);
   const items = [
     ['sent', 'Request sent', sc.sent_at ? sd(sc.sent_at) : sc.status === 'scheduled' && sc.due_date ? `planned ${PL.short(sc.due_date)}` : ''],
-    ['loaded', sc.mode === 'LCL' ? 'At warehouse' : 'Loaded', sc.confirmed_at ? `confirmed ${sd(sc.confirmed_at)}` : ''],
+    ['loaded', sc.mode === 'LCL' ? 'At warehouse' : sc.mode === 'COURIER' ? 'Picked up' : sc.mode === 'FCL' ? 'Loaded' : 'Shipped', sc.confirmed_at ? `confirmed ${sd(sc.confirmed_at)}` : ''],
     ['docs', 'Documents in', nfiles ? `${Math.min(have, need)} of ${need} required` : ''],
     ['review', 'Your review', sc.status === 'received' ? 'check the figures' : sc.accepted_at ? 'figures accepted' : ''],
     ['complete', 'Complete', sc.status === 'complete' && (sc.missing || []).length ? 'waiting for documents' : sc.accepted_at ? sd(sc.accepted_at) : 'stored for stats'],
@@ -129,7 +129,7 @@ async function shipmentSection(db, supplier, po, back) {
     const how = (f) => (/^Email from/.test(f.uploaded_by || '') ? 'by email' : f.uploaded_by ? 'added by you' : '');
     const log = [...(sc.log || [])].slice(-4);
     cards.push(html`<section class="card sd-card" id="shipment">
-      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2><span class="cp-tag ${st.tag}">${st.label}</span></div>
+      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2><span class="cp-tag ${st.tag}">${st.label}</span></div>
       ${steps(sc, list, mine.length)}
       <div class="sd-grid">
         <div>
@@ -185,6 +185,7 @@ function sendDialog() {
   return html`<dialog class="rp-modal sd-dlg" data-sd-dlg aria-labelledby="sd-dlg-t"><form data-sd-form>
     <div class="sd-dh"><div><h2 id="sd-dlg-t" data-sd-title>Request shipping documents</h2><div class="sub" data-sd-ctx></div></div><button type="button" class="icon-btn" data-sd-close aria-label="Close">×</button></div>
     <div class="sd-seg" data-sd-tabs role="tablist"></div>
+    <div class="sd-mode" data-sd-modes hidden><span>Ships as</span><div class="sd-mseg" role="radiogroup" aria-label="Ships as" data-sd-mseg></div></div>
     <div class="rp-loading" data-sd-loading>Preparing the email…</div>
     <div data-sd-fields hidden>
       <div class="sd-sec"><div class="sd-lbl">To <button type="button" class="sd-lnk" data-sd-cc-open>+ CC</button></div>
@@ -262,7 +263,9 @@ module.exports = function shippingRoutes(router, { db, config }) {
 
   /** Popup data: recipients, subject, message, the document list with states, and which kinds make sense now. */
   router.get(`${BASE}/draft`, json(async (req) => {
-    const sc = await target(req.query);
+    let sc = await target(req.query);
+    const choose = !sc.container_id;   // no container plan: you say how it ships (FCL / LCL / courier)
+    if (choose && req.query.mode !== undefined) sc = { ...sc, mode: SD.MODES[req.query.mode] ? req.query.mode : '' };
     const facts = await SD.factsOf(db, sc);
     if (!facts.supplier) throw new HttpError(404, 'Supplier not found');
     const list = SD.checklistOf(sc, await SD.filesOf(db, sc), facts.sailing, SD.chinaNow().day);
@@ -286,7 +289,7 @@ module.exports = function shippingRoutes(router, { db, config }) {
       ctx: [facts.supplier.name, `PO ${(sc.pos || []).join(', ')}`, d.shipment].filter(Boolean).join(' · '),
       to, cc: kind === 'request' && !sc.sent_at ? P.ownerEmails() : [], subject: d.subject, intro: d.intro, greet: d.name || 'Sir or Madam',
       fixed: d.rows.map((r) => [r.po, r.product, r.qty ? `${r.qty} pcs` : '', r.cartons ? `${r.cartons} ctns` : '', r.cbm ? `${r.cbm} m³` : ''].filter(Boolean).join(' · ')).join('  |  '),
-      listLabel: d.listLabel, items: d.items, received: d.received, after,
+      listLabel: d.listLabel, items: d.items, received: d.received, after, choose, mode: sc.mode || '', modes: SD.MODES,
     };
   }));
 
@@ -299,7 +302,9 @@ module.exports = function shippingRoutes(router, { db, config }) {
     if (!String(f.subject || '').trim() || !String(f.intro || '').trim()) throw new HttpError(400, 'Subject and message are required');
     const items = [].concat(f.item || []).map((x) => String(x).trim().slice(0, 300)).filter(Boolean).slice(0, 20);
     if (!items.length) throw new HttpError(400, 'Tick at least one document to ask for');
-    const sc = f.id ? await getSc(f.id) : await SD.createFor(db, { supplierId: String(f.supplier || ''), po: String(f.po || '') });
+    const mode = f.mode !== undefined ? (SD.MODES[f.mode] ? f.mode : '') : undefined;
+    let sc = f.id ? await getSc(f.id) : await SD.createFor(db, { supplierId: String(f.supplier || ''), po: String(f.po || ''), mode });
+    if (!sc.container_id && mode !== undefined && (sc.mode || '') !== mode) { await db.update('ship_confirmations', { id: sc.id }, { mode, updated_at: new Date().toISOString() }); sc = { ...sc, mode }; }
     const out = await SD.sendRequest(db, config, sc, { kind, by: by(req), edits: { to, cc: list(f.cc), subject: String(f.subject).slice(0, 300), intro: String(f.intro).slice(0, 4000), items, received: f.received === '1' } });
     return { sent: out.to, id: sc.id };
   }));

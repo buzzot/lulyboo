@@ -41,10 +41,18 @@ const daysBetween = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.pa
 const REQUIRED = {
   FCL: [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'Bill of lading', 'Bill of lading (draft or final)'], ['Loading photos', 'Loading photos', 'Loading photos (door open, and door closed with the seal)', true]],
   LCL: [['Warehouse receipt', 'Warehouse receipt (FCR)', 'Warehouse receipt (FCR) from the CFS warehouse'], ['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'House bill of lading', 'House bill of lading (draft or final)']],
-  '': [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'Bill of lading', 'Bill of lading or tracking details']],
+  COURIER: [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and dimensions per PO'], ['Bill of lading', 'Courier waybill', 'Courier waybill (AWB) with the tracking number']],
+  '': [['Invoice', 'Commercial invoice', 'Commercial invoice'], ['Packing list', 'Packing list', 'Packing list with cartons, gross weight and volume (m³) per PO'], ['Bill of lading', 'Bill of lading / waybill', 'Bill of lading, house B/L or courier waybill']],
 };
+/** How a PO without a container plan ships — chosen in the send popup. */
+const MODES = { FCL: 'FCL', LCL: 'LCL', COURIER: 'Courier' };
 const required = (sc) => REQUIRED[sc?.mode || ''] || REQUIRED[''];
-const CONFIRM = { FCL: 'Confirmation that the container is loaded, with the container number and seal number', LCL: 'Confirmation that the goods were delivered to the CFS warehouse, with the delivery date', '': 'Confirmation of the shipment date, with the container or tracking number' };
+const CONFIRM = {
+  FCL: 'Confirmation that the container is loaded, with the container number and seal number',
+  LCL: 'Confirmation that the goods were delivered to the CFS warehouse, with the delivery date',
+  COURIER: 'Confirmation of the pickup date, with the courier and tracking number',
+  '': 'Confirmation of the shipping date and how it shipped: container number (FCL), warehouse receipt (LCL) or courier tracking number',
+};
 const confirmed = (sc) => !!(sc.confirmed_at && (sc.mode !== 'FCL' || sc.container_no));
 
 const STATUS = {
@@ -125,7 +133,7 @@ function checklistOf(sc, files, sailing, day) {
   if (!confirmed(sc)) out.push({ key: 'confirm', label: sc.mode === 'FCL' ? 'Container and seal number' : 'Shipment confirmation', ask: CONFIRM[sc.mode || ''], state: 'miss' });
   for (const [kind, label, ask, optional] of required(sc)) {
     const have = files.some((f) => f.kind === kind);
-    const state = have ? 'have' : optional ? 'opt' : kind === 'Bill of lading' && bl && day < bl ? 'later' : 'miss';
+    const state = have ? 'have' : optional ? 'opt' : kind === 'Bill of lading' && sc.mode !== 'COURIER' && bl && day < bl ? 'later' : 'miss';
     out.push({ key: kind, label, ask, state, from: state === 'later' ? bl : null });
   }
   return out;
@@ -156,15 +164,15 @@ function draftParts(sc, { supplier, c, sailing, lines }, { kind = 'request', lis
   const date = sc.due_date ? PL.short(sc.due_date) : 'today';
   const pos = (sc.pos || []).join(', ');
   const where = c ? portName(c.port) : [...new Set(lines.map((l) => portName(l.port)).filter(Boolean))].join(', ');
-  const shipment = c
-    ? [mode === 'LCL' ? 'LCL (shared container)' : `FCL, ${c.box === '20GP' ? "20' GP" : c.box === '40HQ' ? "40' HQ" : "40' GP"}`, `${portName(c.port)}${sailing ? ` → ${portName(sailing.destination)}` : ''}`, sailing?.carrier, sailing?.etd ? `ETD ${PL.short(sailing.etd)}` : null].filter(Boolean).join(' · ')
-    : '';
+  const shipment = !c ? (mode === 'LCL' ? 'LCL (shared container)' : mode === 'FCL' ? 'FCL (full container)' : mode === 'COURIER' ? 'Courier' : '') : [mode === 'LCL' ? 'LCL (shared container)' : `FCL, ${c.box === '20GP' ? "20' GP" : c.box === '40HQ' ? "40' HQ" : "40' GP"}`, `${portName(c.port)}${sailing ? ` → ${portName(sailing.destination)}` : ''}`, sailing?.carrier, sailing?.etd ? `ETD ${PL.short(sailing.etd)}` : null].filter(Boolean).join(' · ');
   const tail = `${/^po/i.test(pos) ? '' : 'PO '}${pos}${where ? ` – ${where}` : ''}${sc.due_date ? `, ${PL.short(sc.due_date)}` : ''}`;
   const plan = mode === 'LCL'
     ? `According to our plan, the goods below are delivered to the forwarder's CFS warehouse on ${date}. Please confirm the delivery and reply to this email with the shipping documents attached.`
     : mode === 'FCL'
       ? `According to our plan, the goods below are loaded into the container on ${date}. Please confirm the loading and reply to this email with the shipping documents attached.`
-      : 'Please confirm the shipment of the goods below and reply to this email with the shipping documents attached.';
+      : mode === 'COURIER'
+        ? 'Please confirm the courier pickup of the goods below and reply to this email with the shipping documents attached.'
+        : 'Please confirm the shipment of the goods below and reply to this email with the shipping documents attached.';
   const all = [{ text: CONFIRM[mode], state: '', key: 'confirm' }, ...required(sc).map(([k, , ask, opt]) => ({ text: ask, state: opt ? 'opt' : '', key: k }))];
   const stateOfKey = (k) => list.find((x) => x.key === k)?.state;
   let subject; let intro; let items; let listLabel = 'Please send';
@@ -327,7 +335,7 @@ function kindOf(name, type) {
   const n = String(name || '').toLowerCase();
   if (/packing|\bp\.?l\b/.test(n)) return 'Packing list';
   if (/invoice|\bci\b/.test(n)) return 'Invoice';
-  if (/\bb\/?l\b|bill.?of.?lading|\bhbl\b|\bmbl\b|lading/.test(n)) return 'Bill of lading';
+  if (/\bb\/?l\b|bill.?of.?lading|\bhbl\b|\bmbl\b|lading|waybill|\bawb\b/.test(n)) return 'Bill of lading';
   if (/fcr|cargo.?receipt|warehouse|\bcfs\b|入仓/.test(n)) return 'Warehouse receipt';
   if (/^image\//.test(type || '') || /\.(jpe?g|png|heic|webp)$/.test(n)) return 'Loading photos';
   return 'Other';
@@ -439,7 +447,7 @@ async function accept(db, sc, { values = {}, updateProducts = false, by = null }
 }
 
 /** Request for one supplier's PO right away (e.g. a PO shipped without a container plan). */
-async function createFor(db, { supplierId, po, dryRun = false }) {
+async function createFor(db, { supplierId, po, dryRun = false, mode = null }) {
   const lines = (await db.list('plan_orders', { filters: { supplier_id: supplierId } })).filter((l) => PL.normPo(l.po) === PL.normPo(po));
   if (!lines.length) throw new Error('Purchase order not found');
   const cIds = [...new Set(lines.map((l) => l.container_id).filter(Boolean))];
@@ -449,7 +457,8 @@ async function createFor(db, { supplierId, po, dryRun = false }) {
   if (ex) return ex;
   const sameC = c ? (await db.list('plan_orders', { filters: { container_id: c.id } })).filter((l) => l.supplier_id === supplierId) : lines;
   const sailing = c?.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
-  const row = { code: newCode(), token: newToken(), supplier_id: supplierId, container_id: c?.id || null, mode: modeOf(c), followups: 0, missing: required({ mode: modeOf(c) }).filter((r) => !r[3]).map((r) => r[0]), pos: posOf(sameC), order_ids: sameC.map((l) => l.id), planned: plannedOf(sameC), due_date: loadingDate(c, sailing) || PL.today(), status: 'scheduled', reminders: 0, log: [logEntry('Created by hand')], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  const md = c ? modeOf(c) : MODES[mode] ? mode : '';
+  const row = { code: newCode(), token: newToken(), supplier_id: supplierId, container_id: c?.id || null, mode: md, followups: 0, missing: required({ mode: md }).filter((r) => !r[3]).map((r) => r[0]), pos: posOf(sameC), order_ids: sameC.map((l) => l.id), planned: plannedOf(sameC), due_date: loadingDate(c, sailing) || PL.today(), status: 'scheduled', reminders: 0, log: [logEntry('Created by hand')], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   return dryRun ? { ...row, id: null, code: 'LBS-NEW', token: '…' } : db.insert('ship_confirmations', row);
 }
 
@@ -469,4 +478,4 @@ function supplierStats(rows) {
   return Object.fromEntries(Object.entries(by).map(([k, s]) => [k, { n: s.n, days: avg(s.days), vol: avg(s.vol), kg: s.kg, cbm: s.cbm }]));
 }
 
-module.exports = { REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };
+module.exports = { MODES, REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };

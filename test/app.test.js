@@ -2595,11 +2595,18 @@ test('shipping documents: request on the loading date, reply by email read by AI
   const dj = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=request&supplier=${h.id}&po=800020`, { cookie })).text);
   assert.ok(dj.ok, dj.error); assert.equal(db.tables.ship_confirmations.length, nBefore); assert.deepEqual(dj.kinds, ['request']);
   assert.deepEqual(dj.to.map((x) => [x.email, x.on]), [['sales@huanger.cn', true], ['amy@huanger.cn', false]]);
-  assert.ok(dj.items.every((x) => x.on)); assert.match(dj.items[0].text, /Confirmation of the shipment date/);
-  const s2 = JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: new URLSearchParams([['kind', 'request'], ['supplier', h.id], ['po', '800020'], ['to', 'sales@huanger.cn'], ['subject', dj.subject], ['intro', dj.intro], ...dj.items.map((x) => ['item', x.text])]).toString() })).text);
+  assert.ok(dj.items.every((x) => x.on)); assert.match(dj.items[0].text, /how it shipped: container number \(FCL\), warehouse receipt \(LCL\) or courier tracking number/);
+  assert.equal(dj.choose, true); assert.deepEqual(Object.keys(dj.modes), ['FCL', 'LCL', 'COURIER']);
+  // "Ships as LCL": no container / seal number, warehouse receipt and house B/L instead
+  const dl = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=request&supplier=${h.id}&po=800020&mode=LCL`, { cookie })).text);
+  assert.equal(dl.mode, 'LCL'); assert.doesNotMatch(dl.items.map((x) => x.text).join('|'), /container number|seal/);
+  assert.match(dl.items.map((x) => x.text).join('|'), /delivered to the CFS warehouse[\s\S]*Warehouse receipt \(FCR\)[\s\S]*House bill of lading/);
+  const dc = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=request&supplier=${h.id}&po=800020&mode=COURIER`, { cookie })).text);
+  assert.match(dc.items.map((x) => x.text).join('|'), /courier and tracking number[\s\S]*Courier waybill \(AWB\)/);
+  const s2 = JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: new URLSearchParams([['kind', 'request'], ['supplier', h.id], ['po', '800020'], ['mode', 'LCL'], ['to', 'sales@huanger.cn'], ['subject', dl.subject], ['intro', dl.intro], ...dl.items.map((x) => ['item', x.text])]).toString() })).text);
   assert.ok(s2.ok, s2.error);
   const sc2 = db.tables.ship_confirmations.find((x) => x.id === s2.id);
-  assert.equal(sc2.status, 'sent'); assert.equal(sc2.mode, '');
+  assert.equal(sc2.status, 'sent'); assert.equal(sc2.mode, 'LCL'); assert.match(sent[sent.length - 1].text, /Warehouse receipt \(FCR\)/); assert.doesNotMatch(sent[sent.length - 1].text, /seal number/);
   process.env.ANTHROPIC_API_KEY = 'sk-test';
   aiAnswer = { delayed: true, new_date: '2026-12-20', summary: 'Shipment moved to Dec 20.' };
   await SD.handleShipEmail({ db, config, from: 'sales@huanger.cn', subject: `RE: [${sc2.code}]`, text: 'Sorry, shipping on Dec 20 instead.' });

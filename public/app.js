@@ -2006,6 +2006,8 @@
     q('[data-sd-title]').textContent = j.title; q('[data-sd-ctx]').textContent = j.ctx;
     q('[data-sd-tabs]').innerHTML = j.kinds.length > 1 ? j.kinds.map(function (k) { return '<button type="button" data-sd-kind="' + k + '" class="' + (k === j.kind ? 'on' : '') + '">' + { request: 'First request', reminder: 'Reminder', missing: 'Missing documents' }[k] + '</button>'; }).join('') : '';
     q('[data-sd-tabs]').hidden = j.kinds.length < 2;
+    cur.mode = j.mode; q('[data-sd-modes]').hidden = !j.choose;
+    q('[data-sd-mseg]').innerHTML = j.choose ? Object.keys(j.modes).map(function (m) { return '<button type="button" role="radio" aria-checked="' + (m === j.mode) + '" data-sd-m="' + m + '" class="' + (m === j.mode ? 'on' : '') + '">' + esc(j.modes[m]) + '</button>'; }).join('') : '';
     var to = q('[data-sd-to]'), cc = q('[data-sd-cc]');
     to.querySelectorAll('.sd-chip').forEach(function (c) { c.remove(); }); cc.querySelectorAll('.sd-chip').forEach(function (c) { c.remove(); });
     to.querySelector('[data-sd-add]').insertAdjacentHTML('beforebegin', j.to.map(function (t) { return chip(t.email, t.label, t.on); }).join(''));
@@ -2023,19 +2025,21 @@
   function load(kind) {
     cur.kind = kind; q('[data-sd-loading]').hidden = false; q('[data-sd-loading]').textContent = 'Preparing the email…'; q('[data-sd-fields]').hidden = true; q('[data-sd-actions]').hidden = true;
     var p = new URLSearchParams({ kind: kind }); ['id', 'supplier', 'po'].forEach(function (k) { if (cur[k]) p.set(k, cur[k]); });
+    if (cur.mode !== undefined) p.set('mode', cur.mode);
     fetch('/admin/orders/shipping/draft?' + p, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) throw new Error(j.error || 'Could not prepare the email'); cur.kind = j.kind; fill(j);
     }).catch(function (x) { q('[data-sd-loading]').textContent = x.message; });
   }
   document.addEventListener('submit', function (e) {
     var f = e.target.closest && e.target.closest('[data-sd-open]'); if (!f) return; e.preventDefault();
-    cur = { id: f.getAttribute('data-id') || '', supplier: f.getAttribute('data-supplier') || '', po: f.getAttribute('data-po') || '' };
+    cur = { id: f.getAttribute('data-id') || '', supplier: f.getAttribute('data-supplier') || '', po: f.getAttribute('data-po') || '', mode: undefined };
     q('[data-sd-tabs]').innerHTML = ''; if (dlg.showModal) dlg.showModal(); load(f.getAttribute('data-kind') || 'request');
   }, true);
   dlg.addEventListener('click', function (e) {
     var t = e.target;
     if (t.closest('[data-sd-close]') || t === dlg) { dlg.close(); return; }
     var k = t.closest('[data-sd-kind]'); if (k) { if (k.getAttribute('data-sd-kind') !== cur.kind) load(k.getAttribute('data-sd-kind')); return; }
+    var mb = t.closest('[data-sd-m]'); if (mb) { var m = mb.getAttribute('data-sd-m'); cur.mode = cur.mode === m ? '' : m; load(cur.kind); return; }
     if (t.closest('[data-sd-cc-open]')) { q('[data-sd-ccrow]').hidden = false; q('[data-sd-cc] [data-sd-add]').focus(); return; }
     if (t.closest('[data-sd-reset]')) { el.intro.value = draft.intro; return; }
     if (t.matches('.sd-chip button')) { t.parentNode.remove(); return; }
@@ -2063,7 +2067,8 @@
     var bad = to.concat(cc).filter(function (x) { return !EMAIL.test(x); }); if (bad.length) { note.textContent = 'Check this email address: ' + bad[0]; return; }
     if (!items.length) { note.textContent = 'Tick at least one document to ask for'; return; }
     btn.disabled = true; note.textContent = 'Sending…';
-    var body = new URLSearchParams({ kind: cur.kind, id: cur.id, supplier: cur.supplier, po: cur.po, to: to.join(','), cc: cc.join(','), subject: el.subject.value, intro: el.intro.value, received: q('[data-sd-rcvrow]').hidden || q('[data-sd-rcv]').checked ? '1' : '0' });
+    if (!q('[data-sd-modes]').hidden && !cur.mode) { note.textContent = 'Choose how it ships: FCL, LCL or Courier'; return; }
+    var body = new URLSearchParams({ kind: cur.kind, id: cur.id, supplier: cur.supplier, po: cur.po, mode: cur.mode || '', to: to.join(','), cc: cc.join(','), subject: el.subject.value, intro: el.intro.value, received: q('[data-sd-rcvrow]').hidden || q('[data-sd-rcv]').checked ? '1' : '0' });
     items.forEach(function (x) { body.append('item', x); });
     fetch('/admin/orders/shipping/send', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body, credentials: 'same-origin' })
       .then(function (r) { return r.json(); }).then(function (j) {
