@@ -115,7 +115,7 @@ function loadPlanRoutes(router, { db, config }) {
         <div class="lp" data-loadplan="${JSON.stringify(data)}">
           <aside class="card lp-pool-card"><h2 class="sec">Not loaded yet</h2><div class="sub" data-lp-poolmeta></div>
             <div class="lp-pool" data-lp-pool></div>
-            <p class="sub lp-note">Lines without volume can't be loaded — type the CBM from the supplier's packing list first. It's saved to the PO.</p></aside>
+</aside>
           <div class="lp-main"><div data-lp-containers></div><div class="lp-tip" data-lp-tip hidden></div><button type="button" class="lp-add" data-lp-add>+ Add container</button></div>
         </div>
         <div class="lp-toast" data-lp-toast role="status" aria-live="polite"></div>

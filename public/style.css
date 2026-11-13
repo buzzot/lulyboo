@@ -2359,3 +2359,46 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .lp-pofoot{display:flex;align-items:center;gap:10px}.lp-pofoot .lp-quick{flex:1}.lp-pofoot .link{margin-top:8px;white-space:nowrap}
 .lp-quick.sm{font-size:12px;padding:3px 5px}
 .lp-chip-part{font-style:normal;font-size:11px;font-weight:700;color:#24476b;background:#eef4fb;border-radius:99px;padding:1px 6px}
+/* Load containers: clean PO card */
+.lp-po{padding:0!important;position:relative;border-left-width:1px!important;overflow:visible}
+.lp-po::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:4px;border-radius:10px 0 0 10px;background:var(--c)}
+.lp-po.nocbm{background:#fff}
+.lp-pm{padding:10px 12px 10px 14px}
+.lp-po .lp-r1{display:flex;align-items:baseline;gap:8px;position:relative}
+.lp-po .lp-r1 b{font-size:14px}
+.lp-v{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lp-v em{font-style:normal;color:#a0670a}
+.lp-est{color:#a19e99;font-weight:500;cursor:help}
+.lp-ld-btn{position:absolute;right:-4px;top:-3px;display:none;border:1px solid var(--line,#e6e4e1);background:#fff;border-radius:7px;height:26px;padding:0 9px;font:inherit;font-size:12px;font-weight:600;color:#444;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.lp-ld-btn:hover{border-color:#cfcac4}
+.lp-po:hover .lp-ld-btn,.lp-ld-btn:focus{display:block}
+.lp-po:hover>.lp-pm .lp-v{visibility:hidden}
+@media (hover:none){.lp-ld-btn{display:block;position:static;margin-left:6px}.lp-po:hover>.lp-pm .lp-v{visibility:visible}}
+.lp-sup{color:#74726e;font-size:12.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-po .lp-r3{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:nowrap}
+.lp-when{font-size:12px;font-weight:600;border-radius:6px;padding:2px 7px;white-space:nowrap}
+.lp-when.bad{background:#fdecea;color:#b23b2e}.lp-when.blue{background:#eef4fb;color:#2f5f8f}.lp-when.ok{background:#e8f4ec;color:#2f8a4c}.lp-when.warn{background:#fff4e0;color:#a0670a}.lp-when.grey{background:#f2f0ed;color:#777}
+.lp-flag{font-size:11.5px;font-weight:600;white-space:nowrap}.lp-flag.warn{color:#a0670a}.lp-flag.blue{color:#2f5f8f}
+.lp-pbtn{margin-left:auto;border:0;background:none;font:inherit;font-size:12px;color:#74726e;cursor:pointer;padding:2px 4px;border-radius:6px;white-space:nowrap}
+.lp-pbtn:hover{background:#f3f1ee;color:#333}
+.lp-car{display:inline-block;font-size:10px;transition:transform .15s}.lp-po.open .lp-car{transform:rotate(180deg)}
+.lp-prs{border-top:1px solid #f0eeeb;padding:4px 6px 6px 10px}
+.lp-prs.single{border-top:0;padding-top:0}
+.lp-pr{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:7px;font-size:12.5px;cursor:grab}
+.lp-pr:hover{background:#f7f6f3}
+.lp-pr .lp-h{width:10px;color:#c9c4be;letter-spacing:-2px;font-size:12px;opacity:0;transition:opacity .1s}.lp-pr:hover .lp-h{opacity:1}
+.lp-pn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-pv{font-variant-numeric:tabular-nums;color:#444;white-space:nowrap}
+.lp-pr.nov,.lp-pr.done{cursor:default}
+.lp-pr.done{color:#a19e99}
+.lp-ptag{font-size:10.5px;font-weight:700;color:#2f5f8f;background:#eef4fb;border-radius:99px;padding:1px 7px;white-space:nowrap}
+.lp-pin{width:64px;height:26px;border:1px solid #e0c48a;border-radius:6px;padding:0 6px;font:inherit;font-size:12px}
+.lp-pok{border:1px solid #e0c48a;background:#fff8ea;color:#a0670a;border-radius:6px;height:26px;width:28px;cursor:pointer;font-weight:700}
+.lp-pr.dragging{opacity:.4}
+.lp-phint{font-size:11.5px;color:#a19e99;padding:3px 6px 0 24px}
+.lp-menu{position:absolute;z-index:60;background:#fff;border:1px solid var(--line,#e6e4e1);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.14);padding:5px;width:220px}
+.lp-menu button{display:flex;justify-content:space-between;align-items:baseline;gap:8px;width:100%;border:0;background:none;font:inherit;font-size:13px;padding:7px 9px;border-radius:7px;cursor:pointer;text-align:left}
+.lp-menu button:hover,.lp-menu button:focus{background:#f6f4f1;outline:none}.lp-menu small{color:#74726e;font-size:11.5px;white-space:nowrap}
+.lp-chip-part{font-style:normal;font-size:11px;font-weight:700;color:#2f5f8f;background:none;padding:0}
+.lp-po .lp-r3{flex-wrap:wrap;row-gap:4px}
+.lp-menu{width:250px}.lp-menu span{white-space:nowrap}

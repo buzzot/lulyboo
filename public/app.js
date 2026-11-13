@@ -1160,40 +1160,66 @@
   function fail(e) { toast(e.message || 'Could not save'); setTimeout(function () { location.reload(); }, 1400); }
 
   // Pool: one card per PO (supplier + PO). Drag the card to load the whole PO; "Split" lets you drag single products.
-  var split = {}; // PO key → products shown separately
   var ctnOpts = function () { return D.containers.map(function (c) { return '<option value="' + c.id + '">' + esc(cName(c)) + (D.box[c.box].lcl ? '' : ' · ' + esc(D.box[c.box].name)) + '</option>'; }).join(''); };
   var linesOfPo = function (pk) { return D.orders.filter(function (o) { return o.pk === pk; }); };
   var lineName = function (o) { return o.po + (o.product && linesOfPo(o.pk).length > 1 ? ' (' + o.product + ')' : ''); };
   function groupBy(list) { var g = {}, order = []; list.forEach(function (o) { if (!g[o.pk]) { g[o.pk] = []; order.push(o.pk); } g[o.pk].push(o); }); return order.map(function (k) { return g[k]; }); }
   function volInput(o) { return '<div class="lp-vol"><input type="number" step="0.01" min="0" inputmode="decimal" placeholder="m³" aria-label="Volume of ' + esc(o.po + (o.product ? ' ' + o.product : '')) + ' in m³" data-lp-v="' + o.id + '"><button type="button" class="btn small" data-lp-savecbm="' + o.id + '">Save</button><small>volume required</small></div>'; }
+  var opened = {}; // PO key → products list open
+  var RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 };
+  var WHEN = { overdue: 'bad', production: 'blue', ready: 'ok', waiting: 'warn' };
+  function whenChip(ls) {
+    var worst = ls.reduce(function (a, x) { return (RANK[x.st] || 0) > (RANK[a.st] || 0) ? x : a; }, ls[0]);
+    var dated = ls.filter(function (x) { return x.ready; }).sort(function (a, b) { return a.ready < b.ready ? 1 : -1; });
+    var last = dated[0], st = D.states[worst.st] || { label: worst.st };
+    var text = worst.st === 'waiting' ? 'Waiting on us' : last ? 'Ready ' + last.readyText : 'No ready date';
+    return '<span class="lp-when ' + (WHEN[worst.st] || 'grey') + '" title="' + esc(st.label + (last ? ' · ready ' + last.readyText : '') + (dated.length > 1 && dated[dated.length - 1].ready !== last.ready ? ' (some products earlier)' : '')) + '">' + esc(text) + '</span>';
+  }
+  var vol = function (v, est) { return (est ? '<span class="lp-est" title="Estimated from carton size — confirm with the packing list">≈</span> ' : '') + n2(v) + ' m³'; };
   function poolCard(ls) {
-    var o = ls[0], pk = o.pk, all = linesOfPo(pk), loadedN = all.filter(function (x) { return x.container; }).length;
+    var o = ls[0], pk = o.pk, all = linesOfPo(pk), loaded = all.filter(function (x) { return x.container; });
     var ready = ls.filter(function (x) { return x.cbm; }), tot = ready.reduce(function (a, x) { return a + x.cbm; }, 0), noVol = ls.filter(function (x) { return !x.cbm; });
-    var est = ready.some(function (x) { return x.est; }), multi = ls.length > 1, isSplit = multi && split[pk];
-    var worst = ls.reduce(function (a, x) { var r = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 }; return (r[x.st] || 0) > (r[a.st] || 0) ? x : a; }, o);
-    var st = D.states[worst.st] || { label: worst.st, tag: 'plan' };
-    var dates = ls.map(function (x) { return x.ready; }).filter(Boolean).sort(), last = dates[dates.length - 1];
-    var lastText = last ? (ls.filter(function (x) { return x.ready === last; })[0].readyText) : '';
-    var canDrag = !isSplit && ready.length > 0;
-    var prod = function (x) {
-      return '<li class="lp-pl' + (isSplit && x.cbm ? ' drag' : '') + '"' + (isSplit && x.cbm ? ' draggable="true" data-id="' + x.id + '"' : '') + '><span>' + esc(x.product || '(whole PO)') + (x.qty ? ' <i class="sub">' + int(x.qty) + ' pcs</i>' : '') + '</span><b>' + (x.cbm ? n2(x.cbm) + ' m³' + (x.est ? ' <i class="sub">est.</i>' : '') : '<em>CBM ?</em>') + '</b>' +
-        (isSplit && x.cbm && D.containers.length ? '<select class="lp-quick sm" data-lp-quick="' + x.id + '" aria-label="Load ' + esc(x.product || x.po) + ' into"><option value="">Load into…</option>' + ctnOpts() + '</select>' : '') + (!x.cbm ? volInput(x) : '') + '</li>';
+    var est = ready.some(function (x) { return x.est; }), multi = all.length > 1, open = multi && opened[pk];
+    var tip = function (x) { return [x.product || x.po, x.qty ? int(x.qty) + ' pcs' : '', x.cbm ? n2(x.cbm) + ' m³' + (x.est ? ' (estimated)' : '') : 'volume missing'].filter(Boolean).join(' · '); };
+    var row = function (x) {
+      if (x.container) { var c = cById(x.container); return '<div class="lp-pr done" title="' + esc(tip(x)) + '"><span class="lp-h"></span><span class="lp-pn">' + esc(x.product || x.po) + '</span><span class="lp-ptag">' + esc(c ? cName(c) : 'Loaded') + '</span></div>'; }
+      if (!x.cbm) return '<div class="lp-pr nov" title="' + esc(tip(x)) + '"><span class="lp-h"></span><span class="lp-pn">' + esc(x.product || x.po) + '</span><input class="lp-pin" type="number" step="0.01" min="0" inputmode="decimal" placeholder="m³" aria-label="Volume of ' + esc(x.product || x.po) + ' in m³" data-lp-v="' + x.id + '"><button type="button" class="lp-pok" data-lp-savecbm="' + x.id + '" aria-label="Save volume">✓</button></div>';
+      return '<div class="lp-pr" draggable="true" data-id="' + x.id + '" title="' + esc(tip(x)) + ' — drag to ship separately"><span class="lp-h" aria-hidden="true">⋮⋮</span><span class="lp-pn">' + esc(x.product || x.po) + '</span><span class="lp-pv">' + vol(x.cbm, x.est) + '</span></div>';
     };
-    return '<div class="lp-po' + (ready.length ? '' : ' nocbm') + (isSplit ? ' split' : '') + '" style="--c:' + o.color + '"' + (canDrag ? ' draggable="true" data-po="' + esc(pk) + '"' : '') + '>' +
-      '<div class="lp-r1"><b>' + esc(o.po) + '</b><span>' + (ready.length ? n2(tot) + ' m³' + (est ? ' <i class="sub">est.</i>' : '') : '<em>CBM ?</em>') + '</span></div>' +
-      '<div class="sub">' + esc(o.supplier) + (multi ? ' · ' + ls.length + ' products' : (o.product ? ' · ' + esc(o.product) : '') + (o.qty ? ' · ' + int(o.qty) + ' pcs' : '')) + '</div>' +
-      (loadedN ? '<div class="lp-part">' + loadedN + ' of ' + all.length + ' product' + (all.length > 1 ? 's' : '') + ' already loaded</div>' : '') +
-      (multi ? '<ul class="lp-pls">' + ls.map(prod).join('') + '</ul>' : !o.cbm ? volInput(o) : '') +
-      '<div class="lp-r3"><span>' + (last ? 'Ready ' + esc(lastText) + (dates[0] !== last ? ' <i class="sub">(partly earlier)</i>' : '') : 'No ready date') + '</span><span class="cp-tag ' + st.tag + '">' + esc(st.label) + '</span></div>' +
-      (noVol.length && ready.length && !isSplit ? '<div class="lp-part warn">' + noVol.length + ' product' + (noVol.length > 1 ? 's' : '') + ' without volume stay' + (noVol.length > 1 ? '' : 's') + ' here when you load the PO</div>' : '') +
-      '<div class="lp-pofoot">' + (D.containers.length && canDrag ? '<select class="lp-quick" data-lp-quickpo="' + esc(pk) + '" aria-label="Load ' + esc(o.po) + ' into"><option value="">Load ' + (multi ? 'whole PO' : '') + ' into…</option>' + ctnOpts() + '</select>' : '') +
-        (multi ? '<button type="button" class="link small" data-lp-split="' + esc(pk) + '">' + (isSplit ? 'Keep together' : 'Split') + '</button>' : '') + '</div>' +
+    var sub = esc(o.supplier) + (!multi && o.product ? ' · ' + esc(o.product) : '');
+    var flags = (noVol.length ? '<span class="lp-flag warn">' + (multi ? noVol.length + ' needs m³' : 'needs m³') + '</span>' : '') + (loaded.length ? '<span class="lp-flag blue">' + loaded.length + ' of ' + all.length + ' loaded</span>' : '');
+    return '<div class="lp-po' + (open ? ' open' : '') + (ready.length ? '' : ' nocbm') + '" style="--c:' + o.color + '"' + (ready.length ? ' draggable="true" data-po="' + esc(pk) + '"' : '') + ' title="' + esc(multi ? all.map(tip).join('\n') : tip(o)) + '">' +
+      '<div class="lp-pm"><div class="lp-r1"><b>' + esc(o.po) + '</b><span class="lp-v">' + (ready.length ? vol(tot, est) : '<em>m³ ?</em>') + '</span>' +
+        (D.containers.length && ready.length ? '<button type="button" class="lp-ld-btn" data-lp-loadmenu="' + esc(pk) + '" aria-haspopup="true" aria-label="Load ' + esc(o.po) + ' into a container">Load ▾</button>' : '') + '</div>' +
+      '<div class="lp-sup">' + sub + '</div>' +
+      '<div class="lp-r3">' + whenChip(ls) + flags + (multi ? '<button type="button" class="lp-pbtn" data-lp-open="' + esc(pk) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + all.length + ' products <span class="lp-car">▾</span></button>' : '') + '</div></div>' +
+      (!multi && !o.cbm ? '<div class="lp-prs single">' + row(o) + '</div>' : '') +
+      (open ? '<div class="lp-prs">' + all.map(row).join('') + (ready.length > 1 ? '<div class="lp-phint">Drag a product to ship it separately</div>' : '') + '</div>' : '') +
       '</div>';
   }
+  // "Load ▾" menu: one shared popover
+  var menu = document.createElement('div'); menu.className = 'lp-menu'; menu.hidden = true; menu.setAttribute('role', 'menu'); document.body.appendChild(menu);
+  function openMenu(btn) {
+    var pk = btn.getAttribute('data-lp-loadmenu');
+    menu.innerHTML = D.containers.map(function (c) {
+      var t = D.box[c.box], free = t.lcl ? '' : n2(Math.max(0, t.cap - usedOf(c))) + ' m³ free';
+      return '<button type="button" role="menuitem" data-lp-to="' + c.id + '" data-pk="' + esc(pk) + '"><span>' + esc(cName(c)) + '</span><small>' + esc(t.lcl ? 'LCL' : t.name + ' · ' + free) + '</small></button>';
+    }).join('');
+    var r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + window.scrollY + 4) + 'px'; menu.style.left = Math.max(8, r.right + window.scrollX - 220) + 'px';
+    menu.hidden = false; var f = menu.querySelector('button'); if (f) f.focus();
+  }
+  document.addEventListener('click', function (e) {
+    var it = e.target.closest('[data-lp-to]');
+    if (it && menu.contains(it)) { menu.hidden = true; loadPo(it.getAttribute('data-pk'), it.getAttribute('data-lp-to')); return; }
+    if (!e.target.closest('[data-lp-loadmenu]')) menu.hidden = true;
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') menu.hidden = true; });
+  window.addEventListener('scroll', function () { menu.hidden = true; }, true);
   function renderPool() {
     var list = D.orders.filter(function (o) { return !o.container; }), groups = groupBy(list);
     var tot = list.reduce(function (a, o) { return a + (o.cbm || 0); }, 0), miss = list.filter(function (o) { return !o.cbm; }).length;
-    metaEl.textContent = groups.length + ' PO' + (groups.length === 1 ? '' : 's') + (list.length !== groups.length ? ' (' + list.length + ' products)' : '') + ' · ' + n2(tot) + ' m³' + (miss ? ' · ' + miss + ' without volume' : '');
+    metaEl.textContent = groups.length + ' PO' + (groups.length === 1 ? '' : 's') + ' · ' + n2(tot) + ' m³';
     poolEl.innerHTML = list.length ? groups.map(poolCard).join('') : '<div class="lp-empty">' + (D.orders.length ? 'Everything at this port is loaded.<br>Drag a PO back here to unload it.' : 'No open orders at this port.') + '</div>';
   }
 
@@ -1238,9 +1264,8 @@
     var cid = items[0].container;
     return '<div class="lp-chips">' + groupBy(items).map(function (ls) {
       var o = ls[0], tot = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), all = linesOfPo(o.pk).length;
-      var what = ls.length > 1 ? ls.length + ' products' : (o.product || '');
-      var part = all > ls.length ? ' <em class="lp-chip-part" title="Other products of this PO are not in this container">' + ls.length + ' of ' + all + '</em>' : '';
-      return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-po="' + esc(o.pk) + '" data-from="' + cid + '" title="' + esc(ls.map(function (x) { return (x.product || x.po) + ' · ' + n2(x.cbm) + ' m³'; }).join('\n')) + '"><i></i><b>' + esc(o.po) + '</b>' + esc((what ? ' ' + what + ' · ' : ' ') + n2(tot) + ' m³') + part + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
+      var part = all > ls.length ? ' <em class="lp-chip-part" title="' + ls.length + ' of ' + all + ' products of this PO are in this container">' + ls.length + '/' + all + '</em>' : '';
+      return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-po="' + esc(o.pk) + '" data-from="' + cid + '" title="' + esc(ls.map(function (x) { return (x.product || x.po) + ' · ' + n2(x.cbm) + ' m³'; }).join('\n')) + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
     }).join('') + '</div>';
   }
   function addDays(d, n) { var x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
@@ -1397,7 +1422,8 @@
     var b = e.target.closest('button'); if (!b) return; var id;
     if ((id = b.getAttribute('data-lp-out'))) { unload(id); return; }
     if ((id = b.getAttribute('data-lp-outpo'))) { unloadPo(id, b.getAttribute('data-from')); return; }
-    if ((id = b.getAttribute('data-lp-split'))) { split[id] = !split[id]; renderPool(); return; }
+    if ((id = b.getAttribute('data-lp-open'))) { opened[id] = !opened[id]; renderPool(); return; }
+    if (b.hasAttribute('data-lp-loadmenu')) { if (!menu.hidden) { menu.hidden = true; return; } openMenu(b); return; }
     if ((id = b.getAttribute('data-lp-switch'))) { var cs = cById(id), nb = b.getAttribute('data-box'); cs.box = nb; itemsOf(cs).forEach(function (o) { fresh[o.id] = 1; }); render(); toast(cName(cs) + ' — now ' + (D.box[nb].lcl ? 'LCL' : D.box[nb].name)); post(D.base + '/containers/' + id, { box: nb }).catch(fail); return; }
     if ((id = b.getAttribute('data-lp-savecbm'))) {
       var inp = root.querySelector('[data-lp-v="' + id + '"]'), v = parseFloat(String(inp.value).replace(',', '.'));
