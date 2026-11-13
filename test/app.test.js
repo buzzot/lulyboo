@@ -2385,6 +2385,23 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   assert.equal(db.tables.plan_orders.find((o) => o.id === o1.id).container_id, null);
 });
 
+test('load containers: products of one PO share a key and a colour, so the pool shows one card per PO', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean' });
+  const m = await db.insert('suppliers', { name: 'Melikey' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', product: 'Flower rattle', qty: 5040, cbm: 2.01, port: 'CNYTN' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: 'po 900018', product: 'BSTS 001', qty: 5000, cbm: 4.13, port: 'CNYTN' });
+  await db.insert('plan_orders', { supplier_id: m.id, po: 'PO900018', product: 'Bibs', qty: 100, cbm: 1, port: 'CNYTN' });   // same number, other supplier
+  const raw = (await req(base, 'GET', '/admin/logistics/planning/load?port=CNYTN', { cookie })).text;
+  const data = JSON.parse(raw.match(/data-loadplan="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+  const [a, b, c] = data.orders;
+  assert.equal(a.pk, b.pk); assert.equal(a.color, b.color);
+  assert.notEqual(a.pk, c.pk); assert.notEqual(a.color, c.color);
+});
+
 test('load containers: LCL shipment — W/M totals, LCL quote request with CFS questions and optional 20GP price', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db);

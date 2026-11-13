@@ -2345,3 +2345,17 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .sd-sum{margin-left:auto;font-size:12.5px;color:var(--muted,#6b6b6b);text-align:right}
 .sd-rcv{display:block!important}.sd-rcv input{margin-right:6px;vertical-align:-2px}
 .sd-date label{white-space:nowrap}
+/* Load containers: one card per PO */
+.lp-pls{list-style:none;margin:8px 0 2px;padding:0;border-top:1px dashed #ece8e3}
+.lp-pl{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 8px;padding:5px 0;border-bottom:1px dashed #ece8e3;font-size:12.5px}
+.lp-pl>span{flex:1;min-width:0}.lp-pl>b{font-weight:600;white-space:nowrap}
+.lp-pl em{color:#b7791f;font-style:normal}
+.lp-pl .lp-vol,.lp-pl .lp-quick{flex-basis:100%;margin-top:4px}
+.lp-po.split{cursor:default}
+.lp-pl.drag{cursor:grab;background:#fff;border:1px solid var(--line,#e6e4e1);border-left:3px solid var(--c);border-radius:7px;padding:6px 8px;margin:5px 0}
+.lp-pl.drag:hover{box-shadow:0 2px 6px rgba(0,0,0,.08)}.lp-pl.dragging{opacity:.4}
+.lp-part{font-size:12px;color:#24476b;background:#eef4fb;border-radius:6px;padding:3px 7px;margin-top:6px;display:inline-block}
+.lp-part.warn{color:#8a5a00;background:#fff6e6}
+.lp-pofoot{display:flex;align-items:center;gap:10px}.lp-pofoot .lp-quick{flex:1}.lp-pofoot .link{margin-top:8px;white-space:nowrap}
+.lp-quick.sm{font-size:12px;padding:3px 5px}
+.lp-chip-part{font-style:normal;font-size:11px;font-weight:700;color:#24476b;background:#eef4fb;border-radius:99px;padding:1px 6px}

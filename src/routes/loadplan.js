@@ -87,13 +87,16 @@ function loadPlanRoutes(router, { db, config }) {
       summary: q.summary || '', notes: q.notes || '', from: q.reply_from || '', reply: q.reply_text ? String(q.reply_text).slice(0, 8000) : '', charges: Array.isArray(q.charges) ? q.charges.slice(0, 20) : [],
       files: (Array.isArray(q.files) ? q.files : []).map((f, i) => ({ name: f.name, url: `${BASE}/quotes/${q.id}/files/${i}`, inline: /^(image\/|application\/pdf)/.test(f.type || '') })),
     }));
+    // one colour per PO (supplier + PO number); lines of the same PO travel together
+    const pkOf = (o) => `${o.supplier_id}|${PL.normPo(o.po)}`;
+    const pkeys = [...new Set(here.map(pkOf))];
     const data = {
       base: BASE, port, portName: portName(port), today: day, box: BOX,
       orders: here.map((o, i) => ({
         id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', qty: Number(o.qty) || 0,
         cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
-        st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, color: COLORS[i % COLORS.length],
+        st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],
       })),
       containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
@@ -105,7 +108,7 @@ function loadPlanRoutes(router, { db, config }) {
       title: 'Load containers · Container planning', nav: adminNav('load'), flash: takeFlash(req, res), wide: true, req,
       body: html`${SCR.logisticsTabs('planning')}
         ${missing ? html`<p class="flash warn">Run the container loading SQL in Supabase first (supabase/schema.sql, "Container load plans").</p>` : ''}
-        <div class="cp-head"><div><h2 class="sl-title">Container planning</h2><p class="muted">Drag open PO lines into a container. Cartons load in and the bar shows how full it is.</p></div>
+        <div class="cp-head"><div><h2 class="sl-title">Container planning</h2><p class="muted">Drag open POs into a container. Cartons load in and the bar shows how full it is.</p></div>
           <div class="cp-head-r">${tabs}<a class="btn" href="${BASE}/import">Import orders</a></div></div>
         <div class="lp-ports"><div class="lp-seg">${ports.map((p) => html`<a href="${BASE}/load?port=${p}" class="${p === port ? 'on' : ''}">${portName(p)} <span>${p}</span></a>`)}</div>
           <span class="muted small">Each container belongs to one loading port.${noPort ? html` <a href="${BASE}?view=table">${noPort} open line${noPort === 1 ? ' has' : 's have'} no port yet</a> — set it to load ${noPort === 1 ? 'it' : 'them'}.` : ''}</span></div>
