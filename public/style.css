@@ -2425,3 +2425,10 @@ svg.dragging .pm-port.empty{display:inline;opacity:.55}
 .sd-mseg button.on{background:#fff;color:#1f1f1f;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 .sd-seg[hidden]{display:none}
 .cp-it-one{color:#1f1f1f}.cp-it-one b{font-weight:700}
+.cp-po-d{display:block}
+.cp-po-r1{display:flex;align-items:baseline;gap:6px 8px;flex-wrap:wrap}
+.cp-po-vol{margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}.cp-po-vol b{font-weight:700;color:#1f1f1f}
+.cp-po-r2{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:6px}
+.cp-it-one{color:inherit}
+.lp-polink{font-weight:700;font-size:14px;color:inherit;text-decoration:none}
+.lp-polink:hover,.lp-polink:focus-visible{color:var(--brand,#cf5a52);text-decoration:none}

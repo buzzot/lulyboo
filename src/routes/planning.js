@@ -225,13 +225,12 @@ function planningRoutes(router, { db, config }) {
         const many = g.lines.length > 4;
         return html`<article class="cp-po" style="--c:${g.col}">
           <div class="cp-po-h"><div class="cp-po-id"><b>${g.sup?.name || 'Supplier'}</b><div class="sub">${poLink(g.lines[0], g.po)}${docs ? html` <a class="cp-clip" href="${BASE}?view=docs&po=${encodeURIComponent(g.po)}" title="Documents for ${g.po}">📎${docs}</a>` : ''} · ${g.lines.length} product${g.lines.length === 1 ? '' : 's'}</div></div>${tag(g.st)}</div>
-          <div class="cp-its">${(many ? g.lines.slice(0, 3) : g.lines).map((o) => item(o, g.lines.length === 1))}
+          <div class="cp-its">${(many ? g.lines.slice(0, 3) : g.lines).map((o) => item(o))}
             ${many ? html`<details class="cp-more"><summary>+ ${g.lines.length - 3} more products</summary>${g.lines.slice(3).map((o) => item(o))}</details>` : ''}</div>
-          ${g.lines.length > 1 ? html`<div class="cp-po-tot"><span><b>${int(g.qty)}</b> pcs</span><span><b>${n2(g.cbm)} m³</b>${g.noCbm ? html` <em>+ ${g.noCbm} without CBM</em>` : ''}</span></div>` : ''}
-          <div class="cp-po-d"><span>${g.ready ? html`Ready <b>${PL.short(g.ready)}</b>` : 'No ready date'}${g.split ? html` <em title="Its products are ready in different weeks">· split dates</em>` : ''}</span>
+          <div class="cp-po-d"><div class="cp-po-r1"><span>${g.ready ? html`Ready <b>${PL.short(g.ready)}</b>` : 'No ready date'}${g.split ? html` <em title="Its products are ready in different weeks">· split dates</em>` : ''}</span>
             ${g.etd ? html`<span class="cp-po-ar">→</span><span>ETD <b>${PL.short(g.etd.etd)}</b> <span class="sub">${g.etd.carrier}</span></span>` : ''}
-            ${g.waiting.length ? html`<span class="cp-po-w">Needs: ${g.waiting.join(', ')}</span>` : ''}
-            ${g.ctn ? html`<a class="cp-po-c" href="${g.ctn.url}">📦 ${BOXN(g.ctn.c)}</a>` : ''}</div>
+            <span class="cp-po-vol" title="Total volume of the PO${g.noCbm ? ` — ${g.noCbm} product${g.noCbm > 1 ? 's' : ''} without CBM` : ''}">${g.cbm > 0 ? html`<b>${n2(g.cbm)} m³</b>` : html`<em>CBM ?</em>`}${g.noCbm && g.cbm > 0 ? html`<em> +?</em>` : ''}</span></div>
+            ${g.waiting.length || g.ctn ? html`<div class="cp-po-r2">${g.waiting.length ? html`<span class="cp-po-w">Needs: ${g.waiting.join(', ')}</span>` : ''}${g.ctn ? html`<a class="cp-po-c" href="${g.ctn.url}">📦 ${BOXN(g.ctn.c)}</a>` : ''}</div>` : ''}</div>
         </article>`;
       };
       body = portOrder.length ? html`<div class="cp-board">${portOrder.map((k) => {
