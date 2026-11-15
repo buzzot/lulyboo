@@ -155,16 +155,26 @@ module.exports = function orderRoutes(router, { db, config }) {
           ${lineNotes.length ? html`<div class="or-notes">${oneNote ? html`<p><b>Note:</b> ${lineNotes[0].notes}</p>` : lineNotes.map((x) => html`<p><b>${x.o.product || 'Note'}:</b> ${x.notes}</p>`)}</div>` : ''}</section>` : ''}
         ${shipSection}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
-          ${docs.length ? html`<ul class="cp-filelist">${docs.map((f) => html`<li><span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>
-            <div class="cp-fmain"><a href="/admin/logistics/planning/files/${f.id}?inline=1" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}><b>${f.name}</b></a>
-              <div class="sub">${f.kind || 'Document'} · ${fmt.date(f.created_at)}${f.size ? ` · ${Math.max(1, Math.round(f.size / 1024))} KB` : ''}${(f.pos || []).length > 1 ? ` · also ${f.pos.filter((x) => PL.normPo(x) !== PL.normPo(poQ)).slice(0, 6).join(', ')}` : ''}</div></div>
-            <a class="icon-btn" href="/admin/logistics/planning/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a></li>`)}</ul>` : html`<p class="muted">No documents for this PO yet.</p>`}
-          <form method="post" action="/admin/logistics/planning/files" enctype="multipart/form-data" data-busy class="or-up">
+          <div class="dc-lay ${docs.length ? '' : 'empty'}">
+          ${docs.length ? html`<div class="dc-list">${(() => {
+            const SHIP = /bill of lading|warehouse receipt|loading photo|waybill|awb/i;
+            const isShip = (f) => !!f.shipment_id || SHIP.test(f.kind || '');
+            const ship = docs.filter(isShip); const order = docs.filter((f) => !isShip(f));
+            const day = (f) => PL.short(String(f.created_at || '').slice(0, 10));
+            const row = (f) => html`<div class="dc-row"><span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>
+              <span class="dc-nc"><a class="dc-nm" href="/admin/logistics/planning/files/${f.id}?inline=1" title="${f.name}" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}>${f.name}</a><span class="dc-tg">${f.kind || 'Document'}</span>${(f.pos || []).length > 1 ? html`<span class="sub dc-also">also ${f.pos.filter((x) => PL.normPo(x) !== PL.normPo(poQ)).slice(0, 4).join(', ')}</span>` : ''}</span>
+              <span class="dc-d">${day(f)}</span><span class="dc-d">${f.size ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
+              <a class="dc-dl" href="/admin/logistics/planning/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a></div>`;
+            const shipDays = [...new Set(ship.map(day))];
+            return html`${order.length && ship.length ? html`<div class="dc-grp">Order</div>` : ''}${order.map(row)}
+              ${ship.length ? html`<div class="dc-grp">Shipping${ship.some((f) => f.shipment_id) ? ' · from the supplier' : ''}${shipDays.length === 1 ? `, ${shipDays[0]}` : ''}</div>${ship.map(row)}` : ''}`;
+          })()}</div>` : ''}
+          <form method="post" action="/admin/logistics/planning/files" enctype="multipart/form-data" data-busy class="dc-up">
             <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="pos" value="${poQ}"><input type="hidden" name="back" value="${back}">
-            <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Add the PO, PI, packing list… (drag &amp; drop or choose)</span><span class="dz-hint">Linked to ${poQ}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-            <div class="or-up-row"><label>Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option ${k === 'PO' ? raw('selected') : ''}>${k}</option>`)}</select></label>
-              ${AI.enabled() ? html`<label class="cp-chk"><input type="checkbox" name="read" value="1" checked> Read products, quantities and packing with AI</label>` : ''}<button class="btn">Upload</button></div>
-            ${AI.enabled() ? html`<p class="sub or-up-note">PO / PI: each product becomes a line of ${poQ}. Packing list: pcs per carton and carton size are saved to the product, and cartons, m³ and kg are calculated from the order quantity.</p>` : ''}</form></section>
+            <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main><b>Drop files here</b> or choose</span><span class="dz-hint">${docs.length ? `Linked to ${poQ}` : `PO, PI, packing list… linked to ${poQ}`}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+            <label class="dc-k">Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option ${k === 'PO' ? raw('selected') : ''}>${k}</option>`)}</select></label>
+            <div class="dc-ft">${AI.enabled() ? html`<label class="cp-chk"><input type="checkbox" name="read" value="1" checked> Read with AI</label><span class="dc-i" tabindex="0" title="${`PO / PI: each product becomes a line of ${poQ}. Packing list: pcs per carton and carton size are saved to the product; cartons, m³ and kg are calculated from the order quantity.`}">i</span>` : ''}<button class="btn small">Upload</button></div></form>
+          </div></section>
         ${PR.editDialog(back)}`,
     }));
   }));

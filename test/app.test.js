@@ -2731,7 +2731,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const po2 = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
   assert.match(po2.text, /Add 1 product to Shenzhen Kean(?:'|&#39;)s product list/);
   const add = await req(base, 'POST', '/admin/orders/catalog', { cookie, form: { supplier: k.id, po: 'PO900018' } });
-  assert.equal(add.status, 303); assert.ok(db.tables.products.some((p) => p.product_name === 'Flower rattle & teether' && p.supplier_sku === 'FRT 001')); assert.match(po.text, /Read products, quantities and packing with AI/);
+  assert.equal(add.status, 303); assert.ok(db.tables.products.some((p) => p.product_name === 'Flower rattle & teether' && p.supplier_sku === 'FRT 001')); assert.match(po.text, /name="read" value="1" checked> Read with AI/);
   // 3. the next PO for the same item gets its volume from the remembered packing
   answer = { orders: [{ po: 'PO900030', product: 'Silicone Suction Plate', sku: 'KS-200', qty: 960 }] };
   const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('pos', 'PO900030'); fd.append('kind', 'PO'); fd.append('read', '1');
