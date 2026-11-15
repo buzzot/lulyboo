@@ -10,6 +10,8 @@ const PL = require('../planning');
 const SC = require('../schedules');
 const SD = require('../shipdocs');
 const AI = require('../ai');
+const FW = require('../forwarding');
+const FR = require('./forwarding');
 
 const BASE = '/admin/orders/shipping';
 const portName = (c) => SC.PORT[c]?.name || c || '';
@@ -62,7 +64,22 @@ function compareRows(sc) {
 }
 
 /** Progress steps. */
-function steps(sc, list, nfiles) {
+function steps(sc, list, nfiles, c = null) {
+  const fs = c?.fwd ? FW.stageOf(c.fwd) : null;
+  if (fs) {
+    // once the forwarder has the goods, the journey continues: sailed → on the water → arrived
+    const f = c.fwd; const reach = { booked: 0, on_water: 2, arrived_due: 2, arrived: 4 }[fs];
+    const docsOk = !(sc.missing || []).length && sc.status === 'complete';
+    const its = [
+      ['loaded', sc.mode === 'LCL' ? 'At warehouse' : sc.mode === 'COURIER' ? 'Picked up' : 'Loaded', sc.confirmed_at ? sd(sc.confirmed_at) : '', !!sc.confirmed_at || reach >= 2],
+      ['docs', 'Documents in', nfiles ? `${list.filter((x) => x.state === 'have').length} of ${list.filter((x) => x.key !== 'confirm' && x.state !== 'opt').length}` : '', docsOk],
+      ['sailed', 'Sailed', f.atd || (reach >= 2 && f.etd) ? `${PL.short(f.atd || f.etd)}${f.pol ? ` · ${f.pol}` : ''}` : f.etd ? `ETD ${PL.short(f.etd)}` : '', reach >= 2],
+      ['water', 'On the water', f.eta ? `ETA ${f.pod ? `${f.pod} ` : ''}${PL.short(f.eta)}` : '', reach >= 4],
+      ['arrived', 'Arrived', f.ata ? PL.short(f.ata) : 'arrival notice', reach >= 4],
+    ];
+    const now = its.findIndex((x) => !x[3]);
+    return html`<div class="sd-steps">${its.map(([, l, s2, done], i) => html`<div class="sd-st ${done ? 'done' : i === now ? 'now' : ''}"><b>${l}</b><small>${s2}</small></div>`)}</div>`;
+  }
   const need = list.filter((x) => x.key !== 'confirm' && x.state !== 'opt').length;
   const have = list.filter((x) => x.key !== 'confirm' && x.state === 'have' && !/Optional/.test(x.label)).length;
   const done = (k) => ({ sent: !!sc.sent_at, loaded: !!sc.confirmed_at, docs: nfiles > 0, review: sc.status === 'complete', complete: sc.status === 'complete' && !(sc.missing || []).length }[k]);
@@ -108,7 +125,8 @@ async function shipmentSection(db, supplier, po, back) {
     const shipped = lines.every((l) => l.shipped); const inC = lines.some((l) => l.container_id);
     return html`<section class="card sd-none" id="shipment"><div class="head-row"><h2>Shipment</h2></div>
       <p class="muted">${shipped ? 'This PO is shipped, but no shipping documents were requested.' : inC ? 'The request for shipping documents goes out automatically on the container’s loading date.' : 'Plan this PO into a container to request shipping documents automatically on the loading date — or ask now.'}</p>
-      <form method="post" action="${BASE}/request" data-sd-open data-kind="request" data-supplier="${supplier.id}" data-po="${po}"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${po}"><input type="hidden" name="back" value="${back}"><button class="btn ${shipped ? '' : 'ghost'} small">Request shipping documents now</button></form></section>${sendDialog()}`;
+      <form method="post" action="${BASE}/request" data-sd-open data-kind="request" data-supplier="${supplier.id}" data-po="${po}"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${po}"><input type="hidden" name="back" value="${back}"><button class="btn ${shipped ? '' : 'ghost'} small">Request shipping documents now</button></form>
+      ${inC && lines.find((l) => l.container_id) ? await (async () => { const cid = lines.find((l) => l.container_id).container_id; const c = await db.get('plan_containers', cid).catch(() => null); return c && c.status !== 'planned' ? FR.fwdBox(db, cid, back) : ''; })() : ''}</section>${sendDialog()}`;
   }
   const cs = await containersById(db);
   const files = await db.list('plan_files', { filters: { supplier_id: supplier.id } }).catch(() => []);
@@ -129,8 +147,9 @@ async function shipmentSection(db, supplier, po, back) {
     const how = (f) => (/^Email from/.test(f.uploaded_by || '') ? 'by email' : f.uploaded_by ? 'added by you' : '');
     const log = [...(sc.log || [])].slice(-4);
     cards.push(html`<section class="card sd-card" id="shipment">
-      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2><span class="cp-tag ${st.tag}">${st.label}</span></div>
-      ${steps(sc, list, mine.length)}
+      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2>${(() => { const c = cs[sc.container_id]; const fs = c?.fwd ? FW.stageOf(c.fwd) : null; return fs && fs !== 'booked' ? html`<span class="cp-tag ${fs === 'arrived' ? 'ok' : 'plan'}">${FW.stageLabel(fs)}${c.fwd.eta && fs !== 'arrived' ? ` · ETA ${PL.short(c.fwd.eta)}` : ''}</span>` : html`<span class="cp-tag ${st.tag}">${st.label}</span>`; })()}</div>
+      ${steps(sc, list, mine.length, cs[sc.container_id])}
+      ${sc.container_id && cs[sc.container_id] && cs[sc.container_id].status !== 'planned' ? await FR.fwdBox(db, sc.container_id, back, { supplierBl: (sc.facts || {}).bl_no || sc.bl_no }) : ''}
       <div class="sd-grid">
         <div>
           <h3 class="sd-h">Shipping documents <span class="sub">${sc.mode || 'standard'} checklist</span></h3>
@@ -248,6 +267,7 @@ module.exports = function shippingRoutes(router, { db, config }) {
               <td><span class="cp-tag ${s.tag}">${s.label}</span>${r.status === 'sent' && r.reminders ? html`<div class="sub">${r.reminders} reminder${r.reminders > 1 ? 's' : ''} sent</div>` : ''}${r.status === 'received' && compareRows(r).warn ? html`<div class="sub">${compareRows(r).warn} difference${compareRows(r).warn > 1 ? 's' : ''}</div>` : ''}</td>
               <td class="r"><a class="btn ${s.key === 'received' ? '' : 'ghost'} small" href="${url}">${s.key === 'received' ? 'Review' : 'Open'}</a></td></tr>`;
           }) : html`<tr><td colspan="6" class="muted">${tab === 'action' ? 'Nothing needs you right now.' : 'Nothing here yet.'} Requests are created when a container has a sailing or a loading date.</td></tr>`}</tbody></table></div></div>
+        ${await FR.fwdSection(db, BASE)}
         ${Object.keys(stats).length ? html`<section class="card"><h2>Supplier shipping record</h2><p class="muted small">From accepted shipments: how quickly documents come back and how close the shipped volume is to the plan.</p>
           <div class="table-wrap"><table class="list"><thead><tr><th>Supplier</th><th class="r">Shipments</th><th class="r">Days to documents</th><th class="r">Volume vs plan</th><th class="r">Shipped m³</th><th class="r">Shipped kg</th></tr></thead>
           <tbody>${Object.entries(stats).sort((a, b) => b[1].n - a[1].n).map(([id, s]) => html`<tr><td>${sups[id]?.name || 'Supplier'}</td><td class="r">${s.n}</td><td class="r">${s.days == null ? '—' : s.days.toFixed(1)}</td><td class="r ${s.vol != null && Math.abs(s.vol) > 0.05 ? 'sd-off' : ''}">${s.vol == null ? '—' : `${s.vol > 0 ? '+' : ''}${(s.vol * 100).toFixed(1)}%`}</td><td class="r">${n2(s.cbm)}</td><td class="r">${int(s.kg)}</td></tr>`)}</tbody></table></div></section>` : ''}`,

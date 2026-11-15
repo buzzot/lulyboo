@@ -411,8 +411,12 @@ module.exports = function adminRoutes(router, { db, config }) {
     const shipReview = shipRows.filter((r) => r.status === 'received').length;
     const shipLate = shipRows.filter((r) => SD.stateOf(r, todayStr).key === 'overdue').length;
     const shipMissing = shipRows.filter((r) => SD.stateOf(r, todayStr).key === 'docs_missing').length;
+    const fwdReview = (await db.list('fwd_updates', { filters: { status: 'pending' } }).catch(() => [])).length;
+    const arriving = (await db.list('plan_containers').catch(() => [])).filter((c) => c.fwd?.eta && !c.fwd.ata && !c.fwd.arrived && c.status === 'shipped' && c.fwd.eta <= require('../planning').addDays(todayStr, 7)).length;
     const attention = [
       { label: 'Shipping documents to review', n: shipReview, href: '/admin/orders/shipping', tone: 'info' },
+      { label: 'Forwarder updates to review', n: fwdReview, href: '/admin/orders/shipping#forwarder', tone: 'info' },
+      { label: 'Shipments arriving this week', n: arriving, href: '/admin/orders/shipping#forwarder', tone: 'info' },
       { label: 'Shipping documents overdue', n: shipLate, href: '/admin/orders/shipping', tone: 'danger' },
       { label: 'Shipments with documents still missing', n: shipMissing, href: '/admin/orders/shipping', tone: 'warn' },
       { label: 'Products awaiting review', n: awaitingReview, href: '/admin/products?status=New', tone: 'info' },

@@ -911,3 +911,26 @@ alter table public.plan_orders add column if not exists po_terms text;
 alter table public.products  add column if not exists added_by text;            -- 'supplier' · 'lulyboo'
 alter table public.suppliers add column if not exists show_pricing boolean not null default false;
 update public.products set added_by = case when source = 'form' then 'supplier' else 'lulyboo' end where added_by is null;
+
+-- Forwarder shipment data (run once): booking, B/L numbers, vessel, ETD / ETA on each container / LCL shipment,
+-- and forwarder updates waiting for review (container_id empty = not matched yet)
+alter table public.plan_containers add column if not exists fwd jsonb;
+create table if not exists public.fwd_updates (
+  id            uuid primary key default gen_random_uuid(),
+  container_id  uuid references public.plan_containers(id) on delete set null,
+  source        text not null default 'email',        -- email · upload
+  from_email    text,
+  subject       text,
+  text          text,
+  facts         jsonb default '{}',
+  match_reason  text,
+  files         jsonb default '[]',                   -- [{ name, path, type, size }]
+  status        text not null default 'pending',      -- pending · accepted · dismissed
+  created_by    text,
+  created_at    timestamptz not null default now(),
+  decided_at    timestamptz,
+  decided_by    text
+);
+create index if not exists fwd_updates_status_idx on public.fwd_updates (status, created_at);
+create index if not exists fwd_updates_container_idx on public.fwd_updates (container_id);
+alter table public.fwd_updates enable row level security;

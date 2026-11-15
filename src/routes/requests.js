@@ -468,6 +468,13 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await SD.handleShipEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
       if (out.matched) return res.json({ ok: true, shipment: true, ...out });
     }
+    // Forwarder shipment updates: sent / CC'd to shipments@…, or replies in the quote thread once that forwarder is booked.
+    const FW = require('../forwarding');
+    const bookedCode = await FW.quoteIsBooked(db, subject, text).catch(() => null);
+    if (bookedCode || toList.some((x) => /^shipments@/i.test(x.trim()))) {
+      const out = await FW.handleFwdEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat(), quoteCode: bookedCode });
+      return res.json({ ok: true, forwarder: true, ...out });
+    }
     // Forwarder quotations: replies to our request for quotation carry LBQ-XXXXX in the subject.
     const QT = require('../quotes');
     if (toList.some((x) => /^quotes@/i.test(x.trim())) || QT.CODE_RE.test(subject)) {

@@ -11,6 +11,7 @@ const { guard } = require('./admin');
 const PL = require('../planning');
 const SC = require('../schedules');
 const SCR = require('./schedules');
+const FR = require('./forwarding');
 
 const BASE = '/admin/logistics/planning';
 const BOX = {
@@ -98,7 +99,7 @@ function loadPlanRoutes(router, { db, config }) {
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],
       })),
-      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
+      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
       states: Object.fromEntries(Object.entries(PL.STATE).map(([k, v]) => [k, { label: v.label, tag: v.tag }])),
     };
@@ -118,6 +119,7 @@ function loadPlanRoutes(router, { db, config }) {
 </aside>
           <div class="lp-main"><div data-lp-containers></div><div class="lp-tip" data-lp-tip hidden></div><button type="button" class="lp-add" data-lp-add>+ Add container</button></div>
         </div>
+        ${await FR.onTheWater(db, port)}
         <div class="lp-toast" data-lp-toast role="status" aria-live="polite"></div>
         <dialog class="rp-modal" data-lp-req aria-labelledby="lp-req-t"><form data-lp-req-form>
           <div class="rp-top"><h2 id="lp-req-t">Request quotations</h2><button type="button" class="icon-btn" data-lp-req-close aria-label="Close">×</button></div>

@@ -3201,3 +3201,99 @@ test('container planning map: lots by supplier & port, move lines between ports,
   const pg2 = await req(base, 'GET', '/admin/logistics/planning?view=map&by=w4', { cookie });
   assert.doesNotMatch(pg2.text, /Not on the map/);
 });
+
+test('forwarder shipment data: quote-thread booking, shipments@ shipping advice matched by house B/L, ETA change, unmatched → attach, PO page', async (t) => {
+  process.env.RESEND_API_KEY = 're_test'; process.env.MAILGUN_SIGNING_KEY = 'mg-key'; process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; const sent = []; let aiAnswer = null;
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response('{"id":"em_1"}', { status: 200 }); }
+    if (String(url).includes('api.anthropic.com')) return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_forwarder_update', input: aiAnswer }] }), { status: 200 });
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; for (const k of ['MAILGUN_SIGNING_KEY', 'RESEND_API_KEY', 'ANTHROPIC_API_KEY']) delete process.env[k]; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const crypto = require('node:crypto');
+  const post = (fields, files = []) => {
+    const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok' + Math.random();
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), ...fields })) fd.append(k, v);
+    for (const [n, buf, type] of files) fd.append('attachment-1', new Blob([buf], { type }), n);
+    return fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: fd }).then((r) => r.json());
+  };
+  const h = await db.insert('suppliers', { name: 'Huanger', email: 'sales@huanger.cn' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'requested', created_at: new Date().toISOString() });
+  await db.insert('plan_orders', { supplier_id: h.id, po: '800018', product: 'Teether', qty: 100, cbm: 12.2, port: 'CNYTN', container_id: c.id });
+  const C = () => db.tables.plan_containers.find((x) => x.id === c.id);
+  const q = await db.insert('plan_quotes', { container_id: c.id, code: 'LBQ-AB123', company: 'Sino Freight', to_email: 'ops@sino.com', status: 'replied' });
+
+  // a reply in the quote thread before booking is still a quote
+  aiAnswer = { doc_type: 'other', summary: 'x' };
+  // once chosen, a reply in the same thread is a shipment update: booking confirmation
+  await db.update('plan_quotes', { id: q.id }, { status: 'chosen' });
+  aiAnswer = { doc_type: 'booking_confirmation', forwarder: 'Sino Freight', booking_no: 'SF-77812', hbl_no: 'HKAL2611031A', vessel: 'CSCL Venus', voyage: '041E', pol: 'Yantian', pod: 'Long Beach', cfs_cutoff: '2026-11-13', etd: '2026-11-15', eta: '2026-11-30', summary: 'Booking confirmed.' };
+  const r1 = await post({ recipient: 'quotes@in.lulyboo.space', from: 'Sino <ops@sino.com>', subject: 'RE: LCL quotation [LBQ-AB123]', 'body-plain': 'Booking confirmed, see attached.' }, [['SO.pdf', Buffer.from('%PDF-1.4 so'), 'application/pdf']]);
+  assert.ok(r1.forwarder); assert.ok(r1.matched);
+  const u1 = db.tables.fwd_updates[0];
+  assert.equal(u1.container_id, c.id); assert.equal(u1.status, 'pending'); assert.match(u1.match_reason, /LBQ-AB123/); assert.equal(u1.files.length, 1);
+  assert.ok(sent.some((m) => /\[Forwarder update\] Booking confirmation/.test(m.subject)));
+  assert.equal(C().fwd, undefined);                                                             // nothing saved until accepted
+
+  // Shipping documents page shows it for review; accept → booked
+  const sp = (await req(base, 'GET', '/admin/orders/shipping', { cookie })).text;
+  assert.match(sp, /Forwarder updates/); assert.match(sp, /Booking confirmation/); assert.match(sp, /Matched to <b>Yantian · LCL shipment 1<\/b> by quote LBQ-AB123/); assert.match(sp, /HKAL2611031A[\s\S]*NEW/);
+  const acc = await req(base, 'POST', `/admin/orders/shipping/fwd/${u1.id}/accept`, { cookie, form: { v_hbl_no: 'HKAL2611031A', v_eta: '2026-11-30', back: '/admin/orders/shipping' } });
+  assert.equal(acc.status, 303);
+  assert.equal(C().status, 'booked'); assert.equal(C().fwd.hbl_no, 'HKAL2611031A'); assert.equal(C().fwd.vessel, 'CSCL Venus'); assert.equal(u1.status, 'accepted');
+
+  // shipping advice CC'd to shipments@ — matched by house B/L; ETA slips 4 days → notice; container shipped
+  aiAnswer = { doc_type: 'shipping_advice', hbl_no: 'hkal 2611031a', mbl_no: 'COSU6402718830', container_no: 'CSNU6184207', atd: '2026-11-16', eta: '2026-12-04', summary: 'Sailed Nov 16.' };
+  const r2 = await post({ recipient: 'shipments@in.lulyboo.space', from: 'ops@sino.com', subject: 'SHIPPING ADVICE HKAL2611031A', 'body-plain': 'Sailed.' });
+  assert.ok(r2.matched);
+  const u2 = db.tables.fwd_updates[1];
+  assert.match(u2.match_reason, /house B\/L HKAL2611031A/);
+  const n0 = sent.length;
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u2.id}/accept`, { cookie, form: { v_eta: '2026-12-04', back: '/admin/orders/shipping' } });
+  assert.equal(C().status, 'shipped'); assert.equal(C().container_no, 'CSNU6184207'); assert.equal(C().fwd.eta, '2026-12-04'); assert.equal(C().fwd.eta_prev, '2026-11-30');
+  assert.ok(db.tables.plan_orders.every((l) => l.container_id !== c.id || l.shipped));
+  assert.ok(sent.slice(n0).some((m) => /\[ETA moved\].*\+4 days/.test(m.subject)));
+
+  // PO page: forwarder box with facts, sources, track link and the drop strip; journey steps
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800018`, { cookie })).text;
+  assert.match(po, /Forwarder · Sino Freight/); assert.match(po, /COSU6402718830/); assert.match(po, /CSNU 6184207/); assert.match(po, /was Nov 30/);
+  assert.match(po, /track-trace\.com\/container\?number=CSNU6184207/); assert.match(po, /data-fwd-drop/);
+  assert.match(po, /Booking confirmation · [A-Z][a-z]{2} \d+/);
+
+  // Load containers: the shipped LCL shipment is listed "On the water"
+  const lp = (await req(base, 'GET', '/admin/logistics/planning/load?port=CNYTN', { cookie })).text;
+  assert.match(lp, /On the water/); assert.match(lp, /HBL HKAL2611031A/);
+
+  // an arrival notice nobody can match → Unmatched; attach it from the list
+  aiAnswer = { doc_type: 'arrival_notice', ata: '2026-12-04', summary: 'Cargo arrived Long Beach.' };
+  await post({ recipient: 'shipments@in.lulyboo.space', from: 'ops@sino.com', subject: 'Arrival notice', 'body-plain': 'Arrived.' });
+  const u3 = db.tables.fwd_updates[2];
+  assert.equal(u3.container_id, null);
+  assert.match((await req(base, 'GET', '/admin/orders/shipping', { cookie })).text, /Unmatched[\s\S]*Choose the container/);
+  const bad = await req(base, 'POST', `/admin/orders/shipping/fwd/${u3.id}/accept`, { cookie, form: { back: '/admin/orders/shipping' } });
+  assert.equal(bad.status, 303); assert.equal(u3.status, 'pending');
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u3.id}/accept`, { cookie, form: { container: c.id, v_ata: '2026-12-04', back: '/admin/orders/shipping' } });
+  assert.equal(u3.status, 'accepted'); assert.equal(C().fwd.ata, '2026-12-04');
+  const FW = require('../src/forwarding');
+  assert.equal(FW.stageOf(C().fwd), 'arrived');
+
+  // dropping a screenshot on the shipment creates an update for that shipment; detach → unmatched; dismiss
+  const fd = new FormData(); fd.append('back', `/admin/orders/view?supplier=${h.id}&po=800018`); fd.append('file', new Blob([Buffer.from('png')], { type: 'image/png' }), 'wechat.png');
+  aiAnswer = { doc_type: 'eta_update', eta: '2026-12-05', summary: 'New ETA.' };
+  const up = await fetch(`${base}/admin/orders/shipping/fwd/container/${c.id}`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  assert.equal(up.status, 303);
+  const u4 = db.tables.fwd_updates[3];
+  assert.equal(u4.container_id, c.id); assert.equal(u4.source, 'upload'); assert.match(up.headers.get('location'), new RegExp(`#fwd-${u4.id}$`));
+  const file = await fetch(`${base}/admin/orders/shipping/fwd/${u4.id}/files/0?inline=1`, { headers: { cookie } });
+  assert.equal(file.headers.get('x-frame-options'), 'SAMEORIGIN');
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u4.id}/detach`, { cookie, form: { back: '/admin/orders/shipping' } });
+  assert.equal(u4.container_id, null);
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u4.id}/dismiss`, { cookie, form: { back: '/admin/orders/shipping' } });
+  assert.equal(u4.status, 'dismissed');
+  assert.match((await req(base, 'GET', '/admin', { cookie })).text, /Shipping documents to review|Forwarder updates/);
+});

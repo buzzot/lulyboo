@@ -1276,6 +1276,14 @@
     return '<div class="lp-ld"><label>' + (lcl ? 'Delivery to CFS' : 'Loading date') + ' <input type="date" data-lp-ld="' + c.id + '" value="' + esc(c.loading || auto) + '"></label>' +
       '<span class="sub">' + (c.loading ? 'set by you' : sail ? 'ETD − 3 days' : 'choose a sailing or a date') + ' · each supplier is asked for shipping documents that day at 9:00 China time' + (c.containerNo ? ' · <b>' + esc(c.containerNo) + '</b>' : '') + '</span></div>';
   }
+  // forwarder data once booked: POL ──🚢── POD with ETA
+  function voyHTML(c) {
+    var f = c.fwd; if (!f || (!f.etd && !f.eta)) return '';
+    var a = Date.parse(f.etd), b = Date.parse(f.eta), t = Date.parse(D.today);
+    var pct = f.stage === 'arrived' ? 100 : f.stage === 'booked' || !a || !b ? 0 : Math.max(4, Math.min(96, Math.round((t - a) / Math.max(1, b - a) * 100)));
+    return '<div class="fw-voy"><b>' + esc(f.pol || D.portName) + '</b><span class="sub">' + esc(f.etdText) + '</span><div class="fw-bar"><i style="width:' + pct + '%"></i><em style="left:' + pct + '%">🚢</em></div><b>' + esc(f.pod || '—') + '</b><span class="sub fw-eta">' + (f.etaText ? 'ETA ' + esc(f.etaText) : '') + (f.etaPrev ? ' <s>' + esc(f.etaPrev) + '</s>' : '') + '</span></div>' +
+      '<div class="fw-src">' + [f.forwarder, f.hbl ? 'HBL ' + f.hbl : '', f.no, f.vessel].filter(Boolean).map(esc).join(' · ') + (f.track ? ' <a class="fw-track" href="' + esc(f.track) + '" target="_blank" rel="noopener">Track ↗</a>' : '') + '</div>';
+  }
   function footHTML(c, items, sail, canReq, why) {
     var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
     return ldHTML(c, sail) + '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + groupBy(items).length + ' PO' + (groupBy(items).length > 1 ? 's' : '') + '</b>' + (groupBy(items).length !== items.length ? ' (' + items.length + ' products)' : '') + ' · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
@@ -1310,7 +1318,7 @@
         (items.length ? '<div class="lp-piles">' + piles + '</div>' : '<div class="lp-dropmsg lp-lcldrop">Drop POs here</div>') + '</div>' +
       '<div class="lp-stats">' + stat(n2(u) + ' m³', 'Volume') + stat(allKg ? int(kg) + ' kg' : kg ? int(kg) + ' kg <i class="sub">+?</i>' : '—', 'Gross weight') + stat(ctn ? int(ctn) + (items.some(function (o) { return !o.cartons; }) ? ' <i class="sub">+?</i>' : '') : '—', 'Cartons') +
         stat(items.length ? n2(allKg ? wm : u) + ' W/M' : '—', 'Freight tons', items.length ? (allKg ? (u >= kg / 1000 ? 'charged by volume' : 'charged by weight') : 'weight missing — by volume so far') : 'the larger of m³ and tonnes') + '</div>' +
-      chipsHTML(items) + warns.join('') + quotesHTML(c) + footHTML(c, items, sail, items.length > 0, 'Load POs first') + '</section>';
+      chipsHTML(items) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length > 0, 'Load POs first') + '</section>';
   }
   function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
   function containerHTML(c, idx) {
@@ -1349,7 +1357,7 @@
         '<div class="lp-cut"><div class="lp-grid" style="background-size:' + cw + 'px ' + ch + 'px"></div>' + inside + (items.length ? '' : '<div class="lp-dropmsg">Drop POs here</div>') + '</div>' +
       '</div></div>' +
       '<div class="lp-fill"><div class="lp-track"><i class="' + lvl + '" style="width:' + Math.min(pct, 100) + '%"></i></div><div class="lp-fnum">' + n2(u) + ' / ' + t.cap + ' m³<small>' + Math.round(pct) + '% full · ' + n2(Math.max(0, t.cap - u)) + ' m³ left</small></div></div>' +
-      chipsHTML(items) + warns.join('') + quotesHTML(c) + footHTML(c, items, sail, items.length && !over, over ? 'Container is over capacity' : 'Load POs first') +
+      chipsHTML(items) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length && !over, over ? 'Container is over capacity' : 'Load POs first') +
       '</section>';
   }
   function render() {
@@ -2077,5 +2085,34 @@
         if (!j.ok) throw new Error(j.error || 'Could not send');
         note.textContent = '✓ Sent to ' + j.sent.join(', '); setTimeout(function () { location.hash = 'shipment'; location.reload(); }, 900);
       }).catch(function (x) { btn.disabled = false; note.textContent = x.message; });
+  });
+})();
+
+// Forwarder documents: drop, choose or paste (⌘V) a screenshot / PDF onto the shipment — it uploads and AI reads it.
+(function () {
+  var forms = document.querySelectorAll('[data-fwd-drop]'); if (!forms.length) return;
+  function send(form, files) {
+    var input = form.querySelector('[data-fwd-file]'), dt = new DataTransfer();
+    for (var i = 0; i < files.length; i++) dt.items.add(files[i]);
+    input.files = dt.files;
+    var z = form.querySelector('[data-fwd-zone]'); if (z) { z.classList.add('busy'); z.querySelector('span:nth-child(2)').textContent = 'Reading ' + files.length + ' file' + (files.length > 1 ? 's' : '') + '…'; }
+    if (form.requestSubmit) form.requestSubmit(); else form.submit();
+  }
+  function pasted(e) { var out = []; var items = (e.clipboardData && e.clipboardData.files) || []; for (var i = 0; i < items.length; i++) out.push(items[i]); return out; }
+  forms.forEach(function (form) {
+    var zone = form.querySelector('[data-fwd-zone]'), input = form.querySelector('[data-fwd-file]');
+    form.querySelector('[data-fwd-choose]').addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', function () { if (input.files.length) send(form, input.files); });
+    form.querySelector('[data-fwd-txtopen]').addEventListener('click', function () { var t = form.querySelector('[data-fwd-txt]'); t.hidden = !t.hidden; if (!t.hidden) t.querySelector('textarea').focus(); });
+    ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('over'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { zone.addEventListener(ev, function () { zone.classList.remove('over'); }); });
+    zone.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) send(form, e.dataTransfer.files); });
+    zone.addEventListener('paste', function (e) { var f = pasted(e); if (f.length) { e.preventDefault(); send(form, f); } });
+  });
+  // ⌘V anywhere on the page (outside fields) goes to the first drop strip when there is only one
+  if (forms.length === 1) document.addEventListener('paste', function (e) {
+    var t = e.target; if (t && (t.closest('input, textarea, [contenteditable]') || t.closest('[data-fwd-zone]'))) return;
+    var f = pasted(e); if (!f.length) return;
+    e.preventDefault(); send(forms[0], f);
   });
 })();
