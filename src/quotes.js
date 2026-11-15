@@ -195,6 +195,7 @@ async function handleQuoteEmail({ db, from, subject, text, files = [] }) {
     } catch (e) { patch.summary = `Could not read this reply automatically (${String(e.message).slice(0, 120)}). Open the original email below.`; }
   }
   await db.update('plan_quotes', { id: q.id }, patch);
+  await require('./rate-history').syncQuote(db, q.id);   // permanent copy for the rate history
   return { matched: true, quote: q.id, status: patch.status };
 }
 

@@ -45,27 +45,31 @@ function voyage(c, fwd = c?.fwd || {}) {
 async function fwdBox(db, containerId, back, { supplierBl = null } = {}) {
   const cs = await numbered(db);
   const c = cs[containerId]; if (!c) return '';
+  await FW.settle(db, [c]);
   const fwd = c.fwd || {};
   const { rows: waiting, missing } = await pending(db, { container_id: c.id });
   if (missing) return html`<p class="flash warn">Run the forwarder SQL in Supabase first (supabase/schema.sql, "Forwarder shipment data").</p>`;
   const has = FIELDS_SHOWN.some((k) => fwd[k]);
   const st = FW.stageOf(fwd);
   const fact = (label, v, small, cls = '') => html`<div class="fw-f ${cls}"><span>${label}</span><b>${v || raw('<i class="fw-none">—</i>')}</b>${small ? html`<small>${small}</small>` : ''}</div>`;
-  const blOk = supplierBl && fwd.hbl_no && supplierBl.replace(/\s/g, '').toUpperCase() === fwd.hbl_no;
+  // for LCL the supplier's B/L is normally the forwarder's house B/L: show it when the forwarder's update has none
+  const sBl = supplierBl ? String(supplierBl).replace(/\s/g, '').toUpperCase() : null;
+  const hbl = fwd.hbl_no || sBl;
+  const hblNote = !sBl ? '' : !fwd.hbl_no ? "from the supplier's B/L" : sBl === fwd.hbl_no ? "matches the supplier's B/L ✓" : `supplier's B/L: ${sBl} — different`;
   const docs = [...(fwd.docs || [])].reverse();
   const track = FW.trackUrl(fwd);
   return html`<div class="fw" id="forwarder">
     <div class="fw-h"><b>Forwarder${fwd.forwarder ? ` · ${fwd.forwarder}` : ''}</b><span class="sub">${fwd.updated_at ? `last update ${sd(fwd.updated_at)}` : 'no forwarder data yet'}</span></div>
     ${waiting.map((u) => reviewForm(u, cs, back))}
     ${has ? html`<div class="fw-facts">
-      ${fact('House B/L', fwd.hbl_no, blOk ? "matches the supplier's B/L ✓" : '')}
+      ${fact('House B/L', hbl, hblNote, fwd.hbl_no && sBl && sBl !== fwd.hbl_no ? 'chg' : '')}
       ${fact('Master B/L', fwd.mbl_no, fwd.booking_no ? `booking ${fwd.booking_no}` : '')}
       ${fact('Container', fmtCont(fwd.container_no || c.container_no), [fwd.container_type, c.box === 'LCL' ? 'shared' : ''].filter(Boolean).join(' · '))}
       ${fact('Vessel / voyage', [fwd.vessel, fwd.voyage].filter(Boolean).join(' '), '')}
-      ${fact('ETD', fwd.atd ? PL.short(fwd.atd) : fwd.etd ? PL.short(fwd.etd) : '', [fwd.pol, fwd.atd || st === 'on_water' || st === 'arrived' || st === 'arrived_due' ? 'sailed' : fwd.cfs_cutoff ? `cut-off ${PL.short(fwd.cfs_cutoff)}` : ''].filter(Boolean).join(' · '))}
+      ${fact(st === 'booked' || !st ? 'ETD' : 'Sailed', fwd.atd ? PL.short(fwd.atd) : fwd.etd ? PL.short(fwd.etd) : '', [fwd.pol, st === 'booked' && fwd.cfs_cutoff ? `cut-off ${PL.short(fwd.cfs_cutoff)}` : ''].filter(Boolean).join(' · '))}
       ${fact('ETA', fwd.eta ? PL.short(fwd.eta) : '', fwd.eta_prev ? `was ${PL.short(fwd.eta_prev)} · updated ${sd(fwd.eta_changed_at)}` : '', `hl${fwd.eta_prev ? ' chg' : ''}`)}
       ${fact('Discharge', fwd.pod, '')}
-      ${fact('Arrival', fwd.ata ? PL.short(fwd.ata) : fwd.arrived ? 'notice received' : '', !fwd.ata && !fwd.arrived && fwd.eta ? `expected ~${PL.short(PL.addDays(fwd.eta, -2))}` : '')}
+      ${fact('Arrival', fwd.ata ? PL.short(fwd.ata) : fwd.arrived ? 'notice received' : '', '')}
     </div>
     ${voyage(c, fwd)}` : ''}
     ${docs.length || track ? html`<div class="fw-src">${docs.length ? 'Sources:' : ''} ${docs.map((d) => html`<span class="fw-chip">${FW.DOC_TYPES[d.type] || 'Document'} · ${sd(d.at)}</span>`)}${track ? html`<a href="${track}" target="_blank" rel="noopener" class="fw-track">Track ${fwd.container_no ? 'container' : 'B/L'} ↗</a>` : ''}</div>` : ''}

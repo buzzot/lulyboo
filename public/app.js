@@ -1232,7 +1232,7 @@
     var priced = qs.filter(function (q) { return q.total != null && q.status !== 'declined'; });
     var best = priced.length ? Math.min.apply(null, priced.map(function (q) { return q.total; })) : null;
     var replied = qs.filter(function (q) { return q.status !== 'sent'; }).length;
-    return '<div class="lp-q"><div class="lp-qh"><h3>Quotes <span class="sub">' + replied + ' of ' + qs.length + ' replied</span></h3></div>' +
+    return '<div class="lp-q"><div class="lp-qh"><h3>Quotes <span class="sub">' + replied + ' of ' + qs.length + ' replied</span></h3>' + (priced.length ? '<a class="lp-rh" href="/admin/logistics/rates">Prices kept in Rate history</a>' : '') + '</div>' +
       '<div class="table-wrap"><table class="list lp-qt"><thead><tr><th>Forwarder</th><th class="r">All-in USD</th><th>Carrier</th><th>ETD</th><th>ETA</th><th class="r">Transit</th><th>Valid until</th><th class="r">Free days</th><th>Status</th><th></th></tr></thead><tbody>' +
       qs.map(function (q) {
         var st = QST[q.status] || [q.status, 'plan'], isBest = best != null && q.total === best && priced.length > 1;

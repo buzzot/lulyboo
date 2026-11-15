@@ -3297,3 +3297,65 @@ test('forwarder shipment data: quote-thread booking, shipments@ shipping advice 
   assert.equal(u4.status, 'dismissed');
   assert.match((await req(base, 'GET', '/admin', { cookie })).text, /Shipping documents to review|Forwarder updates/);
 });
+
+test('rate history: priced quotes are copied, kept after the container is deleted, compared per lane and type, LCL per W/M', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Huanger' });
+  const RH = require('../src/rate-history');
+  const c1 = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'requested', created_at: '2026-11-01T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: h.id, po: '1', port: 'CNYTN', cbm: 30, gross_kg: 4000, container_id: c1.id });
+  const mk = (cid, company, total, extra = {}) => db.insert('plan_quotes', { container_id: cid, code: `LBQ-${company.slice(0, 5).toUpperCase()}`, company, status: 'replied', total_usd: total, ocean_usd: total ? total - 400 : null, sent_at: '2026-11-12T00:00:00Z', replied_at: '2026-11-12T05:00:00Z', transit_days: 27, ...extra });
+  const a = await mk(c1.id, 'Sino Freight', 2390); await mk(c1.id, 'Topocean', 2520); await mk(c1.id, 'Dimerco', null, { status: 'sent', replied_at: null });
+  const c2 = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'requested', created_at: '2026-11-02T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: h.id, po: '2', port: 'CNYTN', cbm: 12.2, gross_kg: 1182, container_id: c2.id });
+  await mk(c2.id, 'Sino LCL', 905);
+
+  // older quotes are copied once when the page opens (priced only)
+  const pg = await req(base, 'GET', '/admin/logistics/rates', { cookie });
+  assert.equal(pg.status, 200);
+  assert.equal(db.tables.freight_quotes.length, 3);
+  assert.match(pg.text, /Yantian → Los Angeles \/ Long Beach/); assert.match(pg.text, /Same request, side by side/); assert.match(pg.text, /Forwarders on this lane/);
+  assert.match(pg.text, /\$2,390[\s\S]*\$2,520/);
+  const lcl = db.tables.freight_quotes.find((r) => r.box === 'LCL');
+  assert.equal(lcl.wm, 12.2); assert.equal(lcl.per_wm, 74.18); assert.equal(lcl.reply_hours, 5);
+  assert.match((await req(base, 'GET', '/admin/logistics/rates?lane=CNYTN%3ELALB&box=LCL', { cookie })).text, /\$74 \/W\/M/);
+
+  // choosing updates the copy; deleting the container keeps the history
+  await req(base, 'POST', `/admin/logistics/planning/quotes/${a.id}/choose`, { cookie, form: {} });
+  assert.equal(db.tables.freight_quotes.find((r) => r.quote_id === a.id).chosen, true);
+  await req(base, 'POST', `/admin/logistics/planning/containers/${c1.id}/delete`, { cookie, form: {} });
+  db.tables.plan_quotes = db.tables.plan_quotes.filter((q) => q.container_id !== c1.id);   // cascade
+  const after = await req(base, 'GET', '/admin/logistics/rates', { cookie });
+  assert.match(after.text, /Sino Freight[\s\S]*Chosen/);
+  assert.equal(db.tables.freight_quotes.filter((r) => r.box === '40HQ').length, 2);
+
+  // forwarder stats: cheapest in the same request, won
+  const st = RH.forwarderStats(db.tables.freight_quotes.filter((r) => r.box === '40HQ'));
+  assert.deepEqual(st.map((s) => [s.company, s.cheapest, s.won]), [['Sino Freight', 1, 1], ['Topocean', 0, 0]]);
+
+  // leave out of the comparison; CSV export
+  const tp = db.tables.freight_quotes.find((r) => r.company === 'Topocean');
+  await req(base, 'POST', `/admin/logistics/rates/${tp.id}/exclude`, { cookie, form: { excluded: '1' } });
+  assert.equal(tp.excluded, true);
+  const csv = await req(base, 'GET', '/admin/logistics/rates/export.csv', { cookie });
+  assert.match(csv.text, /Quoted,Forwarder,From,To,Type/); assert.match(csv.text, /Topocean,CNYTN,Los Angeles \/ Long Beach,40HQ,30/);
+});
+
+test('forwarder: a shipping advice before the ETD is not "sailed" yet; supplier B/L fills the house B/L', async () => {
+  const FW = require('../src/forwarding');
+  const day = '2026-11-15';
+  assert.equal(FW.stageOf({ sailed: true, etd: '2026-11-18', eta: '2026-12-01' }, day), 'booked');
+  assert.equal(FW.stageOf({ sailed: true, etd: '2026-11-18', eta: '2026-12-01' }, '2026-11-18'), 'on_water');
+  const db = seedDb();
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', fwd: { forwarder: 'Affinity', booking_no: 'YN0013', sailed: true, etd: PL_add(3), eta: PL_add(16), pod: 'Los Angeles' } });
+  await db.insert('plan_orders', { supplier_id: 's', po: '800018', port: 'CNYTN', container_id: c.id, shipped: true });
+  const FR = require('../src/routes/forwarding');
+  const box = String(await FR.fwdBox(db, c.id, '/x', { supplierBl: 'HKAL2611031A' }));
+  assert.match(box, /HKAL2611031A[\s\S]*from the supplier&#39;s B\/L|HKAL2611031A[\s\S]*from the supplier's B\/L/);
+  assert.match(box, /<span>ETD<\/span>/);
+  assert.equal(db.tables.plan_containers[0].status, 'booked'); assert.equal(db.tables.plan_orders[0].shipped, false);
+});
+function PL_add(n) { return new Date(Date.now() + n * 864e5).toISOString().slice(0, 10); }

@@ -12,6 +12,7 @@ const PL = require('../planning');
 const SC = require('../schedules');
 const SCR = require('./schedules');
 const FR = require('./forwarding');
+const RH = require('../rate-history');
 
 const BASE = '/admin/logistics/planning';
 const BOX = {
@@ -71,6 +72,7 @@ function loadPlanRoutes(router, { db, config }) {
     const supIds = [...new Set(lines.map((l) => l.supplier_id))];
     const sups = Object.fromEntries((await Promise.all(supIds.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
     const numbered = containers.filter((c) => c.port === port).map((c, i) => ({ ...c, no: i + 1 }));
+    await require('../forwarding').settle(db, numbered.filter((c) => c.port === port));
     const portCs = numbered.filter((c) => c.status !== 'shipped');
     const cIds = new Set(portCs.map((c) => c.id));
     const here = lines.filter((l) => l.port === port);
@@ -182,6 +184,7 @@ function loadPlanRoutes(router, { db, config }) {
 
   router.post(`${BASE}/containers/:id/delete`, json(async (req) => {
     const c = await getContainer(req.params.id);
+    await RH.syncContainer(db, c.id);   // keep its priced quotes in the rate history
     await db.update('plan_orders', { container_id: c.id }, { container_id: null, updated_at: now() });
     await db.remove('plan_containers', { id: c.id });
     return {};
@@ -268,6 +271,7 @@ function loadPlanRoutes(router, { db, config }) {
     if (['sent', 'replied', 'declined', 'chosen'].includes(f.status)) patch.status = f.status;
     if (patch.status === 'chosen') await chooseOnly(q);
     await db.update('plan_quotes', { id: q.id }, patch);
+    await RH.syncContainer(db, q.container_id);
     return {};
   }));
   async function chooseOnly(q) {
@@ -280,6 +284,7 @@ function loadPlanRoutes(router, { db, config }) {
     const patch = { updated_at: now() };
     if (q.etd) { const s = (await db.list('sailings', { filters: { origin: (await getContainer(q.container_id)).port, etd: q.etd } }).catch(() => [])).find((x) => !q.carrier || String(x.carrier).toLowerCase().includes(String(q.carrier).toLowerCase().split(' ')[0])); if (s) patch.sailing_id = s.id; }
     await db.update('plan_containers', { id: q.container_id }, patch);
+    await RH.syncContainer(db, q.container_id);
     return { sailing: patch.sailing_id || null };
   }));
   router.get(`${BASE}/quotes/:id/files/:idx`, G(async (req, res) => {
