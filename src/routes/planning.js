@@ -551,8 +551,15 @@ function planningRoutes(router, { db, config }) {
   router.get(`${BASE}/files/:id`, G(async (req, res) => {
     const f = await db.get('plan_files', req.params.id); if (!f) throw new HttpError(404, 'Document not found');
     const buf = await db.docs.download(f.path);
-    const inline = req.query.inline === '1' && /^(image\/|application\/pdf)/.test(f.content_type || '');
-    res.writeHead(200, { 'Content-Type': f.content_type || 'application/octet-stream', 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+    // email attachments often arrive as application/octet-stream: fall back to the file name
+    const EXT = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+    const ext = (String(f.name || '').toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1];
+    const type = !f.content_type || /octet-stream|binary/i.test(f.content_type) ? EXT[ext] || 'application/octet-stream' : f.content_type;
+    const inline = req.query.inline === '1' && /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(type);
+    const head = { 'Content-Type': type, 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
+    // the preview window shows it in a frame on our own page (the site default forbids framing)
+    if (inline) Object.assign(head, { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': type === 'application/pdf' ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'" });
+    res.writeHead(200, head);
     res.end(buf);
   }));
   router.post(`${BASE}/files/:id/delete`, G(async (req, res) => {
