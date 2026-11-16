@@ -162,7 +162,8 @@ module.exports = function orderRoutes(router, { db, config }) {
             const ship = docs.filter(isShip); const order = docs.filter((f) => !isShip(f));
             const day = (f) => PL.short(String(f.created_at || '').slice(0, 10));
             const row = (f) => html`<div class="dc-row"><span class="cp-ficon ${icon(f).toLowerCase()}">${icon(f)}</span>
-              <span class="dc-nc"><a class="dc-nm" href="/admin/logistics/planning/files/${f.id}?inline=1" title="${f.name}" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}>${f.name}</a><span class="dc-tg">${f.kind || 'Document'}</span>${(f.pos || []).length > 1 ? html`<span class="sub dc-also">also ${f.pos.filter((x) => PL.normPo(x) !== PL.normPo(poQ)).slice(0, 4).join(', ')}</span>` : ''}</span>
+              <span class="dc-nc"><a class="dc-nm" href="/admin/logistics/planning/files/${f.id}?inline=1" title="${f.name}" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}>${f.name}</a>${(f.pos || []).length > 1 ? html`<span class="sub dc-also">also ${f.pos.filter((x) => PL.normPo(x) !== PL.normPo(poQ)).slice(0, 4).join(', ')}</span>` : ''}</span>
+              <span><span class="dc-tg">${f.kind || 'Document'}</span></span>
               <span class="dc-d">${day(f)}</span><span class="dc-d">${f.size ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
               <a class="dc-dl" href="/admin/logistics/planning/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a></div>`;
             const shipDays = [...new Set(ship.map(day))];
