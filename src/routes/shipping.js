@@ -123,7 +123,7 @@ async function shipmentSection(db, supplier, po, back) {
   if (!rows.length) {
     if (!lines.length) return '';
     const shipped = lines.every((l) => l.shipped); const inC = lines.some((l) => l.container_id);
-    return html`<section class="card sd-none" id="shipment"><div class="head-row"><h2>Shipment</h2></div>
+    return html`<section class="card sd-none" id="shipment"><div class="head-row"><h2>Shipping documents</h2></div>
       <p class="muted">${shipped ? 'This PO is shipped, but no shipping documents were requested.' : inC ? 'The request for shipping documents goes out automatically on the container’s loading date.' : 'Plan this PO into a container to request shipping documents automatically on the loading date — or ask now.'}</p>
       <form method="post" action="${BASE}/request" data-sd-open data-kind="request" data-supplier="${supplier.id}" data-po="${po}"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${po}"><input type="hidden" name="back" value="${back}"><button class="btn ${shipped ? '' : 'ghost'} small">Request shipping documents now</button></form>
       ${inC && lines.find((l) => l.container_id) ? await (async () => { const cid = lines.find((l) => l.container_id).container_id; const c = await db.get('plan_containers', cid).catch(() => null); return c && c.status !== 'planned' ? FR.fwdBox(db, cid, back) : ''; })() : ''}</section>${sendDialog()}`;
@@ -142,6 +142,7 @@ async function shipmentSection(db, supplier, po, back) {
     const nx = plan(sc, list, cday);
     const others = (sc.pos || []).filter((p) => PL.normPo(p) !== PL.normPo(po));
     const extra = mine.filter((f) => !SD.required(sc).some(([k]) => k === f.kind));
+    const rmBtn = (f) => html`<form method="post" action="${BASE}/${sc.id}/files/${f.id}/remove" class="inline sd-rm" data-confirm="${`Remove ${f.name}? It's deleted from the portal — use this for logos and wrong files.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Remove this file" aria-label="${`Remove ${f.name}`}">×</button></form>`;
     const fileLink = (f) => html`<a href="/admin/logistics/planning/files/${f.id}?inline=1" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="/admin/logistics/planning/files/${f.id}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="/admin/logistics/planning/files/${f.id}"`) : raw('target="_blank" rel="noopener"')}>${f.name}</a>`;
     const hasFacts = (sc.planned || []).length && (facts.lines || []).length || facts.cbm || facts.cartons;
     const how = (f) => (/^Email from/.test(f.uploaded_by || '') ? 'by email' : f.uploaded_by ? 'added by you' : '');
@@ -151,11 +152,11 @@ async function shipmentSection(db, supplier, po, back) {
     const full = html`
       <div class="sd-grid">
         <div>
-          <h3 class="sd-h">Shipping documents <span class="sub">${sc.mode || 'standard'} checklist</span></h3>
+          <h3 class="sd-h">Checklist <span class="sub">${sc.mode || 'standard'}</span></h3>
           <ul class="sd-docs">${list.filter((x) => x.key !== 'confirm').map((x) => { const fs = mine.filter((f) => f.kind === x.key); const tg = DOCTAG[x.state]; return html`<li><span class="sd-ic ${fs.length ? fileIcon(fs[0]).toLowerCase() : 'miss'}">${fs.length ? fileIcon(fs[0]) : SHORT[x.key] || '+'}</span>
-            <div class="sd-dm"><b>${x.label}${x.state === 'opt' || (fs.length && SD.required(sc).find((r) => r[0] === x.key)?.[3]) ? html` <span class="sd-opt">optional · not chased</span>` : ''}</b>${fs.length ? html`<div class="sub">${fs.map((f, i) => html`${i ? ' · ' : ''}${fileLink(f)}`)} · ${[how(fs[0]), sd(fs[0].created_at)].filter(Boolean).join(' ')}</div>` : html`<div class="sub">${x.state === 'later' ? `expected after sailing — asked for from ${PL.short(x.from)}` : x.state === 'opt' ? 'asked for once' : 'not received yet'}</div>`}</div>
+            <div class="sd-dm"><b>${x.label}${x.state === 'opt' || (fs.length && SD.required(sc).find((r) => r[0] === x.key)?.[3]) ? html` <span class="sd-opt">optional · not chased</span>` : ''}</b>${fs.length ? html`<div class="sub">${fs.map((f, i) => html`${i ? ' · ' : ''}${fileLink(f)}${rmBtn(f)}`)} · ${[how(fs[0]), sd(fs[0].created_at)].filter(Boolean).join(' ')}</div>` : html`<div class="sub">${x.state === 'later' ? `expected after sailing — asked for from ${PL.short(x.from)}` : x.state === 'opt' ? 'asked for once' : 'not received yet'}</div>`}</div>
             <span class="cp-tag ${tg[0]}">${tg[1]}</span></li>`; })}
-            ${extra.map((f) => html`<li><span class="sd-ic ${fileIcon(f).toLowerCase()}">${fileIcon(f)}</span><div class="sd-dm"><b>${f.kind || 'Other'}</b><div class="sub">${fileLink(f)} · ${[how(f), sd(f.created_at)].filter(Boolean).join(' ')}</div></div><span class="cp-tag ok">Received</span></li>`)}</ul>
+            ${extra.map((f) => html`<li><span class="sd-ic ${fileIcon(f).toLowerCase()}">${fileIcon(f)}</span><div class="sd-dm"><b>${f.kind || 'Other'}</b><div class="sub">${fileLink(f)}${rmBtn(f)} · ${[how(f), sd(f.created_at)].filter(Boolean).join(' ')}</div></div><span class="cp-tag ok">Received</span></li>`)}</ul>
           <details class="sd-add"><summary>Got a document another way (WeChat, forwarder)? <b>Add file</b></summary>
           <form method="post" action="${BASE}/${sc.id}/upload" enctype="multipart/form-data" data-busy class="sd-up">
             <input type="hidden" name="back" value="${back}">
@@ -178,8 +179,8 @@ async function shipmentSection(db, supplier, po, back) {
             <input type="hidden" name="back" value="${back}">
             <div class="sd-ai-h"><b>${sc.status === 'complete' ? 'Actual figures' : 'Read from the documents'}</b><span class="sub">${sc.status === 'complete' ? `accepted ${sd(sc.accepted_at)}` : 'check, then accept'}</span></div>
             <div class="sd-facts">
-              ${sc.mode !== 'LCL' ? html`<label><span>Container</span><input name="container_no" value="${facts.container_no || sc.container_no || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label><label><span>Seal</span><input name="seal_no" value="${facts.seal_no || sc.seal_no || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label>` : ''}
-              <label><span>B/L no.</span><input name="bl_no" value="${facts.bl_no || sc.bl_no || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label>
+              ${sc.mode !== 'LCL' ? html`<label><span>Container</span><input name="container_no" value="${SD.cleanNo(facts.container_no || sc.container_no) || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label><label><span>Seal</span><input name="seal_no" value="${SD.cleanNo(facts.seal_no || sc.seal_no) || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label>` : ''}
+              <label><span>B/L no.</span><input name="bl_no" value="${SD.cleanNo(facts.bl_no || sc.bl_no) || ''}" placeholder="—" ${sc.status === 'complete' ? raw('readonly') : ''}></label>
               <label><span>${sc.mode === 'LCL' ? 'Delivered' : 'Loaded'}</span><input type="date" name="loaded_on" value="${facts.loaded_on || sc.loaded_on || ''}" ${sc.status === 'complete' ? raw('readonly') : ''}></label></div>
             <table class="sd-cmp"><thead><tr><th></th><th>Planned</th><th>Actual</th><th>Diff</th></tr></thead>
               <tbody>${cmp.rows.map((r) => html`<tr><td>${r.label}</td><td>${r.p}</td><td>${r.a}</td><td class="${r.diff.c}">${r.diff.t}</td></tr>`)}</tbody></table>
@@ -198,9 +199,9 @@ async function shipmentSection(db, supplier, po, back) {
     const reqN = SD.required(sc).filter((r) => !r[3]).length; const haveN = list.filter((x) => x.key !== 'confirm' && x.state === 'have' && !SD.required(sc).find((r) => r[0] === x.key)?.[3]).length;
     const volDiff = cmp.rows.find((r) => r.label === 'Volume');
     cards.push(html`<section class="card sd-card ${done ? 'sd-done' : ''}" id="${rows.length > 1 ? `shipment-${sc.code}` : 'shipment'}">
-      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2>${(() => { const c = cs[sc.container_id]; const fs = c?.fwd ? FW.stageOf(c.fwd) : null; return fs && fs !== 'booked' ? html`<span class="cp-tag ${fs === 'arrived' ? 'ok' : 'plan'}">${FW.stageLabel(fs)}${c.fwd.eta && fs !== 'arrived' ? ` · ETA ${PL.short(c.fwd.eta)}` : ''}</span>` : html`<span class="cp-tag ${st.tag}">${st.label}</span>`; })()}</div>
+      <div class="head-row"><h2>Shipping documents <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2><span class="cp-tag ${st.tag}" title="${done ? 'The supplier sent every required document and you accepted the figures. Where the goods are now: Orders → Shipments.' : ''}">${done ? 'Docs complete' : st.label}</span></div>
       ${dupOf ? html`<div class="sd-dup"><span><b>Duplicate request.</b> ${dupOf.code} for this PO ${dupOf.status === 'complete' ? `is already complete${sd(dupOf.accepted_at || dupOf.confirmed_at || dupOf.received_at) ? ` (documents in ${sd(dupOf.accepted_at || dupOf.confirmed_at || dupOf.received_at)})` : ''}` : 'was made earlier'} — this one asks the supplier again.</span><form method="post" action="${BASE}/${sc.id}/merge" class="inline"><input type="hidden" name="into" value="${dupOf.id}"><input type="hidden" name="back" value="${back}"><button class="btn small">Merge into ${dupOf.code}</button></form></div>` : ''}
-      ${done ? html`<div class="sd-line"><span class="sd-line-i">✓</span><span>Documents <b>${haveN}/${reqN}</b> · accepted ${sd(sc.accepted_at)}${sc.bl_no || facts.bl_no ? html` · B/L <b>${sc.bl_no || facts.bl_no}</b>` : ''}${facts.container_no || sc.container_no ? html` · container <b>${facts.container_no || sc.container_no}</b>` : ''}${volDiff && volDiff.diff.c && /\d/.test(volDiff.diff.t) ? html` · volume <span class="${volDiff.diff.c}">${volDiff.diff.t}</span> vs plan` : ''}</span></div>
+      ${done ? html`<div class="sd-line"><span class="sd-line-i">✓</span><span>Documents <b>${haveN}/${reqN}</b> · accepted ${sd(sc.accepted_at)}${SD.cleanNo(sc.bl_no || facts.bl_no) ? html` · B/L <b>${SD.cleanNo(sc.bl_no || facts.bl_no)}</b>` : ''}${SD.cleanNo(facts.container_no || sc.container_no) ? html` · container <b>${SD.cleanNo(facts.container_no || sc.container_no)}</b>` : ''}${volDiff && volDiff.diff.c && /\d/.test(volDiff.diff.t) ? html` · volume <span class="${volDiff.diff.c}">${volDiff.diff.t}</span> vs plan` : ''}</span></div>
         ${sc.container_id && cs[sc.container_id] && cs[sc.container_id].status !== 'planned' ? await FR.fwdBox(db, sc.container_id, back, { supplierBl: (sc.facts || {}).bl_no || sc.bl_no }) : ''}
         <details class="sd-more"><summary>Show details — documents, figures and follow-ups</summary>${full}</details>`
       : html`${steps(sc, list, mine.length, cs[sc.container_id])}
@@ -376,6 +377,18 @@ module.exports = function shippingRoutes(router, { db, config }) {
     const sc = await getSc(req.params.id); const { fields: f } = await parseForm(req);
     await db.update('ship_confirmations', { id: sc.id }, { status: 'cancelled', log: [...(sc.log || []), { at: new Date().toISOString(), text: `Stopped by ${by(req)}` }], updated_at: new Date().toISOString() });
     flash(res, 'ok', 'Request stopped'); res.redirect(backTo(f, sc));
+  }));
+  router.post(`${BASE}/:id/files/:fid/remove`, G(async (req, res) => {
+    const sc = await getSc(req.params.id); const { fields: f } = await parseForm(req);
+    const file = await db.get('plan_files', req.params.fid).catch(() => null);
+    if (!file || file.shipment_id !== sc.id) throw new HttpError(404, 'File not found');
+    await db.docs.remove([file.path]).catch(() => null);
+    await db.remove('plan_files', { id: file.id });
+    // the checklist may now miss that document again
+    const nsc = await getSc(sc.id); const { sailing } = await SD.factsOf(db, nsc);
+    const missing = SD.missingKinds(SD.checklistOf(nsc, await SD.filesOf(db, nsc), sailing, SD.chinaNow().day));
+    await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(sc.log || []), { at: new Date().toISOString(), text: `Removed ${file.name} (${by(req)})` }].slice(-60), updated_at: new Date().toISOString() });
+    flash(res, 'ok', `Removed ${file.name}`); res.redirect(backTo(f, sc));
   }));
   router.post(`${BASE}/:id/merge`, G(async (req, res) => {
     const dup = await getSc(req.params.id); const { fields: f } = await parseForm(req);

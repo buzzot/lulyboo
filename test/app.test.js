@@ -3678,3 +3678,24 @@ test('one shipping-document request per PO: adopted by the container, duplicates
   assert.equal(SD.isSignatureImage({ name: 'tiny.png', type: 'image/png', buffer: Buffer.alloc(4000) }), true);
   assert.equal(SD.isSignatureImage({ name: 'PL.pdf', type: 'application/pdf', buffer: Buffer.alloc(100) }), false);
 });
+
+test('shipping documents card: "Docs complete" label, placeholder numbers hidden, a wrong file can be removed', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const SD = require('../src/shipdocs');
+  assert.equal(SD.cleanNo('<UNKNOWN>'), null); assert.equal(SD.cleanNo('N/A'), null); assert.equal(SD.cleanNo('TBA'), null); assert.equal(SD.cleanNo('szpl ax6901410v'), 'SZPLAX6901410V');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether ball', qty: 8028, cartons: 223, cbm: 10.15 });
+  const sc = await db.insert('ship_confirmations', { code: 'LBS-LTRH3', token: 't', supplier_id: s.id, pos: ['800018'], mode: 'LCL', status: 'complete', accepted_at: '2026-11-15T00:00:00Z', bl_no: 'HKAL2611031A', container_no: '<UNKNOWN>', facts: { container_no: '<UNKNOWN>', bl_no: 'HKAL2611031A' }, missing: [], log: [] });
+  const logo = await db.insert('plan_files', { supplier_id: s.id, name: 'huanger logo.jpg', size: 9000, content_type: 'image/jpeg', kind: 'Loading photos', pos: ['800018'], shipment_id: sc.id, path: 'x/logo.jpg' });
+  let pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
+  assert.match(pg, /Docs complete/); assert.match(pg, /<h2>Shipping documents/);
+  assert.doesNotMatch(pg, /UNKNOWN/); assert.match(pg, /B\/L <b>HKAL2611031A/);
+  assert.match(pg, new RegExp(`/files/${logo.id}/remove`));
+  const r = await req(base, 'POST', `/admin/orders/shipping/${sc.id}/files/${logo.id}/remove`, { cookie, form: {} });
+  assert.equal(r.status, 303);
+  assert.ok(!db.tables.plan_files.some((x) => x.id === logo.id));
+  assert.match(db.tables.ship_confirmations[0].log.at(-1).text, /Removed huanger logo\.jpg/);
+});

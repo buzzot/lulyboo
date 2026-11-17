@@ -349,7 +349,9 @@ async function readDocs({ text = '', files = [], planned = [] }) {
   return result || {};
 }
 
-const cleanNo = (v, n = 40) => (v ? String(v).replace(/\s+/g, '').toUpperCase().slice(0, n) : null);
+// placeholders suppliers type when there is no number yet (LCL: no own container) are not numbers
+const PLACEHOLDER = /^[<\[(]*\s*(unknown|n\/?a|na|tbd|tba|tbc|none|nil|null|pending|later|to be (advised|confirmed)|-+|\?+|x+)\s*[>\])]*$/i;
+const cleanNo = (v, n = 40) => (v && !PLACEHOLDER.test(String(v).trim()) ? String(v).replace(/\s+/g, '').toUpperCase().slice(0, n) : null);
 /** Normalised AI / form output → stored facts. */
 function factsFrom(r) {
   const lines = (Array.isArray(r.lines) ? r.lines : []).slice(0, 60).map((l) => ({ po: l.po ? String(l.po).slice(0, 40) : '', product: l.product ? String(l.product).slice(0, 160) : '', qty: num(l.qty), cartons: num(l.cartons), gross_kg: num(l.gross_kg), cbm: num(l.cbm), carton: [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].every((x) => Number(x) > 0) ? [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].map(Number) : null, units_per_carton: num(l.units_per_carton), carton_gw_kg: num(l.carton_gw_kg) }));
@@ -464,6 +466,7 @@ function matchLines(planned = [], facts = {}) {
 /** Accept the actual figures: PO lines get them, the container its number, products their packing; stats kept. */
 async function accept(db, sc, { values = {}, updateProducts = false, by = null } = {}) {
   const facts = { ...(sc.facts || {}), ...Object.fromEntries(Object.entries(values).filter(([k]) => ['container_no', 'seal_no', 'bl_no', 'loaded_on'].includes(k))) };
+  for (const k of ['container_no', 'seal_no', 'bl_no']) facts[k] = cleanNo(facts[k]);
   const pairs = matchLines(sc.planned || [], facts);
   const now = new Date().toISOString();
   const forCatalog = [];
@@ -521,4 +524,4 @@ function supplierStats(rows) {
   return Object.fromEntries(Object.entries(by).map(([k, s]) => [k, { n: s.n, days: avg(s.days), vol: avg(s.vol), kg: s.kg, cbm: s.cbm }]));
 }
 
-module.exports = { mergeInto, adopt, isSignatureImage, MODES, REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };
+module.exports = { cleanNo, mergeInto, adopt, isSignatureImage, MODES, REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };

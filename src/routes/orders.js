@@ -177,7 +177,7 @@ module.exports = function orderRoutes(router, { db, config }) {
               <a class="dc-dl" href="/admin/logistics/planning/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a></div>`;
             const shipDays = [...new Set(ship.map(day))];
             return html`${order.length && ship.length ? html`<div class="dc-grp">Order</div>` : ''}${order.map(row)}
-              ${ship.length ? (order.length ? html`<details class="dc-ship"><summary class="dc-grp">Shipping documents (${ship.length})${shipDays.length === 1 ? ` · ${shipDays[0]}` : ''}${shipSection && ship.some((f) => f.shipment_id) ? html` <span class="sub">— also in Shipment above</span>` : ''}</summary>${ship.map(row)}</details>` : html`<div class="dc-grp">Shipping documents${shipDays.length === 1 ? ` · ${shipDays[0]}` : ''}</div>${ship.map(row)}`) : ''}`;
+              ${ship.length ? (order.length ? html`<details class="dc-ship"><summary class="dc-grp">Shipping documents (${ship.length})${shipDays.length === 1 ? ` · ${shipDays[0]}` : ''}${shipSection && ship.some((f) => f.shipment_id) ? html` <span class="sub">— also in Shipping documents above</span>` : ''}</summary>${ship.map(row)}</details>` : html`<div class="dc-grp">Shipping documents${shipDays.length === 1 ? ` · ${shipDays[0]}` : ''}</div>${ship.map(row)}`) : ''}`;
           })()}</div>` : ''}
           <form method="post" action="/admin/logistics/planning/files" enctype="multipart/form-data" data-busy class="dc-up">
             <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="pos" value="${poQ}"><input type="hidden" name="back" value="${back}">

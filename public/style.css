@@ -2715,3 +2715,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .cp-stage{font-size:12px;vertical-align:middle;text-decoration:none;margin-left:4px}
 .fw.fw-one{display:flex;align-items:center;gap:14px;padding:8px 12px;flex-wrap:wrap}
 .fw.fw-one .fw-h{margin:0;flex:0 0 auto}.fw.fw-one .fw-drop{margin:0;flex:1 1 320px}.fw.fw-one .fw-dz{padding:6px 10px}
+.sd-rm{margin-left:4px}.sd-rm .icon-btn{width:18px;height:18px;font-size:13px;line-height:1;opacity:.45;border:0;background:none}.sd-rm .icon-btn:hover{opacity:1}
