@@ -1697,7 +1697,7 @@
       if (!F.text.trim() && !F.files.length) { toast('Paste the email or drop a file first'); return; }
       var body = new FormData(); body.append('container', F.cid); body.append('text', F.text); F.files.forEach(function (f) { body.append('file', f, f.name); });
       fdBusy('Reading and comparing…');
-      fetch(FB + '/check', { method: 'POST', body: body, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); F.view = j.view; F.tick = {}; var c = cById(F.cid); if (c) { c.fwdReview = (c.fwdReview || []).concat([j.view.id]); } fdView(); }).catch(function (x) { toast(x.message); fdInput(); });
+      fetch(FB + '/check', { method: 'POST', body: body, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); if (j.customs) { location.href = '/admin/logistics/customs?review=' + encodeURIComponent(j.customs); return; } F.view = j.view; F.tick = {}; var c = cById(F.cid); if (c) { c.fwdReview = (c.fwdReview || []).concat([j.view.id]); } fdView(); }).catch(function (x) { toast(x.message); fdInput(); });
       return;
     }
     if ((b = e.target.closest('[data-fd-act]'))) {
@@ -2400,4 +2400,86 @@
     var f = pasted(e); if (!f.length) return;
     e.preventDefault(); send(forms[0], f);
   });
+})();
+
+
+// Customs entries (CBP 7501): add / review dialog on Logistics → Customs
+(function () {
+  var root = document.querySelector('[data-customs]'); if (!root) return;
+  var C; try { C = JSON.parse(root.getAttribute('data-customs')); } catch (x) { return; }
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var usd = function (v, d) { return v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d == null ? 2 : d, maximumFractionDigits: d == null ? 2 : d }); };
+  var int = function (v) { return v == null ? '' : Number(v).toLocaleString('en-US'); };
+  var dl = document.createElement('dialog'); dl.className = 'rp-modal cu-dlg'; dl.setAttribute('aria-labelledby', 'cu-t'); document.body.appendChild(dl);
+  var S = { files: [], view: null };
+  function open() { if (dl.showModal) { if (!dl.open) dl.showModal(); } else dl.setAttribute('open', ''); }
+  function top(t, extra) { return '<div class="rp-top"><h2 id="cu-t">' + t + '</h2>' + (extra || '') + '<button type="button" class="icon-btn" data-cu-close aria-label="Close">×</button></div>'; }
+  function busy(t) { dl.innerHTML = '<div class="lp-fd">' + top('Customs entry') + '<div class="lp-fd-busy"><span class="lp-spin"></span>' + esc(t) + '</div></div>'; }
+  function input() {
+    dl.innerHTML = '<div class="lp-fd">' + top('Add customs entry') +
+      '<div class="lp-fd-drop" data-cu-drop tabindex="0"><b>Drop the entry summary (CBP 7501) here</b><span>PDF or a photo / screenshot (⌘V) · <button type="button" class="link small" data-cu-choose>choose a file</button></span><input type="file" multiple hidden data-cu-file accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,image/*,application/pdf"></div>' +
+      '<div class="lp-fd-files">' + S.files.map(function (f, i) { return '<span class="fw-chip">📄 ' + esc(f.name) + ' <button type="button" class="lp-x" data-cu-rm="' + i + '" aria-label="Remove">×</button></span>'; }).join('') + '</div>' +
+      '<div class="lp-fd-acts"><span class="sub">AI reads it, finds the shipment, POs and products, and checks the duty — nothing is saved until you choose.</span><span class="r"><button type="button" class="btn ghost" data-cu-close>Cancel</button><button type="button" class="btn" data-cu-read' + (S.files.length ? '' : ' disabled') + '>Read</button></span></div></div>';
+  }
+  var ICON = { bad: '⚠', warn: '⚠', ok: '✓', ai: '✦' };
+  function view() {
+    var v = S.view, probs = v.checks.filter(function (c) { return c.level === 'bad' || c.level === 'warn'; }).length + v.suggestions;
+    var sugg = v.lines.filter(function (l) { return l.suggestion && (l.suggestion.verdict === 'suggest' || l.suggestion.verdict === 'ok'); });
+    var alerts = v.checks.map(function (c) { return '<div class="lp-fd-a ' + c.level + '"><span>' + ICON[c.level] + '</span><span>' + (c.line ? '<b>Line ' + esc(c.line) + ':</b> ' : '') + esc(c.text) + '</span><span></span></div>'; }).join('') +
+      sugg.map(function (l) {
+        var g = l.suggestion, names = (l.products || []).map(function (p) { return p.code; }).join(' & ');
+        if (g.verdict === 'ok') return '<div class="lp-fd-a ok"><span>✓</span><span><b>Line ' + esc(l.no) + (names ? ', ' + esc(names) : '') + ':</b> ' + esc(l.hts) + ' fits — ' + esc(g.reason) + '</span><span></span></div>';
+        var done = g.status !== 'open';
+        return '<div class="lp-fd-a ai"><span>✦</span><span><b>HTS suggestion — line ' + esc(l.no) + (names ? ', ' + esc(names) : '') + ':</b> declared <span class="cu-mono">' + esc(l.hts) + '</span>, AI suggests <span class="cu-mono">' + esc(g.hts) + '</span> (' + esc(g.confidence) + ' confidence' + (g.same_duty ? ', same duty' : '') + '). ' + esc(g.reason) + ' <i>Confirm with your broker.</i>' +
+          (done ? ' <b>' + (g.status === 'accepted' ? 'Saved ' + esc(g.hts) + ' on the product.' : g.status === 'kept' ? 'Kept ' + esc(l.hts) + '.' : 'Dismissed.') + '</b>' : '') + '</span>' +
+          (done || !(l.products || []).some(function (p) { return p.product_id; }) ? '<span></span>' : '<span class="cu-sg"><button type="button" class="btn small" data-cu-hts="' + esc(l.no) + '" data-use="suggested">Use ' + esc(g.hts) + '</button><button type="button" class="btn ghost small" data-cu-hts="' + esc(l.no) + '" data-use="declared">Keep declared</button><button type="button" class="link small" data-cu-hts="' + esc(l.no) + '" data-use="dismiss">Dismiss</button></span>') + '</div>';
+      }).join('');
+    var rows = v.lines.map(function (l) {
+      var prods = (l.products || []).map(function (p) { return '<span class="cu-pt' + (p.product_id ? '' : ' no') + '">' + (p.product_id ? '🔗 ' : '? ') + esc(p.code) + (p.name && p.name !== p.code ? ' · ' + esc(p.name) : '') + '</span>'; }).join('') + (l.pos || []).map(function (po) { return '<span class="cu-pt po">' + (/^PO/i.test(po) ? '' : 'PO ') + esc(po) + '</span>'; }).join('');
+      var stack = '<span>' + esc(l.hts) + '<b>' + (l.rate == null ? esc(l.rate_text) : l.rate === 0 ? 'Free' : l.rate + '%') + '</b></span>' + l.extras.map(function (x) { return '<span>' + esc(x.code) + (x.label ? ' · ' + esc(x.label.toLowerCase()) : '') + '<b>' + (x.rate == null ? esc(x.rate_text) : x.rate + '%') + '</b></span>'; }).join('');
+      var per = (l.products || []).filter(function (p) { return p.per_pc != null; });
+      return '<tr><td>' + esc(l.no) + '</td><td><b>' + esc(l.description) + '</b><div class="cu-mono">' + esc(l.hts) + (l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts && l.suggestion.status === 'open' ? ' <span class="cu-sug">✦ ' + esc(l.suggestion.hts.slice(-4)) + '?</span>' : '') + '</div><div class="cu-pts">' + prods + '</div></td>' +
+        '<td class="r">' + (l.qty != null ? int(l.qty) + ' ' + (l.unit === 'NO' ? 'pcs' : esc(l.unit.toLowerCase())) : '—') + (l.kg ? '<div class="sub">' + int(l.kg) + ' kg</div>' : '') + '</td>' +
+        '<td class="r">' + usd(l.value, 0) + (l.value_pc ? '<div class="sub">' + usd(l.value_pc) + '/pc</div>' : '') + '</td><td><div class="cu-stack">' + stack + '</div></td>' +
+        '<td class="r"><b>' + usd(l.duty) + '</b><div class="sub">' + l.rate_total + '%</div></td>' +
+        '<td class="r">' + per.map(function (p) { return '<b>' + usd(p.per_pc) + '</b>' + (per.length > 1 ? ' <span class="sub">' + esc(p.code) + '</span>' : ''); }).join('<br>') + (per.length ? '<div class="sub">duty + fees' + (l.basis ? ' · split by ' + esc(l.basis) : '') + '</div>' : '') + '</td></tr>';
+    }).join('');
+    dl.innerHTML = '<div class="lp-fd">' + top('Entry ' + esc(v.entry_no || '') + ' · CBP 7501', v.status === 'saved' ? '<span class="cp-tag ok">Saved</span>' : probs ? '<span class="cp-tag wait">' + probs + ' to check</span>' : '<span class="cp-tag ok">All checks pass</span>') +
+      '<div class="sub cu-meta">' + v.meta.map(esc).join(' · ') + '</div>' +
+      '<div class="cu-links">' + (v.container ? '<span class="cu-ok">✓ ' + esc(v.container.name) + (v.container.reason ? ' — by ' + esc(v.container.reason) : '') + '</span>' : '<span class="cu-no">No container matched' + (v.hbls.length ? ' (house B/L ' + esc(v.hbls.join(', ')) + ')' : '') + '</span>') + (v.pos.length ? '<span class="cu-ok">✓ POs ' + esc(v.pos.join(', ')) + '</span>' : '') + '</div>' +
+      '<div class="cu-kp"><div><span>Entered value</span><b>' + usd(v.value, 0) + '</b></div><div><span>Duty</span><b>' + usd(v.duty) + '</b><small>' + (v.rate != null ? v.rate + '% of value' : '') + '</small></div><div><span>MPF + HMF</span><b>' + usd(v.fees) + '</b><small>' + (v.mpf != null ? 'MPF ' + usd(v.mpf) + ' · HMF ' + usd(v.hmf) : '') + '</small></div><div><span>Total</span><b>' + usd(v.total) + '</b><small>' + (v.totalRate != null ? v.totalRate + '% of value' : '') + '</small></div></div>' +
+      (alerts ? '<div class="lp-fd-al">' + alerts + '</div>' : '') +
+      '<div class="table-wrap"><table class="cu-lt"><thead><tr><th>Line</th><th>Goods · HTS</th><th class="r">Qty</th><th class="r">Value</th><th>Rates</th><th class="r">Duty</th><th class="r">Per pc</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="lp-fd-acts"><span class="sub">' + v.files.map(function (f) { return '<a href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join(' ') + (v.status === 'saved' ? '' : ' · kept with the container, POs and products when saved') + '</span><span class="r">' +
+        (v.status === 'saved' ? '<button type="button" class="btn" data-cu-close>Close</button>' : '<button type="button" class="link small" data-cu-discard>Discard</button><button type="button" class="btn" data-cu-save>Save entry</button>') + '</span></div></div>';
+  }
+  function load(id) { busy('Opening…'); open(); fetch(C.base + '/' + encodeURIComponent(id) + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); S.view = j.view; view(); }).catch(function (x) { dl.innerHTML = '<div class="lp-fd">' + top('Customs entry') + '<p class="lp-warn">' + esc(x.message) + '</p></div>'; }); }
+  function post(url, data) { var b = new URLSearchParams(); Object.keys(data || {}).forEach(function (k) { b.append(k, data[k]); }); return fetch(url, { method: 'POST', body: b, credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error || 'Could not save'); return j; }); }
+  function add(list) { for (var i = 0; i < list.length; i++) S.files.push(list[i]); input(); }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-cu-add],[data-cu-open]'); if (!b) return;
+    if (b.hasAttribute('data-cu-add')) { S = { files: [], view: null }; input(); open(); } else load(b.getAttribute('data-cu-open'));
+  });
+  dl.addEventListener('click', function (e) {
+    if (e.target === dl || e.target.closest('[data-cu-close]')) { dl.close(); if (S.changed) location.href = C.base; return; }
+    var b;
+    if (e.target.closest('[data-cu-choose]')) { dl.querySelector('[data-cu-file]').click(); return; }
+    if ((b = e.target.closest('[data-cu-rm]'))) { S.files.splice(Number(b.getAttribute('data-cu-rm')), 1); input(); return; }
+    if (e.target.closest('[data-cu-read]')) {
+      var fd = new FormData(); S.files.forEach(function (f) { fd.append('file', f, f.name); });
+      busy('Reading the entry, linking products and checking the HTS codes… (about 30 seconds)');
+      fetch(C.base + '/read', { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); S.view = j.view; S.changed = true; view(); }).catch(function (x) { input(); var n = dl.querySelector('.lp-fd-acts .sub'); if (n) { n.textContent = x.message; n.classList.add('cu-err'); } });
+      return;
+    }
+    if ((b = e.target.closest('[data-cu-hts]'))) { b.disabled = true; post(C.base + '/' + S.view.id + '/hts', { line: b.getAttribute('data-cu-hts'), use: b.getAttribute('data-use') }).then(function (j) { S.view = j.view; S.changed = true; view(); }).catch(function (x) { b.disabled = false; alertMsg(x.message); }); return; }
+    if (e.target.closest('[data-cu-save]')) { busy('Saving…'); post(C.base + '/' + S.view.id + '/save', {}).then(function () { location.href = C.base; }).catch(function (x) { view(); alertMsg(x.message); }); return; }
+    if (e.target.closest('[data-cu-discard]')) { post(C.base + '/' + S.view.id + '/discard', {}).then(function () { location.href = C.base; }).catch(function (x) { alertMsg(x.message); }); }
+  });
+  function alertMsg(t) { var n = dl.querySelector('.lp-fd-acts .sub'); if (n) { n.textContent = t; n.classList.add('cu-err'); } }
+  dl.addEventListener('change', function (e) { if (e.target.hasAttribute && e.target.hasAttribute('data-cu-file') && e.target.files.length) add(e.target.files); });
+  dl.addEventListener('dragover', function (e) { var z = e.target.closest && e.target.closest('[data-cu-drop]'); if (z) { e.preventDefault(); z.classList.add('over'); } });
+  dl.addEventListener('dragleave', function (e) { var z = e.target.closest && e.target.closest('[data-cu-drop]'); if (z) z.classList.remove('over'); });
+  dl.addEventListener('drop', function (e) { var z = e.target.closest && e.target.closest('[data-cu-drop]'); if (!z) return; e.preventDefault(); if (e.dataTransfer.files.length) add(e.dataTransfer.files); });
+  dl.addEventListener('paste', function (e) { if (!dl.querySelector('[data-cu-drop]')) return; var fl = e.clipboardData && e.clipboardData.files; if (fl && fl.length) { e.preventDefault(); add(fl); } });
+  if (C.review) load(C.review);
 })();

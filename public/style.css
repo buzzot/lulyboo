@@ -2613,3 +2613,38 @@ a.fw-chip:hover{border-color:#cfe0f2;color:#2c568f}
 .lp-fd-log{list-style:none;margin:0;padding:0}.lp-fd-log li{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:10px;padding:10px 0;border-top:1px solid #f1efec;font-size:13px;align-items:start}.lp-fd-log li:first-child{border-top:0}
 .lp-fd-log .d{color:var(--muted);font-size:12px}.lp-fd-log .sub{display:block;font-size:12px}
 .lp-fdlg{overflow:auto}.lp-fdlg .lp-fd-acts{position:sticky;bottom:-20px;background:#fff;margin:0 -22px -20px;padding:12px 22px 16px;z-index:2}
+
+/* Customs */
+.cu-mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
+.cu-red{color:#b2463c}.cu-err{color:#b2463c !important;font-weight:600}
+.cu-kp{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.cu-dlg .cu-kp{grid-template-columns:repeat(4,minmax(0,1fr));margin:0}
+.cu-kp>div{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.cu-kp span{font-size:10.5px;color:#777;text-transform:uppercase;letter-spacing:.05em}.cu-kp b{display:block;font-size:19px;margin-top:2px}.cu-kp small{color:var(--muted);font-size:12px}
+@media(max-width:900px){.cu-kp,.cu-dlg .cu-kp{grid-template-columns:repeat(2,1fr)}}
+.cu-two{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1000px){.cu-two{grid-template-columns:1fr}}
+.cu-bars{display:flex;align-items:flex-end;gap:12px;height:160px;padding-top:8px;border-bottom:1px solid var(--line)}
+.cu-bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;font-size:11.5px;color:#555;height:100%;position:relative;padding-bottom:18px}
+.cu-bar i{display:block;width:100%;max-width:44px;border-radius:6px 6px 0 0;background:#9fb6cf}.cu-bar i.now{background:#2f5f8f}
+.cu-bar em{position:absolute;bottom:0;font-style:normal;color:#777}
+.cu-pend{border-color:#f0d9a8;background:#fffbf2}
+.cu-pr{display:flex;align-items:center;gap:12px;padding:6px 0;border-top:1px solid #f1efec;font-size:13px;flex-wrap:wrap}.cu-pr:first-of-type{border-top:0}.cu-pr .btn{margin-left:auto}.cu-pr-v{margin-left:auto}
+.cu-dlg{width:min(1020px,96vw);overflow:auto}
+.cu-meta{margin-top:-6px}
+.cu-links{display:flex;gap:8px;flex-wrap:wrap}.cu-ok{background:#e7f4ec;color:#1d6b40;border-radius:99px;padding:4px 10px;font-size:12.5px}.cu-no{background:#fff6e6;color:#7a4f00;border-radius:99px;padding:4px 10px;font-size:12.5px}
+.lp-fd-a.ai{background:#faf7ff;color:#4a3b75;border:1px solid #e3d9fa}
+.cu-sg{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.cu-lt{width:100%;border-collapse:collapse;font-size:13px}
+.cu-lt th{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#777;text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);font-weight:600}
+.cu-lt td{padding:8px;border-bottom:1px solid #f2f0ed;vertical-align:top}.cu-lt .r{text-align:right;white-space:nowrap}
+.cu-stack{display:flex;flex-direction:column;gap:2px;font-size:12px;color:#555;min-width:200px}.cu-stack span{display:flex;justify-content:space-between;gap:10px}
+.cu-pts{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.cu-pt{border:1px solid var(--line);border-radius:99px;padding:1px 8px;font-size:11.5px;background:#fff}.cu-pt.no{border-style:dashed;color:#8a5300}.cu-pt.po{color:#555}
+.cu-sug{font-family:inherit;font-size:11px;font-weight:700;color:#6a4fc2;background:#f1ecfd;border-radius:99px;padding:1px 7px}
+.cu-dlg .lp-fd-acts{position:sticky;bottom:-20px;background:#fff;margin:0 -22px -20px;padding:12px 22px 16px;z-index:2}
+.cu-prod{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.cu-prod-h{display:flex;gap:10px;align-items:baseline;margin-bottom:8px}
+.cu-prod-k{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:10px;margin-bottom:10px}
+.cu-prod-k>div{border:1px solid var(--line);border-radius:10px;padding:8px 10px}.cu-prod-k span{font-size:10.5px;color:#777;text-transform:uppercase;letter-spacing:.05em}.cu-prod-k b{display:block;font-size:17px}.cu-prod-k small{color:var(--muted);font-size:12px}
+.cu-t td .sub{font-size:11.5px}

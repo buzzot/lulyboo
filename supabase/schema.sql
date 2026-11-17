@@ -980,3 +980,33 @@ create index if not exists plan_orders_split_idx on public.plan_orders (split_of
 
 -- Forwarder update check (run once): what each accepted update changed, for the container's log
 alter table public.fwd_updates add column if not exists applied jsonb;
+
+-- Customs entries (run once): CBP 7501 entry summaries read by AI, linked to the container, POs and products
+create table if not exists public.customs_entries (
+  id            uuid primary key default gen_random_uuid(),
+  entry_no      text,                                -- e.g. 9T2-0090981-5
+  entry_date    date,
+  status        text not null default 'pending',     -- pending · saved · discarded · replaced
+  source        text not null default 'upload',      -- upload · email
+  from_email    text,
+  container_id  uuid references public.plan_containers(id) on delete set null,
+  match_reason  text,
+  pos           text[] default '{}',
+  mbl           text,
+  hbls          text[] default '{}',
+  entered_value numeric,
+  duty          numeric,
+  fees          numeric,                             -- MPF + HMF
+  total         numeric,
+  facts         jsonb default '{}',                  -- header as read (importer number: last 4 digits only)
+  lines         jsonb default '[]',                  -- lines with HTS, chapter 99 rates, products, allocation, AI suggestion
+  checks        jsonb default '[]',
+  files         jsonb default '[]',
+  created_by    text,
+  created_at    timestamptz not null default now(),
+  saved_at      timestamptz,
+  saved_by      text
+);
+create index if not exists customs_entries_no_idx on public.customs_entries (entry_no);
+create index if not exists customs_entries_date_idx on public.customs_entries (entry_date);
+alter table public.customs_entries enable row level security;

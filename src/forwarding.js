@@ -32,7 +32,7 @@ const NUMS = ['booking_no', 'hbl_no', 'mbl_no', 'container_no'];
 const MONEY = ['ocean_usd', 'volume_cbm', 'cartons', 'gross_kg'];
 // checked against the loaded cargo, not copied onto the container
 const CHECK_ONLY = ['container_type', 'volume_cbm', 'cartons', 'gross_kg'];
-const DOC_TYPES = { booking_confirmation: 'Booking confirmation', shipping_advice: 'Shipping advice', bill_of_lading: 'Bill of lading', arrival_notice: 'Arrival notice', eta_update: 'ETA update', invoice: 'Freight invoice', other: 'Forwarder document' };
+const DOC_TYPES = { booking_confirmation: 'Booking confirmation', shipping_advice: 'Shipping advice', bill_of_lading: 'Bill of lading', arrival_notice: 'Arrival notice', eta_update: 'ETA update', invoice: 'Freight invoice', customs_entry: 'Customs entry (CBP 7501)', other: 'Forwarder document' };
 const STAGES = [['booked', 'Booked'], ['sailed', 'Sailed'], ['on_water', 'On the water'], ['arrived', 'Arrived']];
 
 const TOOL = {
@@ -90,7 +90,7 @@ async function read({ text = '', files = [] }) {
     } else if (/\.(xlsx|xlsm)$/.test(n)) { try { tables += `\n\n${f.name}:\n${parseXlsx(f.buffer).slice(0, 80).map((r) => r.join(' | ')).join('\n')}`; } catch { /* unreadable */ } }
     else if (/\.csv$/.test(n)) { try { tables += `\n\n${f.name}:\n${parseCsv(decodeText(f.buffer)).slice(0, 80).map((r) => r.join(' | ')).join('\n')}`; } catch { /* unreadable */ } }
   }
-  content.push({ type: 'text', text: `Today is ${PL.today()} (dates without a year are ${new Date().getFullYear()}). This came from a freight forwarder about an ocean shipment (FCL or LCL). Record what it says. Leave out anything not stated; never guess numbers. Read the subject line too: forwarders pack the booking number, shippers (S/), consignee (C/), lane as port codes (YTN = Yantian, LAX = Los Angeles, LGB = Long Beach, NGB = Ningbo, SHA = Shanghai), container count and type, PO numbers and a date into it. Dates like 11/04/26 are US format (month/day/year).\n\n${String(text).slice(0, 20000)}${tables}` });
+  content.push({ type: 'text', text: `Today is ${PL.today()} (dates without a year are ${new Date().getFullYear()}). This came from a freight forwarder about an ocean shipment (FCL or LCL). Record what it says. Leave out anything not stated; never guess numbers. Read the subject line too: forwarders pack the booking number, shippers (S/), consignee (C/), lane as port codes (YTN = Yantian, LAX = Los Angeles, LGB = Long Beach, NGB = Ningbo, SHA = Shanghai), container count and type, PO numbers and a date into it. Dates like 11/04/26 are US format (month/day/year). A US Customs entry summary (CBP Form 7501) is doc_type customs_entry.\n\n${String(text).slice(0, 20000)}${tables}` });
   const { result } = await AI.callTool({ tool: TOOL, content, maxTokens: 1500 });
   return result || {};
 }

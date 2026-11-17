@@ -225,6 +225,13 @@ function routes(router, { db, config }) {
     const list = files(fs); const text = String(fields.text || '').trim();
     if (!list.length && !text) throw new HttpError(400, 'Paste the email or drop a file first');
     const u = await FW.createUpdate(db, config, { source: 'upload', text, files: list, containerId: c.id, by: by(req), notify: false });
+    // a customs entry summary goes to Customs instead
+    if (u.facts?.doc_type === 'customs_entry') {
+      await db.remove('fwd_updates', { id: u.id }).catch(() => null);
+      for (const f of u.files || []) await db.docs.remove(f.path).catch(() => null);
+      const e = await require('../customs').createEntry(db, config, { files: list, text, source: 'upload', containerId: c.id, by: by(req) });
+      return { customs: e.id };
+    }
     return { view: await checkView(db, u) };
   }));
   router.get(`${BASE}/:id/view`, J(async (req) => ({ view: await checkView(db, await getU(req.params.id)) })));

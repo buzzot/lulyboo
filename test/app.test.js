@@ -3486,3 +3486,88 @@ test('forwarder update check on a container: reads subject-style booking emails,
   assert.match(log.find((x) => x.status === 'accepted').changes.join(', '), /ETD Nov 18.*Loading date Nov 12/);
   assert.equal(log.find((x) => x.status === 'logged').changes.length, 0);
 });
+
+test('customs entries: AI reads a 7501, links container / POs / products, checks math and past entries, HTS suggestion, save, product + PO pages', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; let hts = null;
+  const entry = {
+    is_entry_summary: true, entry_no: '9T2-0090981-5', entry_type: '01 ABI/P', summary_date: '2026-11-25', entry_date: '2026-11-21', import_date: '2026-11-21', export_date: '2026-11-04', port_code: '2704', carrier: 'ONE FORWARD', voyage: '011E',
+    mbl: 'ONEY SZPGX1565502', hbls: ['RSLC SNAL2610035A', 'RSLC SNAL2610035B'], importer_no_last4: '3600', broker: 'PING JU YANG DBA EAL CHB', broker_file: '90981',
+    entered_value: 18729, duty: 3234.43, other: 88.29, total: 3322.72, mpf: 64.88, hmf: 23.41, pos: ['PO#310002', 'PO#610000'],
+    lines: [
+      { line_no: '001', description: 'BIDETS,LAV PANS,SANITARY WARES', hts: '3922.90.0000', rate: '6.3%', duty: 179.80, extras: [{ code: '9903.88.03', label: 'ARTICLE OF CHINA,US NTE 20(F)', rate: '25%', amount: 713.50 }, { code: '9903.05.31', label: 'PRDTS OF CHINA, NOTE 52', rate: '12.5%', amount: 356.75 }], gross_kg: 1859, qty: 1968, qty_unit: 'NO', value: 2854, mpf: 9.89, hmf: 3.57, product_codes: ['DPS 001'] },
+      { line_no: '002', description: 'OTHER, OTHER, OTHER TOYS, NSPF', hts: '9503.00.0073', rate: 'FREE', duty: 0, extras: [{ code: '9903.05.31', label: 'PRDTS OF CHINA, NOTE 52', rate: '12.5%', amount: 1984.38 }], gross_kg: 2583, qty: 7632, qty_unit: 'NO', value: 15875, mpf: 54.99, hmf: 19.84, product_codes: ['SWS 001', 'SST 001'], pos: ['310002', '610000'] },
+    ],
+    summary: 'Two lines, duty $3,234.43.',
+  };
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.anthropic.com')) {
+      const b = JSON.parse(opts.body);
+      const name = b.tool_choice?.name || b.tools?.[0]?.name;
+      if (name === 'review_hts') { hts = b; return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input: { lines: [{ line_no: '001', verdict: 'ok', reason: 'Plastic potty seat is sanitary ware of plastics.', confidence: 'high' }, { line_no: '002', verdict: 'suggest', suggested_hts: '9503.00.0071', reason: 'Both toys are for 6 months+, under 3 years of age.', confidence: 'high', same_duty: true }] } }] }), { status: 200 }); }
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input: entry }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Shenzhen Kean' });
+  const dps = await db.insert('products', { supplier_id: s.id, product_name: 'Potty seat', supplier_sku: 'DPS 001', materials: 'PP plastic', category: 'Infant/Toddler', status: 'Selected', hts_verified_code: '3922900000' });
+  const sws = await db.insert('products', { supplier_id: s.id, product_name: 'Silicone water squirt', supplier_sku: 'SWS 001', materials: 'silicone', category: 'Infant/Toddler', description: 'Bath toy, 6 months+', status: 'Selected' });
+  const sst = await db.insert('products', { supplier_id: s.id, product_name: 'Silicone stacking toy', supplier_sku: 'SST 001', materials: 'silicone', category: 'Infant/Toddler', status: 'Selected' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', fwd: { hbl_no: 'SNAL2610035A' }, created_at: new Date().toISOString() });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800022', sku: 'DPS 001', product: 'Potty seat', qty: 1968, unit_price: 1.45, port: 'CNYTN', container_id: c.id });
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO310002', sku: 'SWS 001', product: 'Silicone water squirt', qty: 3816, unit_price: 2.5, port: 'CNYTN', container_id: c.id });
+  await db.insert('plan_orders', { supplier_id: s.id, po: 'PO610000', sku: 'SST 001', product: 'Silicone stacking toy', qty: 3816, unit_price: 1.66, port: 'CNYTN', container_id: c.id });
+  // an earlier entry for the potty seat, before Note 52
+  await db.insert('customs_entries', { entry_no: '9T2-0087455-1', entry_date: '2026-09-02', status: 'saved', entered_value: 3552, duty: 1111.78, lines: [{ no: '001', hts: '3922.90.0000', rate: 6.3, extras: [{ code: '9903.88.03', rate: 25 }], duty: 1111.78, value: 3552, products: [{ product_id: dps.id, code: 'DPS 001', qty: 2400, per_pc: 0.46 }] }] });
+
+  // Customs page: the button, empty state
+  let pg = (await req(base, 'GET', '/admin/logistics/customs', { cookie })).text;
+  assert.match(pg, /data-cu-add/); assert.match(pg, /customs@in\.lulyboo\.space/);
+
+  const fd = new FormData(); fd.append('file', new Blob([Buffer.from('%PDF-1.4 7501')], { type: 'application/pdf' }), '7501.pdf');
+  const r = await (await fetch(`${base}/admin/logistics/customs/read`, { method: 'POST', body: fd, headers: { cookie } })).json();
+  assert.ok(r.ok, r.error);
+  const v = r.view;
+  assert.equal(v.status, 'pending'); assert.equal(v.entry_no, '9T2-0090981-5');
+  assert.equal(v.container.id, c.id); assert.match(v.container.reason, /house B\/L SNAL2610035A/);
+  assert.ok(v.meta.includes('Importer ••••3600'));
+  assert.deepEqual(v.lines[0].products.map((p) => p.product_id), [dps.id]);
+  assert.deepEqual(v.lines[1].products.map((p) => p.product_id), [sws.id, sst.id]);
+  assert.equal(v.lines[1].basis, 'PO value');
+  const [a, b] = v.lines[1].products;
+  assert.equal(a.duty + b.duty, 1984.38); assert.ok(a.duty > b.duty);
+  assert.equal(v.lines[0].rate_total, 43.8);
+  assert.equal(v.lines[0].products[0].per_pc, 0.642);
+  const txt = v.checks.map((x) => `${x.level}: ${x.text}`).join('\n');
+  assert.match(txt, /ok: Duty math checks out/);
+  assert.match(txt, /warn: DPS 001 \(Potty seat\): duty up from 31\.3% \(Sep 2\) to 43\.8% — new 9903\.05\.31 \(prdts of china, note 52\) \+12\.5%/);
+  assert.equal(v.suggestions, 1);
+  assert.equal(v.lines[1].suggestion.hts, '9503.00.0071');
+  assert.match(JSON.stringify(hts), /6 months\+/);   // catalog facts went to the HTS review
+
+  // use the suggested code → saved on both products
+  const h = JSON.parse((await req(base, 'POST', `/admin/logistics/customs/${v.id}/hts`, { cookie, form: { line: '002', use: 'suggested' } })).text);
+  assert.ok(h.ok, h.error); assert.equal(h.products, 2);
+  assert.equal(db.tables.products.find((x) => x.id === sws.id).hts_verified_code, '9503000071');
+
+  // save: in the statistics, the 7501 on each PO's documents
+  const sv = JSON.parse((await req(base, 'POST', `/admin/logistics/customs/${v.id}/save`, { cookie, form: {} })).text);
+  assert.ok(sv.ok, sv.error); assert.equal(sv.view.status, 'saved');
+  assert.ok(db.tables.plan_files.some((f) => f.kind === 'Customs entry' && f.pos.includes('800022')));
+  pg = (await req(base, 'GET', '/admin/logistics/customs', { cookie })).text;
+  assert.match(pg, /9T2-0090981-5/); assert.match(pg, /3922\.90\.0000/); assert.match(pg, /Effective duty rate by month/);
+
+  // product page and PO page
+  const prod = (await req(base, 'GET', `/admin/products/${dps.id}`, { cookie })).text;
+  assert.match(prod, /Customs entries/); assert.match(prod, /43\.8%/); assert.match(prod, /was \$0\.46/);
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800022`, { cookie })).text;
+  assert.match(po, /id="customs"/); assert.match(po, /duty <b>\$1,250\.05<\/b>/);
+
+  // CSV
+  const csv = (await req(base, 'GET', '/admin/logistics/customs/export.csv', { cookie })).text;
+  assert.match(csv, /9T2-0090981-5,2026-11-21,002,"OTHER, OTHER, OTHER TOYS, NSPF",9503\.00\.0073/);
+});

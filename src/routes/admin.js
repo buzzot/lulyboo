@@ -118,7 +118,20 @@ function termsAndPacking({ p }) {
     </dl></div></div></section>`;
 }
 
-function dutyPanel({ p, a, testDuty, aiOn }) {
+/** Duty actually paid: every customs entry this product came in on. */
+function customsHistory(p, list) {
+  if (!list || !list.length) return '';
+  const usd = (v, d = 2) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`);
+  const last = list[0]; const prev = list[1];
+  return html`<div class="cu-prod"><div class="cu-prod-h"><b>Customs entries</b><span class="sub">duty actually paid${p.hts_verified_code ? ` · HTS on file ${p.hts_verified_code}` : ''}</span></div>
+    <div class="cu-prod-k"><div><span>Duty now</span><b>${last.rate}%</b><small>${[last.base != null ? `${last.base}%` : null, ...last.extras.map((x) => `${x.rate}% (${x.code})`)].filter(Boolean).join(' + ')}</small></div>
+      <div><span>Duty + fees per pc</span><b>${usd(last.per_pc)}</b><small>${prev && prev.per_pc != null ? `was ${usd(prev.per_pc)}` : ''}</small></div></div>
+    <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Entry</th><th>Date</th><th>PO</th><th class="r">Qty</th><th class="r">Value/pc</th><th>HTS</th><th class="r">Rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
+    ${list.map((x) => html`<tr><td><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a></td><td>${x.date ? String(x.date).slice(0, 10) : ''}</td><td>${x.po || '—'}</td><td class="r">${x.qty != null ? Number(x.qty).toLocaleString('en-US') : '—'}</td><td class="r">${usd(x.value_pc)}</td><td class="cu-mono">${x.hts}</td><td class="r">${x.rate}%</td><td class="r"><b>${usd(x.per_pc)}</b></td></tr>`)}
+    </tbody></table></div></div>`;
+}
+
+function dutyPanel({ p, a, testDuty, aiOn, customs = [] }) {
   const d = p.duty_ai_detail || null;
   const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
   const code = p.hts_verified_code || p.hs_code || '';
@@ -154,6 +167,7 @@ function dutyPanel({ p, a, testDuty, aiOn }) {
       ${(d.review_flags || []).length ? html`<div class="flash warn"><strong>Verify:</strong><ul class="plain">${d.review_flags.map((f) => html`<li>${f}</li>`)}</ul></div>` : ''}
       ${(d.alternatives || []).length ? html`<details><summary>Other tariff lines considered (${d.alternatives.length})</summary><ul class="plain">${d.alternatives.map((x) => html`<li><strong>${x.htsno}</strong> ${x.general} <span class="sub">${x.description}</span></li>`)}</ul></details>` : ''}
     ` : html`<p class="dt-empty">Not researched yet. Confirm the code in step 1 and press “Check with USITC + AI”.</p>`}
+    ${customsHistory(p, customs)}
   </details>`;
 }
 
@@ -412,11 +426,13 @@ module.exports = function adminRoutes(router, { db, config }) {
     const shipLate = shipRows.filter((r) => SD.stateOf(r, todayStr).key === 'overdue').length;
     const shipMissing = shipRows.filter((r) => SD.stateOf(r, todayStr).key === 'docs_missing').length;
     const fwdReview = (await db.list('fwd_updates', { filters: { status: 'pending' } }).catch(() => [])).length;
+    const customsReview = (await db.list('customs_entries', { filters: { status: 'pending' } }).catch(() => [])).length;
     const arriving = (await db.list('plan_containers').catch(() => [])).filter((c) => c.fwd?.eta && !c.fwd.ata && !c.fwd.arrived && c.status === 'shipped' && c.fwd.eta <= require('../planning').addDays(todayStr, 7)).length;
     const attention = [
       { label: 'Shipping documents to review', n: shipReview, href: '/admin/orders/shipping', tone: 'info' },
       { label: 'Forwarder updates to review', n: fwdReview, href: '/admin/orders/shipping#forwarder', tone: 'info' },
       { label: 'Shipments arriving this week', n: arriving, href: '/admin/orders/shipping#forwarder', tone: 'info' },
+      { label: 'Customs entries to review', n: customsReview, href: '/admin/logistics/customs', tone: 'info' },
       { label: 'Shipping documents overdue', n: shipLate, href: '/admin/orders/shipping', tone: 'danger' },
       { label: 'Shipments with documents still missing', n: shipMissing, href: '/admin/orders/shipping', tone: 'warn' },
       { label: 'Products awaiting review', n: awaitingReview, href: '/admin/products?status=New', tone: 'info' },
@@ -712,7 +728,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis,
-        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }) }),
+        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY, customs: await require('./customs').forProduct(db, p.id).catch(() => []) }) }),
     }));
   }));
 

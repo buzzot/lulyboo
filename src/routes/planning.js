@@ -530,6 +530,15 @@ function planningRoutes(router, { db, config }) {
     const typed = String(fields.pos || '').split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
     let read = null; const unread = [];
     const kind = PL.DOC_KINDS.includes(fields.kind) ? fields.kind : null;
+    // a customs entry summary (CBP 7501): read, link and check it on the Customs page
+    if (kind === 'Customs entry') {
+      const CU = require('../customs');
+      try {
+        const e = await CU.createEntry(db, config, { files: docs, source: 'upload', poHint: typed, by: req.staff?.name || 'Owner' });
+        flash(res, 'ok', 'Customs entry read — check it and save.');
+        return res.redirect(`/admin/logistics/customs?review=${e.id}`);
+      } catch (err) { if (err.status !== 400 && !CU.missingTable(err)) throw err; return back('warn', CU.missingTable(err) ? 'Run the customs SQL in Supabase first.' : err.message, `&supplier=${supplier.id}`); }
+    }
     if (fields.read === '1' && AI.enabled()) {
       const lines = [];
       for (const f of docs) {
