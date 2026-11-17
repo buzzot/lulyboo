@@ -1261,14 +1261,45 @@
       '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
       '<button type="button" class="icon-btn" title="Remove" aria-label="Remove ' + esc(cName(c)) + '" data-lp-del="' + c.id + '">×</button></div>';
   }
+  // PO chips: ready date on the chip, details on hover / focus (supplier, items, link to the PO)
+  function popHTML(o, ls) {
+    var sid = String(o.pk).split('|')[0];
+    var days = {}; ls.forEach(function (x) { if (x.ready) days[x.ready] = 1; });
+    var mixed = Object.keys(days).length > 1;
+    return '<span class="lp-pop" role="tooltip"><span class="lp-pop-h"><b>' + esc(o.po) + '</b><span>' + esc(o.supplier) + '</span></span>' +
+      '<span class="lp-pop-r"><span>Ready</span><b>' + (readyOf(ls) ? esc(short(readyOf(ls))) + (mixed ? ' <em>last item</em>' : '') : '<em>not set</em>') + '</b></span>' +
+      '<span class="lp-pop-l">' + ls.map(function (x) { return '<span><span class="lp-pop-n">' + esc(x.product || '(whole PO)') + '</span><span>' + (x.qty ? int(x.qty) + ' pcs' : '') + (x.cartons ? ' · ' + int(x.cartons) + ' ctns' : '') + (x.cbm ? ' · ' + n2(x.cbm) + ' m³' : '') + (mixed && x.ready ? ' · ' + esc(x.readyText) : '') + '</span></span>'; }).join('') + '</span>' +
+      '<a class="lp-pop-a" href="/admin/orders/view?supplier=' + encodeURIComponent(sid) + '&po=' + encodeURIComponent(o.po) + '">Open PO →</a></span>';
+  }
+  function readyOf(ls) { var d = ls.map(function (x) { return x.ready; }).filter(Boolean).sort(); return d.length ? d[d.length - 1] : null; }
+  function short(d) { var x = new Date(d + 'T12:00:00Z'); return x.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); }
   function chipsHTML(items) {
     if (!items.length) return '';
     var cid = items[0].container;
     return '<div class="lp-chips">' + groupBy(items).map(function (ls) {
-      var o = ls[0], tot = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), all = linesOfPo(o.pk).length;
+      var o = ls[0], tot = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), all = linesOfPo(o.pk).length, rd = readyOf(ls);
       var part = all > ls.length ? ' <em class="lp-chip-part" title="' + ls.length + ' of ' + all + ' products of this PO are in this container">' + ls.length + '/' + all + '</em>' : '';
-      return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" data-po="' + esc(o.pk) + '" data-from="' + cid + '" title="' + esc(ls.map(function (x) { return (x.product || x.po) + ' · ' + n2(x.cbm) + ' m³'; }).join('\n')) + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
+      return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" tabindex="0" data-po="' + esc(o.pk) + '" data-from="' + cid + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<span class="lp-chip-rd' + (rd ? '' : ' none') + '">' + (rd ? esc(short(rd)) : 'no date') + '</span>' + popHTML(o, ls) + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
     }).join('') + '</div>';
+  }
+  // Cargo ready: each PO's ready date, and the date everything is ready — what the forwarder needs
+  function readyHTML(c, items, sail) {
+    if (!items.length) return '';
+    var gs = groupBy(items).map(function (ls) { return { o: ls[0], d: readyOf(ls) }; });
+    gs.sort(function (a, b) { return (a.d || '9999') < (b.d || '9999') ? -1 : 1; });
+    var dated = gs.filter(function (g) { return g.d; }), missing = gs.length - dated.length;
+    var last = dated.length ? dated[dated.length - 1] : null;
+    var load = c.loading || (sail ? addDays(sail.etd, -3) : '');
+    var lcl = D.box[c.box] && D.box[c.box].lcl;
+    var late = last && load && last.d > load;
+    var lateDays = late ? Math.round((Date.parse(last.d) - Date.parse(load)) / 864e5) : 0;
+    return '<div class="lp-ready"><div class="lp-ready-l">' + gs.map(function (g) {
+      var bad = g.d && load && g.d > load;
+      return '<span class="lp-ready-i' + (g === last ? ' last' : '') + (bad ? ' late' : '') + '"><i style="background:' + g.o.color + '"></i><b>' + esc(g.o.po) + '</b><span class="sub">' + esc(g.o.supplier) + '</span><span class="lp-ready-d">' + (g.d ? esc(short(g.d)) : '—') + '</span></span>';
+    }).join('') + '</div>' +
+      '<div class="lp-ready-s' + (late ? ' late' : '') + '">' + (last ? 'All cargo ready <b>' + esc(short(last.d)) + '</b><span class="sub">last: ' + esc(last.o.po) + ' · ' + esc(last.o.supplier) + (missing ? ' · ' + missing + ' PO' + (missing > 1 ? 's' : '') + ' without a date' : '') + '</span>' +
+        (late ? '<span class="lp-ready-w">' + lateDays + ' day' + (lateDays > 1 ? 's' : '') + ' after the ' + (lcl ? 'CFS delivery' : 'loading') + ' date (' + esc(short(load)) + ')</span>' : '')
+        : 'Cargo ready date <b>not set</b><span class="sub">add ready dates to the POs</span>') + '</div></div>';
   }
   function addDays(d, n) { var x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
   function ldHTML(c, sail) {
@@ -1318,7 +1349,7 @@
         (items.length ? '<div class="lp-piles">' + piles + '</div>' : '<div class="lp-dropmsg lp-lcldrop">Drop POs here</div>') + '</div>' +
       '<div class="lp-stats">' + stat(n2(u) + ' m³', 'Volume') + stat(allKg ? int(kg) + ' kg' : kg ? int(kg) + ' kg <i class="sub">+?</i>' : '—', 'Gross weight') + stat(ctn ? int(ctn) + (items.some(function (o) { return !o.cartons; }) ? ' <i class="sub">+?</i>' : '') : '—', 'Cartons') +
         stat(items.length ? n2(allKg ? wm : u) + ' W/M' : '—', 'Freight tons', items.length ? (allKg ? (u >= kg / 1000 ? 'charged by volume' : 'charged by weight') : 'weight missing — by volume so far') : 'the larger of m³ and tonnes') + '</div>' +
-      chipsHTML(items) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length > 0, 'Load POs first') + '</section>';
+      chipsHTML(items) + readyHTML(c, items, sail) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length > 0, 'Load POs first') + '</section>';
   }
   function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
   function containerHTML(c, idx) {
@@ -1357,7 +1388,7 @@
         '<div class="lp-cut"><div class="lp-grid" style="background-size:' + cw + 'px ' + ch + 'px"></div>' + inside + (items.length ? '' : '<div class="lp-dropmsg">Drop POs here</div>') + '</div>' +
       '</div></div>' +
       '<div class="lp-fill"><div class="lp-track"><i class="' + lvl + '" style="width:' + Math.min(pct, 100) + '%"></i></div><div class="lp-fnum">' + n2(u) + ' / ' + t.cap + ' m³<small>' + Math.round(pct) + '% full · ' + n2(Math.max(0, t.cap - u)) + ' m³ left</small></div></div>' +
-      chipsHTML(items) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length && !over, over ? 'Container is over capacity' : 'Load POs first') +
+      chipsHTML(items) + readyHTML(c, items, sail) + warns.join('') + voyHTML(c) + quotesHTML(c) + footHTML(c, items, sail, items.length && !over, over ? 'Container is over capacity' : 'Load POs first') +
       '</section>';
   }
   function render() {
