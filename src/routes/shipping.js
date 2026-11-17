@@ -146,10 +146,9 @@ async function shipmentSection(db, supplier, po, back) {
     const hasFacts = (sc.planned || []).length && (facts.lines || []).length || facts.cbm || facts.cartons;
     const how = (f) => (/^Email from/.test(f.uploaded_by || '') ? 'by email' : f.uploaded_by ? 'added by you' : '');
     const log = [...(sc.log || [])].slice(-4);
-    cards.push(html`<section class="card sd-card" id="shipment">
-      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2>${(() => { const c = cs[sc.container_id]; const fs = c?.fwd ? FW.stageOf(c.fwd) : null; return fs && fs !== 'booked' ? html`<span class="cp-tag ${fs === 'arrived' ? 'ok' : 'plan'}">${FW.stageLabel(fs)}${c.fwd.eta && fs !== 'arrived' ? ` · ETA ${PL.short(c.fwd.eta)}` : ''}</span>` : html`<span class="cp-tag ${st.tag}">${st.label}</span>`; })()}</div>
-      ${steps(sc, list, mine.length, cs[sc.container_id])}
-      ${sc.container_id && cs[sc.container_id] && cs[sc.container_id].status !== 'planned' ? await FR.fwdBox(db, sc.container_id, back, { supplierBl: (sc.facts || {}).bl_no || sc.bl_no }) : ''}
+    // a duplicate request for the same PO (made before requests were shared per PO): offer to merge it into the earlier one
+    const dupOf = rows.filter((x) => x.id !== sc.id && String(x.created_at) < String(sc.created_at) && (x.pos || []).some((p) => (sc.pos || []).some((q) => PL.normPo(p) === PL.normPo(q))))[0];
+    const full = html`
       <div class="sd-grid">
         <div>
           <h3 class="sd-h">Shipping documents <span class="sub">${sc.mode || 'standard'} checklist</span></h3>
@@ -194,7 +193,19 @@ async function shipmentSection(db, supplier, po, back) {
           </div>
           <details class="sd-log"><summary>All activity · ${sc.code}</summary><ul>${[...(sc.log || [])].reverse().map((x) => html`<li><span>${sd(x.at)}</span>${x.text}</li>`)}</ul></details>
         </div>
-      </div></section>`);
+      </div>`;
+    const done = sc.status === 'complete';
+    const reqN = SD.required(sc).filter((r) => !r[3]).length; const haveN = list.filter((x) => x.key !== 'confirm' && x.state === 'have' && !SD.required(sc).find((r) => r[0] === x.key)?.[3]).length;
+    const volDiff = cmp.rows.find((r) => r.label === 'Volume');
+    cards.push(html`<section class="card sd-card ${done ? 'sd-done' : ''}" id="${rows.length > 1 ? `shipment-${sc.code}` : 'shipment'}">
+      <div class="head-row"><h2>Shipment <span class="sub">${shipLabel(sc, cs)}${sc.mode ? ` · ${SD.MODES[sc.mode] || sc.mode}` : ''}${others.length ? ` · with ${others.join(', ')}` : ''}</span></h2>${(() => { const c = cs[sc.container_id]; const fs = c?.fwd ? FW.stageOf(c.fwd) : null; return fs && fs !== 'booked' ? html`<span class="cp-tag ${fs === 'arrived' ? 'ok' : 'plan'}">${FW.stageLabel(fs)}${c.fwd.eta && fs !== 'arrived' ? ` · ETA ${PL.short(c.fwd.eta)}` : ''}</span>` : html`<span class="cp-tag ${st.tag}">${st.label}</span>`; })()}</div>
+      ${dupOf ? html`<div class="sd-dup"><span><b>Duplicate request.</b> ${dupOf.code} for this PO ${dupOf.status === 'complete' ? `is already complete${sd(dupOf.accepted_at || dupOf.confirmed_at || dupOf.received_at) ? ` (documents in ${sd(dupOf.accepted_at || dupOf.confirmed_at || dupOf.received_at)})` : ''}` : 'was made earlier'} — this one asks the supplier again.</span><form method="post" action="${BASE}/${sc.id}/merge" class="inline"><input type="hidden" name="into" value="${dupOf.id}"><input type="hidden" name="back" value="${back}"><button class="btn small">Merge into ${dupOf.code}</button></form></div>` : ''}
+      ${done ? html`<div class="sd-line"><span class="sd-line-i">✓</span><span>Documents <b>${haveN}/${reqN}</b> · accepted ${sd(sc.accepted_at)}${sc.bl_no || facts.bl_no ? html` · B/L <b>${sc.bl_no || facts.bl_no}</b>` : ''}${facts.container_no || sc.container_no ? html` · container <b>${facts.container_no || sc.container_no}</b>` : ''}${volDiff && volDiff.diff.c && /\d/.test(volDiff.diff.t) ? html` · volume <span class="${volDiff.diff.c}">${volDiff.diff.t}</span> vs plan` : ''}</span></div>
+        ${sc.container_id && cs[sc.container_id] && cs[sc.container_id].status !== 'planned' ? await FR.fwdBox(db, sc.container_id, back, { supplierBl: (sc.facts || {}).bl_no || sc.bl_no }) : ''}
+        <details class="sd-more"><summary>Show details — documents, figures and follow-ups</summary>${full}</details>`
+      : html`${steps(sc, list, mine.length, cs[sc.container_id])}
+      ${sc.container_id && cs[sc.container_id] && cs[sc.container_id].status !== 'planned' ? await FR.fwdBox(db, sc.container_id, back, { supplierBl: (sc.facts || {}).bl_no || sc.bl_no }) : ''}${full}`}
+      </section>`);
   }
   return [...cards, sendDialog()];
 }
@@ -365,6 +376,12 @@ module.exports = function shippingRoutes(router, { db, config }) {
     const sc = await getSc(req.params.id); const { fields: f } = await parseForm(req);
     await db.update('ship_confirmations', { id: sc.id }, { status: 'cancelled', log: [...(sc.log || []), { at: new Date().toISOString(), text: `Stopped by ${by(req)}` }], updated_at: new Date().toISOString() });
     flash(res, 'ok', 'Request stopped'); res.redirect(backTo(f, sc));
+  }));
+  router.post(`${BASE}/:id/merge`, G(async (req, res) => {
+    const dup = await getSc(req.params.id); const { fields: f } = await parseForm(req);
+    const keep = await getSc(f.into);
+    const r = await SD.mergeInto(db, keep, dup, by(req));
+    flash(res, 'ok', `${dup.code} merged into ${keep.code} — one request for this PO now`); res.redirect(backTo(f, r));
   }));
   router.post(`${BASE}/:id/upload`, G(async (req, res) => {
     const sc = await getSc(req.params.id);

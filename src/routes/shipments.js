@@ -326,3 +326,4 @@ module.exports = function shipmentRoutes(router, { db, config }) {
   }));
 };
 module.exports.load = load;
+module.exports.STAGE_TAG = STAGE_TAG;

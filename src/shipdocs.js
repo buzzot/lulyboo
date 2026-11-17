@@ -83,6 +83,33 @@ const blFrom = (sc, sailing) => (sailing?.etd ? PL.addDays(day10(sailing.etd), B
 const plannedOf = (lines) => lines.map((l) => ({ id: l.id, po: l.po, product: l.product || '', qty: num(l.qty), cartons: num(l.cartons), gross_kg: num(l.gross_kg), cbm: num(l.cbm), carton: [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].every((x) => Number(x) > 0) ? [l.carton_l_cm, l.carton_w_cm, l.carton_h_cm].map(Number) : null }));
 const posOf = (lines) => [...new Set(lines.map((l) => l.po).filter(Boolean))];
 
+/** Email-signature logos and inline icons — small images, or names like "logo", "image001", "outlook". Not loading photos. */
+function isSignatureImage(f) {
+  const isImg = /^image\//i.test(f.type || '') || /\.(png|jpe?g|gif|bmp|webp)$/i.test(f.name || '');
+  if (!isImg) return false;
+  if (/logo|signature|签名|image0\d\d|outlook|icon|banner|wechat|qrcode/i.test(f.name || '')) return true;
+  return (f.buffer?.length || 0) < 30 * 1024;
+}
+
+/** Link an earlier request (no container yet) to the container its POs are now in. */
+async function adopt(db, sc, c, ls) {
+  const ids = [...new Set([...(sc.order_ids || []), ...ls.filter((l) => (sc.pos || []).some((p) => PL.normPo(p) === PL.normPo(l.po))).map((l) => l.id)])];
+  await db.update('ship_confirmations', { id: sc.id }, { container_id: c.id, order_ids: ids, mode: sc.mode || modeOf(c), log: withLog(sc, `Linked to the ${c.box === 'LCL' ? 'LCL shipment' : 'container'} these POs are in — no new request`), updated_at: new Date().toISOString() });
+}
+
+/** Merge a duplicate request into the earlier one for the same PO: one history, one set of files; the duplicate stops. */
+async function mergeInto(db, keep, dup, by = null) {
+  if (keep.id === dup.id || keep.supplier_id !== dup.supplier_id) throw Object.assign(new Error('These requests can\'t be merged'), { status: 400 });
+  const now = new Date().toISOString();
+  const log = [...(keep.log || []), ...(dup.log || []).map((x) => ({ ...x, text: `${dup.code}: ${x.text}` })), logEntry(`Merged ${dup.code} into this request${by ? ` (${by})` : ''}`)].sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-60);
+  const patch = { log, updated_at: now, order_ids: [...new Set([...(keep.order_ids || []), ...(dup.order_ids || [])])], pos: [...new Set([...(keep.pos || []), ...(dup.pos || [])])] };
+  if (!keep.container_id && dup.container_id) { patch.container_id = dup.container_id; patch.mode = keep.mode || dup.mode; }
+  await db.update('ship_confirmations', { id: keep.id }, patch);
+  for (const f of await db.list('plan_files', { filters: { supplier_id: dup.supplier_id } }).catch(() => [])) if (f.shipment_id === dup.id) await db.update('plan_files', { id: f.id }, { shipment_id: keep.id }).catch(() => null);
+  await db.update('ship_confirmations', { id: dup.id }, { status: 'cancelled', paused: true, next_followup: null, log: withLog(dup, `Merged into ${keep.code} — no more emails from this request`), updated_at: now });
+  return { ...keep, ...patch };
+}
+
 /** Create / update the scheduled requests for every planned container with a loading date. */
 async function syncScheduled(db, day) {
   const cs = await db.list('plan_containers').catch(() => []);
@@ -99,6 +126,12 @@ async function syncScheduled(db, day) {
     for (const x of mine.filter((m) => m.status === 'scheduled' && !bySup[m.supplier_id])) await db.remove('ship_confirmations', { id: x.id });
     if (!ld || daysBetween(ld, day) > 14) continue;
     for (const [sid, ls] of Object.entries(bySup)) {
+      // one request per PO: an earlier request for these POs (made before the container) is linked, not repeated
+      if (!mine.some((m) => m.supplier_id === sid && m.status !== 'cancelled')) {
+        const covers = (x) => ls.every((l) => (x.pos || []).some((p) => PL.normPo(p) === PL.normPo(l.po)));
+        const earlier = all.find((x) => x.supplier_id === sid && !x.container_id && x.status !== 'cancelled' && covers(x));
+        if (earlier) { await adopt(db, earlier, c, ls); earlier.container_id = c.id; mine.push(earlier); continue; }
+      }
       const ex = mine.find((m) => m.supplier_id === sid && m.status !== 'cancelled');
       const patch = { pos: posOf(ls), order_ids: ls.map((l) => l.id), mode: modeOf(c), planned: plannedOf(ls), updated_at: new Date().toISOString() };
       if (!ex) {
@@ -354,7 +387,7 @@ function kindOf(name, type) {
  */
 async function receive(db, config, sc, { from = '', text = '', files = [], form = null, by = null, quiet = false }) {
   const now = new Date().toISOString();
-  const kept = files.filter((f) => f.buffer?.length).map((f) => ({ ...f, kind: f.kind || kindOf(f.name, f.type) }));
+  const kept = files.filter((f) => f.buffer?.length && !(from && isSignatureImage(f))).map((f) => ({ ...f, kind: f.kind || kindOf(f.name, f.type) }));
   const stored = [];
   for (const kind of [...new Set(kept.map((f) => f.kind))]) {
     const r = await PL.storeFiles(db, sc.supplier_id, kept.filter((f) => f.kind === kind), { pos: sc.pos || [], kind, by: by || (from ? `Email from ${from}`.slice(0, 120) : 'Supplier upload'), shipmentId: sc.id });
@@ -462,6 +495,9 @@ async function createFor(db, { supplierId, po, dryRun = false, mode = null }) {
   const all = await db.list('ship_confirmations', { filters: { supplier_id: supplierId } }).catch(() => []);
   const ex = all.find((x) => x.status !== 'cancelled' && (c ? x.container_id === c.id : (x.pos || []).some((p) => PL.normPo(p) === PL.normPo(po))));
   if (ex) return ex;
+  // the PO already has a request from before it was in this container: link it instead of asking again
+  const earlier = c && all.find((x) => x.status !== 'cancelled' && !x.container_id && (x.pos || []).some((p) => PL.normPo(p) === PL.normPo(po)));
+  if (earlier) { if (!dryRun) await adopt(db, earlier, c, lines); return { ...earlier, container_id: c.id }; }
   const sameC = c ? (await db.list('plan_orders', { filters: { container_id: c.id } })).filter((l) => l.supplier_id === supplierId) : lines;
   const sailing = c?.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
   const md = c ? modeOf(c) : MODES[mode] ? mode : '';
@@ -485,4 +521,4 @@ function supplierStats(rows) {
   return Object.fromEntries(Object.entries(by).map(([k, s]) => [k, { n: s.n, days: avg(s.days), vol: avg(s.vol), kg: s.kg, cbm: s.cbm }]));
 }
 
-module.exports = { MODES, REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };
+module.exports = { mergeInto, adopt, isSignatureImage, MODES, REMIND_AFTER, FOLLOW_AFTER, draftParts, checklistOf, nextFollowup, missingKinds, filesOf, blFrom, CLOSING, factsOf, CODE_RE, REQUIRED, required, STATUS, stateOf, chinaNow, loadingDate, docsAddress, composeEmail, sendRequest, syncScheduled, runShipConfirmations, readDocs, factsFrom, receive, handleShipEmail, matchLines, accept, createFor, supplierStats, kindOf, daysBetween, LEAD_DAYS };

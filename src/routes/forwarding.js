@@ -58,8 +58,9 @@ async function fwdBox(db, containerId, back, { supplierBl = null } = {}) {
   const hblNote = !sBl ? '' : !fwd.hbl_no ? "from the supplier's B/L" : sBl === fwd.hbl_no ? "matches the supplier's B/L ✓" : `supplier's B/L: ${sBl} — different`;
   const docs = [...(fwd.docs || [])].reverse();
   const track = FW.trackUrl(fwd);
-  return html`<div class="fw" id="forwarder">
-    <div class="fw-h"><b>Forwarder${fwd.forwarder ? ` · ${fwd.forwarder}` : ''}</b><span class="sub">${fwd.updated_at ? `last update ${sd(fwd.updated_at)}` : 'no forwarder data yet'}</span></div>
+  const one = !has && !waiting.length && !docs.length && !track;   // nothing yet: one line, not an empty panel
+  return html`<div class="fw ${one ? 'fw-one' : ''}" id="forwarder">
+    <div class="fw-h"><b>Forwarder${fwd.forwarder ? ` · ${fwd.forwarder}` : ''}</b><span class="sub">${fwd.updated_at ? `last update ${sd(fwd.updated_at)}` : 'no data yet'}</span></div>
     ${waiting.map((u) => reviewForm(u, cs, back))}
     ${has ? html`<div class="fw-facts">
       ${fact('House B/L', hbl, hblNote, fwd.hbl_no && sBl && sBl !== fwd.hbl_no ? 'chg' : '')}

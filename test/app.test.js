@@ -3634,3 +3634,47 @@ test('shipments: shipped containers and courier parcels, stages and flags, detai
   await req(base, 'POST', `/admin/orders/shipments/${c2.id}/reopen`, { cookie, form: {} });
   assert.equal(db.tables.plan_containers.find((x) => x.id === c2.id).delivered_at, null);
 });
+
+test('one shipping-document request per PO: adopted by the container, duplicates merged, signature logos skipped, finished shipment collapsed', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const PL = require('../src/planning'); const SD = require('../src/shipdocs');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'planned', loading_date: PL.today(), created_at: '2026-01-01T00:00:00Z' });
+  const l = await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Bath toy', qty: 1000, cartons: 20, cbm: 0.85 });
+  // asked before the PO was planned
+  const first = await db.insert('ship_confirmations', { code: 'LBS-AAAAA', token: 't1', supplier_id: s.id, pos: ['800018'], order_ids: [l.id], mode: 'LCL', status: 'complete', missing: [], log: [], actual: { cbm: 0.9, planned_cbm: 0.85 }, accepted_at: '2026-11-10T00:00:00Z', created_at: '2026-11-01T00:00:00Z' });
+  await db.update('plan_orders', { id: l.id }, { container_id: c.id });
+  await SD.syncScheduled(db, PL.today());
+  let rows = db.tables.ship_confirmations;
+  assert.equal(rows.length, 1, 'no second request');
+  assert.equal(rows[0].container_id, c.id); assert.match(rows[0].log.at(-1).text, /Linked to the LCL shipment/);
+  assert.equal((await SD.createFor(db, { supplierId: s.id, po: '800018' })).id, first.id);
+
+  // an older duplicate is offered for merging; merge moves its files and stops it
+  const dup = await db.insert('ship_confirmations', { code: 'LBS-BBBBB', token: 't2', supplier_id: s.id, pos: ['800018'], order_ids: [l.id], container_id: c.id, mode: 'LCL', status: 'sent', sent_at: '2026-11-17T00:00:00Z', missing: ['Bill of lading'], log: [{ at: '2026-11-17T00:00:00Z', text: 'Sent' }], created_at: '2026-11-17T00:00:00Z' });
+  await db.update('ship_confirmations', { id: first.id }, { container_id: null });
+  const f = await db.insert('plan_files', { supplier_id: s.id, name: 'BL.pdf', size: 10, pos: ['800018'], kind: 'Bill of lading', shipment_id: dup.id });
+  let pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
+  assert.match(pg, /Duplicate request/); assert.match(pg, /Merge into LBS-AAAAA/);
+  assert.match(pg, /Show details/); assert.match(pg, /Volume · loaded/); assert.match(pg, /plan 0\.85 m³ · \+6%/);
+  assert.doesNotMatch(pg, /<span>Waiting on Lulyboo<\/span>/);
+  const r = await req(base, 'POST', `/admin/orders/shipping/${dup.id}/merge`, { cookie, form: { into: first.id } });
+  assert.equal(r.status, 303);
+  rows = db.tables.ship_confirmations;
+  assert.equal(rows.find((x) => x.id === dup.id).status, 'cancelled');
+  const kept = rows.find((x) => x.id === first.id);
+  assert.equal(kept.container_id, c.id); assert.ok(kept.log.some((x) => /LBS-BBBBB: Sent/.test(x.text)));
+  assert.equal(db.tables.plan_files.find((x) => x.id === f.id).shipment_id, first.id);
+  pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
+  assert.doesNotMatch(pg, /Duplicate request/);
+
+  // signature logos in emails are not saved as loading photos
+  assert.equal(SD.isSignatureImage({ name: 'huanger logo.jpg', type: 'image/jpeg', buffer: Buffer.alloc(90000) }), true);
+  assert.equal(SD.isSignatureImage({ name: 'image001.png', type: 'image/png', buffer: Buffer.alloc(90000) }), true);
+  assert.equal(SD.isSignatureImage({ name: 'IMG_2231.jpg', type: 'image/jpeg', buffer: Buffer.alloc(900000) }), false);
+  assert.equal(SD.isSignatureImage({ name: 'tiny.png', type: 'image/png', buffer: Buffer.alloc(4000) }), true);
+  assert.equal(SD.isSignatureImage({ name: 'PL.pdf', type: 'application/pdf', buffer: Buffer.alloc(100) }), false);
+});
