@@ -977,3 +977,6 @@ alter table public.plan_orders add column if not exists split_of uuid;      -- t
 alter table public.plan_orders add column if not exists split_no int;       -- part number once split (1 = the original)
 alter table public.plan_orders add column if not exists urgent boolean not null default false;  -- keep whole, never suggested for splitting
 create index if not exists plan_orders_split_idx on public.plan_orders (split_of);
+
+-- Forwarder update check (run once): what each accepted update changed, for the container's log
+alter table public.fwd_updates add column if not exists applied jsonb;

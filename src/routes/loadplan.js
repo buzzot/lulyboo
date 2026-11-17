@@ -81,6 +81,9 @@ function loadPlanRoutes(router, { db, config }) {
     const sail = await db.list('sailings', { filters: { origin: port, etd: ['gte', day] }, order: 'etd.asc', limit: 40 }).catch(() => []);
     for (const c of portCs) if (c.sailing_id && !sail.some((s) => s.id === c.sailing_id)) { const s = await db.get('sailings', c.sailing_id).catch(() => null); if (s) sail.unshift(s); }
 
+    // forwarder updates waiting for review, and the log size, per container
+    const fwdUps = portCs.length ? await db.list('fwd_updates').catch(() => []) : [];
+    const fwdOf = (c) => ({ fwdReview: fwdUps.filter((u) => u.container_id === c.id && u.status === 'pending').map((u) => u.id), fwdLog: fwdUps.filter((u) => u.container_id === c.id && ['accepted', 'logged'].includes(u.status)).length });
     let quotes = [];
     if (portCs.length) quotes = await db.list('plan_quotes', { order: 'created_at.asc' }).catch(() => []);
     const qOf = (c) => quotes.filter((q) => q.container_id === c.id).map((q) => ({
@@ -103,7 +106,7 @@ function loadPlanRoutes(router, { db, config }) {
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],
         upc: Number(o.units_per_carton) || 0, urgent: !!o.urgent, part: o.split_no || 0, root: o.split_of || o.id,
       })),
-      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
+      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), ...fwdOf(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
       states: Object.fromEntries(Object.entries(PL.STATE).map(([k, v]) => [k, { label: v.label, tag: v.tag }])),
     };

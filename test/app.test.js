@@ -3417,3 +3417,72 @@ test('split by quantity: whole cartons, linked parts, auto-merge when they meet 
   await req(base, 'POST', `${P}/urgent`, { cookie, form: { order: l.id, urgent: '1' } });
   assert.equal(db.tables.plan_orders.find((x) => x.id === l.id).urgent, true);
 });
+
+test('forwarder update check on a container: reads subject-style booking emails, flags problems, updates only ticked fields, keeps a log', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; let aiAnswer = null; let aiPrompt = '';
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.anthropic.com')) { aiPrompt = opts.body; return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_forwarder_update', input: aiAnswer }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s1 = await db.insert('suppliers', { name: 'MGTT Corp' }); const s2 = await db.insert('suppliers', { name: 'Shenzhen Kean Silicone Product' }); const s3 = await db.insert('suppliers', { name: 'Guangzhou Yuanyi Commodity Co.,ltd' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '20GP', status: 'booked', created_at: new Date().toISOString() });
+  const C = () => db.tables.plan_containers.find((x) => x.id === c.id);
+  await db.insert('plan_orders', { supplier_id: s1.id, po: '400001', cbm: 9.26, port: 'CNYTN', container_id: c.id, ready_date: '2026-10-27' });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: 'PO900018', cbm: 6.14, port: 'CNYTN', container_id: c.id, ready_date: '2026-10-30' });
+  await db.insert('plan_orders', { supplier_id: s3.id, po: '500024', cbm: 14.26, port: 'CNYTN', container_id: c.id, ready_date: '2026-11-17' });
+  aiAnswer = { doc_type: 'booking_confirmation', booking_no: 'YN0012', container_type: "20'GP", container_count: 1, carrier: 'MSC', pol: 'Yantian', pod: 'Los Angeles', si_cutoff: '2026-11-11', cy_cutoff: '2026-11-13', etd: '2026-11-18', eta: '2026-12-03', transit: '16-18 days', ocean_usd: 6500, rate_valid: '2026-11-14', volume_cbm: 28.51, shippers: ['MGTT Corp.', 'Shenzhen Kean Silicone Products', 'Yuanyi Trading'], consignee: 'Lulyboo Baby LLC', pos: ['400001', '500024', '900018'], summary: 'Booking YN0012 on MSC.' };
+  const fd = new FormData(); fd.append('container', c.id);
+  fd.append('text', "YN0012 - S/MGTT, S/YUANYI, S/KEAN | C/LULYBOO BABY | YTN - LAX | 1 x 20'GP | PO# 400001 + 500024 + 900018 | 11/04/26\nCarrier: MSC\nOcean Freight: $6500 per 20'GP valid until 11/14");
+  const r = await (await fetch(`${base}/admin/orders/shipping/fwd/check`, { method: 'POST', body: fd, headers: { cookie } })).json();
+  assert.ok(r.ok, r.error);
+  assert.match(aiPrompt, /US format/); assert.match(aiPrompt, /YTN = Yantian/);
+  const v = r.view; const txt = v.alerts.map((a) => `${a.level}: ${a.text}`).join('\n');
+  assert.match(txt, /bad: Cargo ready after the CY cut-off: 500024 ready Nov 17 — CY cut-off is Nov 13/);
+  assert.match(txt, /bad: Rate valid until Nov 14, but ETD is Nov 18/);
+  assert.match(txt, /warn: Volume: they have 28\.51 m³, the portal has 29\.66 m³ loaded \(1\.15 m³ more\)/);
+  assert.match(txt, /warn: 29\.66 m³ is above the 25 m³ practical load/);
+  assert.match(txt, /ok: POs match: 400001, PO900018, 500024/);
+  assert.match(txt, /ok: Shippers match/);
+  assert.doesNotMatch(txt, /Container type/);
+  assert.equal(v.alerts[0].level, 'bad');
+  const row = (k) => v.rows.find((x) => x.key === k);
+  assert.equal(row('booking_no').value, 'YN0012'); assert.equal(row('etd').value, 'Nov 18'); assert.equal(row('ocean_usd').value, '$6,500'); assert.equal(row('cy_cutoff').state, 'new');
+  assert.deepEqual([row('loading_date').value, row('loading_date').state, row('loading_date').tick], ['Nov 12', 'suggest', true]);
+  assert.ok(!v.rows.some((x) => x.key === 'volume_cbm'));
+
+  // a 40' booking for a 20' plan is flagged with a switch action
+  const FW = require('../src/forwarding');
+  const ctx = await FW.context(db, C());
+  const al = FW.checks(C(), FW.factsFrom({ ...aiAnswer, container_type: "1 x 40'HQ", pos: ['400001', 'PO900018'] }), ctx, { box: require('../src/routes/loadplan').BOX });
+  assert.equal(al[0].action.box, '40HQ');
+  assert.ok(al.some((a) => /500024 isn't in their booking/.test(a.text) && a.action.kind === 'copy'));
+
+  // the load page shows the pending update and the button
+  const lp = (await req(base, 'GET', '/admin/logistics/planning/load?port=CNYTN', { cookie })).text;
+  assert.match(lp, new RegExp(`&quot;fwdReview&quot;:\\[&quot;${v.id}&quot;\\]`));
+
+  // apply only some fields
+  const ap = JSON.parse((await req(base, 'POST', `/admin/orders/shipping/fwd/${v.id}/apply`, { cookie, form: { only: 'booking_no,carrier,etd,eta,cy_cutoff,loading_date,ocean_usd' } })).text);
+  assert.ok(ap.ok, ap.error);
+  assert.equal(C().fwd.booking_no, 'YN0012'); assert.equal(C().fwd.carrier, 'MSC'); assert.equal(C().fwd.cy_cutoff, '2026-11-13'); assert.equal(C().loading_date, '2026-11-12');
+  assert.equal(C().fwd.si_cutoff, undefined); assert.equal(C().fwd.transit, undefined);
+  assert.equal(ap.container.fwd.booking, 'YN0012'); assert.equal(ap.log, 1);
+  // booking rate goes to the rate history (no chosen quote in the portal)
+  const fq = db.tables.freight_quotes.find((x) => x.container_id === c.id);
+  assert.equal(fq.ocean_usd, 6500); assert.equal(fq.code, 'YN0012'); assert.equal(fq.box, '20GP');
+
+  // the next email with the booking number in the subject matches by itself; log only
+  aiAnswer = { doc_type: 'eta_update', booking_no: 'YN0012', summary: 'Vessel on schedule.' };
+  const u2 = await FW.createUpdate(db, {}, { source: 'email', subject: 'YN0012 - update', text: 'on schedule', notify: false });
+  assert.equal(u2.container_id, c.id); assert.match(u2.match_reason, /booking no\. YN0012/);
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u2.id}/logonly`, { cookie, form: {} });
+  const log = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/fwd/container/${c.id}/log`, { cookie })).text).log;
+  assert.equal(log.length, 2);
+  assert.match(log.find((x) => x.status === 'accepted').changes.join(', '), /ETD Nov 18.*Loading date Nov 12/);
+  assert.equal(log.find((x) => x.status === 'logged').changes.length, 0);
+});

@@ -150,7 +150,44 @@ async function onTheWater(db, port) {
 /** Small summary for the Load containers data. */
 function summary(c) {
   const f = c.fwd; if (!f) return null;
-  return { forwarder: f.forwarder || '', hbl: f.hbl_no || '', mbl: f.mbl_no || '', no: fmtCont(f.container_no || ''), vessel: [f.vessel, f.voyage].filter(Boolean).join(' '), pol: f.pol || '', pod: f.pod || '', etd: f.atd || f.etd || '', eta: f.ata || f.eta || '', etdText: f.atd || f.etd ? PL.short(f.atd || f.etd) : '', etaText: f.ata || f.eta ? PL.short(f.ata || f.eta) : '', etaPrev: f.eta_prev ? PL.short(f.eta_prev) : '', stage: FW.stageOf(f) || '', track: FW.trackUrl(f) || '' };
+  const cut = c.box === 'LCL' ? f.cfs_cutoff || f.cy_cutoff : f.cy_cutoff || f.cfs_cutoff;
+  return { booking: f.booking_no || '', carrier: f.carrier || '', cut: cut ? PL.short(cut) : '', cutName: c.box === 'LCL' ? 'CFS cut-off' : 'CY cut-off', si: f.si_cutoff ? PL.short(f.si_cutoff) : '', transit: f.transit || '', price: f.ocean_usd ? `$${Number(f.ocean_usd).toLocaleString('en-US')}` : '',
+    forwarder: f.forwarder || '', hbl: f.hbl_no || '', mbl: f.mbl_no || '', no: fmtCont(f.container_no || ''), vessel: [f.vessel, f.voyage].filter(Boolean).join(' '), pol: f.pol || '', pod: f.pod || '', etd: f.atd || f.etd || '', eta: f.ata || f.eta || '', etdText: f.atd || f.etd ? PL.short(f.atd || f.etd) : '', etaText: f.ata || f.eta ? PL.short(f.ata || f.eta) : '', etaPrev: f.eta_prev ? PL.short(f.eta_prev) : '', stage: FW.stageOf(f) || '', track: FW.trackUrl(f) || '' };
+}
+
+/** Display text for a field value. */
+function show(key, v) {
+  if (v == null || v === '') return '';
+  if (FW.DATES.includes(key) || key === 'loading_date') return PL.short(String(v).slice(0, 10));
+  if (key === 'ocean_usd') return `$${Number(v).toLocaleString('en-US')}`;
+  if (key === 'container_no') return fmtCont(v);
+  return String(v);
+}
+
+/** Everything the check dialog shows for one update. */
+async function checkView(db, u) {
+  const BOX = require('./loadplan').BOX;
+  const cs = await numbered(db);
+  const c = u.container_id ? cs[u.container_id] : null;
+  const facts = u.facts || {};
+  const base = { id: u.id, status: u.status, type: FW.DOC_TYPES[facts.doc_type] || 'Forwarder update', summary: facts.summary || '', from: u.from_email || '', subject: u.subject || '', at: PL.short(String(u.created_at || '').slice(0, 10)),
+    files: (u.files || []).map((f, i) => ({ name: f.name, url: `${BASE}/${u.id}/files/${i}`, inline: /pdf|image/.test(f.type || '') })), text: u.text ? String(u.text).slice(0, 6000) : '', forwarder: facts.forwarder || '' };
+  if (!c) return { ...base, container: null, rows: [], alerts: [], read: !!facts.summary };
+  const ctx = await FW.context(db, c);
+  const rows = FW.diff(c, facts, ctx).map((r) => ({ key: r.key, label: r.label, old: show(r.key, r.old), value: show(r.key, r.value), raw: r.value, state: r.state, tick: r.tick, note: r.note || '' }));
+  const alerts = FW.checks(c, facts, ctx, { box: BOX });
+  return { ...base, container: { id: c.id, name: cName(c), box: c.box }, rows, alerts, read: rows.length > 0 || alerts.length > 0 || !!facts.summary };
+}
+
+/** Container log: updates you accepted or kept. */
+async function logOf(db, cid) {
+  const us = (await db.list('fwd_updates', { filters: { container_id: cid }, order: 'created_at.desc' }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
+  return us.map((u) => ({
+    id: u.id, at: PL.short(String(u.decided_at || u.created_at || '').slice(0, 10)), type: FW.DOC_TYPES[u.facts?.doc_type] || 'Forwarder update', status: u.status,
+    changes: (u.applied || []).map((a) => `${a.label}${a.from ? ` ${show(a.key, a.from)} →` : ''} ${show(a.key, a.to)}`),
+    summary: u.facts?.summary || '', how: u.source === 'upload' ? `Added by ${u.created_by || 'you'}` : u.from_email ? `Email from ${u.from_email}` : 'Email',
+    files: (u.files || []).map((f, i) => ({ name: f.name, url: `${BASE}/${u.id}/files/${i}`, inline: /pdf|image/.test(f.type || '') })), text: u.text ? String(u.text).slice(0, 6000) : '',
+  }));
 }
 
 function routes(router, { db, config }) {
@@ -175,6 +212,40 @@ function routes(router, { db, config }) {
     return add(req, res, c.id);
   }));
   router.post(`${BASE}/new`, G(async (req, res) => add(req, res, null)));
+
+  // JSON for the check dialog on Load containers
+  const J = (fn) => G(async (req, res) => {
+    try { res.json({ ok: true, ...(await fn(req, res)) }); }
+    catch (e) { res.json({ ok: false, error: missingTable(e) ? 'Run the forwarder SQL in Supabase first.' : e.message }, e.status || 400); }
+  });
+  router.post(`${BASE}/check`, J(async (req) => {
+    const { fields, files: fs } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    const c = await db.get('plan_containers', String(fields.container || '')).catch(() => null);
+    if (!c) throw new HttpError(404, 'Container not found');
+    const list = files(fs); const text = String(fields.text || '').trim();
+    if (!list.length && !text) throw new HttpError(400, 'Paste the email or drop a file first');
+    const u = await FW.createUpdate(db, config, { source: 'upload', text, files: list, containerId: c.id, by: by(req), notify: false });
+    return { view: await checkView(db, u) };
+  }));
+  router.get(`${BASE}/:id/view`, J(async (req) => ({ view: await checkView(db, await getU(req.params.id)) })));
+  router.post(`${BASE}/:id/apply`, J(async (req) => {
+    const { fields: f } = await parseForm(req);
+    const u = await getU(req.params.id);
+    const only = String(f.only || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const view = await checkView(db, u);
+    const values = { _only: only };
+    for (const r of view.rows) if (only.includes(r.key)) values[r.key] = r.raw;
+    const out = await FW.accept(db, config, u, { values, by: by(req) });
+    const c = out.container;
+    return { applied: out.applied.length, container: { id: c.id, status: c.status, loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', fwd: summary(c) }, log: (await logOf(db, c.id)).length };
+  }));
+  router.post(`${BASE}/:id/logonly`, J(async (req) => {
+    const u = await getU(req.params.id);
+    await FW.logOnly(db, u, { by: by(req) });
+    return { log: (await logOf(db, u.container_id)).length };
+  }));
+  router.post(`${BASE}/:id/discard`, J(async (req) => { await FW.dismiss(db, await getU(req.params.id), by(req)); return {}; }));
+  router.get(`${BASE}/container/:cid/log`, J(async (req) => ({ log: await logOf(db, req.params.cid) })));
 
   router.post(`${BASE}/:id/accept`, G(async (req, res) => {
     const { fields } = await parseForm(req);
@@ -212,4 +283,4 @@ function routes(router, { db, config }) {
 }
 
 module.exports = routes;
-Object.assign(module.exports, { fwdBox, fwdSection, onTheWater, summary, voyage, pending, numbered, BASE });
+Object.assign(module.exports, { checkView, logOf, fwdBox, fwdSection, onTheWater, summary, voyage, pending, numbered, BASE });

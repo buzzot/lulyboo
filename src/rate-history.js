@@ -56,6 +56,33 @@ async function sync(db, q, { container = null } = {}) {
   return row.id;
 }
 
+/** A booking confirmation's rate goes into the history too (one row per container + booking number). */
+async function recordBooking(db, c, fwd) {
+  if (!fwd || !(Number(fwd.ocean_usd) > 0)) return null;
+  try {
+    // the chosen quote is already in the history — the booking only adds a rate quoted outside the portal
+    const qs = await db.list('plan_quotes', { filters: { container_id: c.id } }).catch(() => []);
+    if (qs.some((q) => q.status === 'chosen' && (q.total_usd != null || q.ocean_usd != null))) return null;
+    const code = fwd.booking_no || 'booking';
+    const have = (await db.list('freight_quotes', { filters: { container_id: c.id } })).find((r) => !r.quote_id && r.code === code);
+    const lines = await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => []);
+    const cbm = r2(lines.reduce((s, l) => s + (Number(l.cbm) || 0), 0)) || null;
+    const kg = lines.length && lines.every((l) => Number(l.gross_kg) > 0) ? Math.round(lines.reduce((s, l) => s + Number(l.gross_kg), 0)) : null;
+    const wm = c.box === 'LCL' && cbm ? r2(kg ? Q.freightTons(cbm, kg) : cbm) : null;
+    const days = String(fwd.transit || '').match(/\d+/g);
+    const row = {
+      company: fwd.forwarder || null, code, quoted_on: String(fwd.updated_at || now()).slice(0, 10), currency: 'USD',
+      ocean_usd: Number(fwd.ocean_usd), total_usd: Number(fwd.ocean_usd), carrier: fwd.carrier || null, vessel: [fwd.vessel, fwd.voyage].filter(Boolean).join(' ') || null,
+      etd: fwd.etd || null, eta: fwd.eta || null, transit_days: days ? Math.max(...days.map(Number)) : null, valid_until: fwd.rate_valid || null,
+      chosen: true, per_wm: wm ? r2(Number(fwd.ocean_usd) / wm) : null, updated_at: now(),
+    };
+    if (have) { await db.update('freight_quotes', { id: have.id }, row); return have.id; }
+    const sail = c.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
+    const ins = await db.insert('freight_quotes', { ...row, quote_id: null, container_id: c.id, pol: c.port, pod: sail?.destination && !LALB.includes(sail.destination) ? sail.destination : 'LALB', box: c.box || '40GP', cbm, kg, wm, excluded: false, created_at: now() });
+    return ins.id;
+  } catch (e) { if (missingTable(e)) return null; throw e; }
+}
+
 /** Copy all quotes of a container (after choosing — the others change too — and before it is deleted). */
 async function syncContainer(db, containerId) {
   try {
@@ -109,4 +136,4 @@ function forwarderStats(rows, basis = 'allin') {
   }).sort((a, b) => (a.median ?? 1e12) - (b.median ?? 1e12));
 }
 
-module.exports = { sync, syncContainer, syncQuote, syncAll, priceOf, median, rounds, forwarderStats, laneOf, laneName, podName, missingTable };
+module.exports = { recordBooking, sync, syncContainer, syncQuote, syncAll, priceOf, median, rounds, forwarderStats, laneOf, laneName, podName, missingTable };
