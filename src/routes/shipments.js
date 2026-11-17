@@ -35,6 +35,7 @@ async function load(db) {
   const quotes = await db.list('plan_quotes').catch(() => []);
   const entries = (await db.list('customs_entries').catch(() => [])).filter((e) => ['saved', 'pending'].includes(e.status));
   const sups = {}; for (const s of await db.list('suppliers').catch(() => [])) sups[s.id] = s;
+  const fwdUps = await db.list('fwd_updates').catch(() => []);
   const out = [];
   for (const c of all) {
     const f = c.fwd || {};
@@ -70,7 +71,8 @@ async function load(db) {
     }
     const pos = [...new Map(ls.map((l) => [`${l.supplier_id}|${PL.normPo(l.po)}`, { po: l.po, supplier_id: l.supplier_id }])).values()];
     out.push({
-      id: c.id, kind: c.box === 'LCL' ? 'lcl' : 'fcl', c, f, stage, lines: ls, scs: cs, entries: ce, chosen, flags, lfd, arrivedOn, freight, duty, drayage: Number(c.drayage_usd) || null,
+      id: c.id, kind: c.box === 'LCL' ? 'lcl' : 'fcl', c, f, stage,
+      fwdReview: fwdUps.filter((u) => u.container_id === c.id && u.status === 'pending').map((u) => u.id), fwdLog: fwdUps.filter((u) => u.container_id === c.id && ['accepted', 'logged'].includes(u.status)).length, lines: ls, scs: cs, entries: ce, chosen, flags, lfd, arrivedOn, freight, duty, drayage: Number(c.drayage_usd) || null,
       title: `${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no}${c.box !== 'LCL' ? ` · ${BOXN[c.box] || c.box}` : ''}`,
       sub: [f.forwarder || chosen?.company, f.booking_no, f.hbl_no ? `HBL ${f.hbl_no}` : '', [f.carrier, f.vessel, f.voyage].filter(Boolean).join(' '), fmtCont(f.container_no || c.container_no)].filter(Boolean).join(' · '),
       pos, suppliers: [...new Set(pos.map((p) => sups[p.supplier_id]?.name).filter(Boolean))], port: c.port, forwarder: f.forwarder || chosen?.company || '',
@@ -115,7 +117,7 @@ function rowHTML(r, today) {
     <div class="shp-t"><span class="shp-st ${cls}">${lab}</span><b>${r.title}</b><span class="sub">${r.sub || '—'}</span></div>
     <div class="shp-pos">${r.pos.slice(0, 5).map((p) => html`<span>${p.po}</span>`)}${r.pos.length > 5 ? html`<span>+${r.pos.length - 5}</span>` : ''}<em class="sub">${r.suppliers.length > 2 ? `${r.suppliers.length} suppliers` : r.suppliers.join(' · ')}</em></div>
     <div class="shp-trk"><div class="shp-ln"><span>${left}</span><b class="${late ? 'late' : ''}">${right}${late ? html` <s>${sh(r.f.eta_prev)}</s>` : ''}</b></div><div class="shp-pb ${cls}"><i style="width:${pct}%"></i>${r.stage === 'sailed' ? html`<em style="left:${pct}%">🚢</em>` : ''}</div></div>
-    <div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}</div>
+    <div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}${r.c && r.stage !== 'delivered' ? html`<button type="button" class="shp-fwb ${r.fwdReview?.length ? 'on' : ''}" data-fwc="${r.c.id}" ${r.fwdReview?.length ? raw(`data-fwc-rev="${r.fwdReview[0]}"`) : ''} data-fwc-name="${r.title}" data-fwc-sub="${r.f.forwarder || ''}" title="Paste or drop an email from the forwarder">${r.fwdReview?.length ? `${r.fwdReview.length} to review` : '＋ Forwarder update'}</button>` : ''}</div>
     <div class="shp-cost">${cost ? html`<b>${usd(cost)}</b><span class="sub">${[r.freight ? 'freight' : '', r.duty ? 'duty' : '', r.drayage ? 'delivery' : ''].filter(Boolean).join(' + ')}</span>` : html`<span class="sub">${r.cbm ? `${Math.round(r.cbm * 100) / 100} m³` : ''}</span>`}</div>
   </a>`;
 }
@@ -226,6 +228,9 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         <section class="card shp-d">
           <div class="shp-dh"><h1>${r.title}</h1><span class="shp-st ${STAGE_TAG[r.stage][1]}">${STAGE_TAG[r.stage][0]}</span>
             <span class="shp-dact">${r.c ? html`<a class="btn ghost small" href="/admin/logistics/planning/load?port=${r.c.port}#c-${r.c.id}">Container plan</a>` : ''}${FW.trackUrl(f) ? html`<a class="btn ghost small" href="${FW.trackUrl(f)}" target="_blank" rel="noopener">Track ↗</a>` : ''}
+            ${r.c && editable ? html`<button type="button" class="btn ghost small" data-fwc="${r.c.id}" data-fwc-name="${r.title}" data-fwc-sub="${f.forwarder || ''}" title="Paste or drop an email, PDF or screenshot from the forwarder — AI compares it with this shipment">＋ Forwarder update</button>` : ''}
+            ${r.c && r.fwdReview.length ? html`<button type="button" class="btn small" data-fwc="${r.c.id}" data-fwc-rev="${r.fwdReview[0]}" data-fwc-name="${r.title}" data-fwc-sub="${f.forwarder || ''}">${r.fwdReview.length} update${r.fwdReview.length > 1 ? 's' : ''} to review</button>` : ''}
+            ${r.c && r.fwdLog ? html`<button type="button" class="link small" data-fwc="${r.c.id}" data-fwc-log data-fwc-name="${r.title}">Forwarder log (${r.fwdLog})</button>` : ''}
             ${editable ? html`<button type="button" class="btn small" data-open-dialog="shp-deliver">Mark delivered…</button>` : html`<form method="post" action="${BASE}/${r.id}/reopen" class="inline"><button class="link small">Reopen</button></form>`}</span></div>
           <p class="sub">${r.sub}</p>
           <div class="shp-steps">${steps.map(([k, l], i) => html`<div class="shp-s ${done(k) ? 'done' : i === cur ? 'now' : ''}"><b>${l}</b><small>${sDate[k] || ''}</small></div>`)}</div>

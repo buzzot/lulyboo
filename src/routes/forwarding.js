@@ -61,7 +61,7 @@ async function fwdBox(db, containerId, back, { supplierBl = null } = {}) {
   const one = !has && !waiting.length && !docs.length && !track;   // nothing yet: one line, not an empty panel
   return html`<div class="fw ${one ? 'fw-one' : ''}" id="forwarder">
     <div class="fw-h"><b>Forwarder${fwd.forwarder ? ` · ${fwd.forwarder}` : ''}</b><span class="sub">${fwd.updated_at ? `last update ${sd(fwd.updated_at)}` : 'no data yet'}</span></div>
-    ${waiting.map((u) => reviewForm(u, cs, back))}
+
     ${has ? html`<div class="fw-facts">
       ${fact('House B/L', hbl, hblNote, fwd.hbl_no && sBl && sBl !== fwd.hbl_no ? 'chg' : '')}
       ${fact('Master B/L', fwd.mbl_no, fwd.booking_no ? `booking ${fwd.booking_no}` : '')}
@@ -74,7 +74,17 @@ async function fwdBox(db, containerId, back, { supplierBl = null } = {}) {
     </div>
     ${voyage(c, fwd)}` : ''}
     ${docs.length || track ? html`<div class="fw-src">${docs.length ? 'Sources:' : ''} ${docs.map((d) => html`<span class="fw-chip">${FW.DOC_TYPES[d.type] || 'Document'} · ${sd(d.at)}</span>`)}${track ? html`<a href="${track}" target="_blank" rel="noopener" class="fw-track">Track ${fwd.container_no ? 'container' : 'B/L'} ↗</a>` : ''}</div>` : ''}
-    ${dropForm(`${BASE}/container/${c.id}`, back, has || waiting.length)}
+    ${fwdActions(c, fwd, waiting.length, (await logOf(db, c.id).catch(() => [])).length, waiting[0]?.id)}
+  </div>`;
+}
+/** Buttons that open the forwarder check window (public/app.js FwdCheck): new update, ones waiting for review, the log. */
+function fwdActions(c, fwd, nReview = 0, nLog = 0, firstReview = null) {
+  const name = `${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no || ''}`.trim();
+  const sub = [c.box === 'LCL' ? 'LCL' : c.box, fwd?.forwarder].filter(Boolean).join(' · ');
+  return html`<div class="fw-acts">
+    <button type="button" class="btn ghost small" data-fwc="${c.id}" data-fwc-name="${name}" data-fwc-sub="${sub}" title="Paste or drop an email, PDF or screenshot from the forwarder — AI compares it with this shipment">＋ Forwarder update</button>
+    ${nReview ? html`<button type="button" class="btn small" data-fwc="${c.id}" data-fwc-rev="${firstReview}" data-fwc-name="${name}" data-fwc-sub="${sub}">${nReview} update${nReview > 1 ? 's' : ''} to review</button>` : ''}
+    ${nLog ? html`<button type="button" class="link small" data-fwc="${c.id}" data-fwc-log data-fwc-name="${name}" data-fwc-sub="${sub}">Log (${nLog})</button>` : ''}
   </div>`;
 }
 const FIELDS_SHOWN = ['hbl_no', 'mbl_no', 'container_no', 'vessel', 'etd', 'eta', 'pod', 'booking_no', 'forwarder'];
@@ -291,4 +301,4 @@ function routes(router, { db, config }) {
 }
 
 module.exports = routes;
-Object.assign(module.exports, { checkView, logOf, fwdBox, fwdSection, onTheWater, summary, voyage, pending, numbered, BASE });
+Object.assign(module.exports, { fwdActions, checkView, logOf, fwdBox, fwdSection, onTheWater, summary, voyage, pending, numbered, BASE });

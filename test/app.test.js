@@ -3262,7 +3262,7 @@ test('forwarder shipment data: quote-thread booking, shipments@ shipping advice 
   // PO page: forwarder box with facts, sources, track link and the drop strip; journey steps
   const po = (await req(base, 'GET', `/admin/orders/view?supplier=${h.id}&po=800018`, { cookie })).text;
   assert.match(po, /Forwarder · Sino Freight/); assert.match(po, /COSU6402718830/); assert.match(po, /CSNU 6184207/); assert.match(po, /was Nov 30/);
-  assert.match(po, /track-trace\.com\/container\?number=CSNU6184207/); assert.match(po, /data-fwd-drop/);
+  assert.match(po, /track-trace\.com\/container\?number=CSNU6184207/); assert.match(po, /data-fwc="[^"]+" data-fwc-name/);
   assert.match(po, /Booking confirmation · [A-Z][a-z]{2} \d+/);
 
   // Load containers: the shipped LCL shipment is listed "On the water"
@@ -3698,4 +3698,22 @@ test('shipping documents card: "Docs complete" label, placeholder numbers hidden
   assert.equal(r.status, 303);
   assert.ok(!db.tables.plan_files.some((x) => x.id === logo.id));
   assert.match(db.tables.ship_confirmations[0].log.at(-1).text, /Removed huanger logo\.jpg/);
+});
+
+test('forwarder update button on Shipments (list + detail) and the PO page', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', created_at: '2026-01-01T00:00:00Z', fwd: {} });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether ball', qty: 8028, container_id: c.id, shipped: true });
+  const u = await db.insert('fwd_updates', { container_id: c.id, status: 'pending', facts: {}, created_at: '2026-11-17T00:00:00Z' });
+  await db.insert('fwd_updates', { container_id: c.id, status: 'logged', facts: {}, created_at: '2026-11-16T00:00:00Z' });
+  const list = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
+  assert.match(list, new RegExp(`data-fwc="${c.id}" data-fwc-rev="${u.id}"`)); assert.match(list, /1 to review/);
+  const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det, /＋ Forwarder update/); assert.match(det, /1 update to review/); assert.match(det, /Forwarder log \(1\)/);
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
+  assert.ok(/＋ Forwarder update/.test(po) || !/id="forwarder"/.test(po));
 });

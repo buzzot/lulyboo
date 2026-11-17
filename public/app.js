@@ -1134,6 +1134,128 @@
   dlg.addEventListener('click', function (e) { if (e.target.closest('[data-edit-close]') || e.target === dlg) dlg.close(); });
 })();
 
+// Forwarder update check window — used on Load containers, Shipments and the PO page.
+// Paste / drop an email → AI compares it with the container → tick what to update. Pages pass hooks
+// (meta, added, done, box); without hooks the page reloads after a change.
+(function () {
+  var FB = '/admin/orders/shipping/fwd';
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var toastEl = null;
+  function toast(t) { toastEl = toastEl || document.querySelector('[data-lp-toast]'); if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'lp-toast'; toastEl.setAttribute('role', 'status'); document.body.appendChild(toastEl); } toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastEl._t); toastEl._t = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
+  function post(url, data) {
+    var body = new URLSearchParams(); Object.keys(data || {}).forEach(function (k) { body.append(k, data[k] == null ? '' : data[k]); });
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body, credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Something went wrong (' + r.status + ')' }; }); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error || 'Could not save'); return j; });
+  }
+  var DEF = {
+    meta: function () { return { name: '', sub: '' }; },
+    added: function () {},
+    done: function (cid, j, msg) { toast(msg); setTimeout(function () { location.reload(); }, 700); },
+    box: function (cid, box) { return post('/admin/logistics/planning/containers/' + cid, { box: box }).then(function () { toast('Container type changed'); }); },
+  };
+  var fd = null, F = null, H = DEF;
+  function dlg() {
+    if (fd) return fd;
+    fd = document.createElement('dialog'); fd.className = 'rp-modal lp-fdlg'; fd.setAttribute('aria-labelledby', 'lp-fd-t'); document.body.appendChild(fd);
+    bind(); return fd;
+  }
+  function fdOpen() { if (fd.showModal) { if (!fd.open) fd.showModal(); } else fd.setAttribute('open', ''); }
+  function fdTop(t, extra) { return '<div class="rp-top"><h2 id="lp-fd-t">' + t + '</h2>' + (extra || '') + '<button type="button" class="icon-btn" data-fd-close aria-label="Close">×</button></div>'; }
+  function fdInput() {
+    var m = F.meta;
+    fd.innerHTML = '<form class="lp-fd" data-fd-form>' + fdTop('Forwarder update' + (m.name ? ' · ' + esc(m.name) : ''), m.sub ? '<span class="sub">' + esc(m.sub) + '</span>' : '') +
+      '<div class="lp-fd-drop" data-fd-drop tabindex="0"><b>Drop the email, PDF or screenshot here</b><span>or paste with ⌘V · <button type="button" class="link small" data-fd-choose>choose a file</button></span><input type="file" multiple hidden data-fd-file accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.csv,image/*,application/pdf"></div>' +
+      '<div class="lp-fd-files" data-fd-files>' + F.files.map(function (f, i) { return '<span class="fw-chip">📄 ' + esc(f.name) + ' <button type="button" class="lp-x" data-fd-rm="' + i + '" aria-label="Remove">×</button></span>'; }).join('') + '</div>' +
+      '<textarea rows="8" data-fd-text placeholder="…or paste the email text, including the subject line" aria-label="Email text">' + esc(F.text || '') + '</textarea>' +
+      '<div class="lp-fd-acts"><span class="sub">AI reads it and compares with what the portal has — nothing changes until you choose.</span><span class="r"><button type="button" class="btn ghost" data-fd-close>Cancel</button><button type="button" class="btn" data-fd-check>Check</button></span></div></form>';
+  }
+  function fdBusy(t) { fd.innerHTML = '<div class="lp-fd">' + fdTop('Forwarder update') + '<div class="lp-fd-busy"><span class="lp-spin"></span>' + esc(t) + '</div></div>'; }
+  var ALERT_I = { bad: '⚠', warn: '⚠', ok: '✓' };
+  function fdView() {
+    var v = F.view, diffN = v.rows.filter(function (r) { return r.state !== 'same'; }).length;
+    var rows = v.rows.slice().sort(function (a, b) { return (a.state === 'same') - (b.state === 'same'); });
+    var st = { same: ['SAME', 'same'], new: ['NEW', 'new'], changed: ['DIFFERENT', 'chg'], suggest: ['SUGGESTED', 'new'] };
+    var ticked = rows.filter(function (r) { return r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick); }).length;
+    var probs = v.alerts.filter(function (a) { return a.level !== 'ok'; }).length;
+    fd.innerHTML = '<div class="lp-fd">' + fdTop(esc(v.type) + (v.forwarder ? ' · ' + esc(v.forwarder) : ''), (diffN || probs ? '<span class="cp-tag wait">' + [probs ? probs + ' to check' : '', diffN ? diffN + ' difference' + (diffN > 1 ? 's' : '') : ''].filter(Boolean).join(' · ') + '</span>' : '<span class="cp-tag ok">All the same</span>')) +
+      (v.container ? '' : '<p class="lp-warn">Not attached to a container.</p>') +
+      (v.summary ? '<div class="lp-fd-sum"><b>✦ AI summary</b>' + esc(v.summary) + '</div>' : '') +
+      (v.alerts.length ? '<div class="lp-fd-al">' + v.alerts.map(function (a, i) { return '<div class="lp-fd-a ' + a.level + '"><span>' + ALERT_I[a.level] + '</span><span>' + esc(a.text) + '</span>' + (a.action ? '<button type="button" class="btn small' + (a.action.kind === 'copy' ? ' ghost' : '') + '" data-fd-act="' + i + '">' + esc(a.action.label) + '</button>' : '<span></span>') + '</div>'; }).join('') + '</div>' : '') +
+      (rows.length ? '<div class="table-wrap"><table class="lp-fd-t"><thead><tr><th></th><th>Field</th><th>In the portal</th><th>In the email</th><th></th></tr></thead><tbody>' + rows.map(function (r) {
+        var on = r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick), s2 = st[r.state] || st.new;
+        return '<tr class="' + (r.state === 'same' ? 'same' : '') + '"><td><input type="checkbox" data-fd-tick="' + esc(r.key) + '"' + (on ? ' checked' : '') + (r.state === 'same' ? ' disabled' : '') + ' aria-label="Update ' + esc(r.label) + '"></td><td>' + esc(r.label) + '</td><td class="was">' + (esc(r.old) || '—') + '</td><td><b>' + esc(r.value) + '</b>' + (r.note ? ' <span class="sub">' + esc(r.note) + '</span>' : '') + '</td><td><span class="lp-fd-st ' + s2[1] + '">' + s2[0] + '</span></td></tr>';
+      }).join('') + '</tbody></table></div>' : (v.read ? '' : '<p class="sub">Nothing readable found in it.</p>')) +
+      (v.files.length ? '<div class="lp-fd-files">' + v.files.map(function (f) { return '<a class="fw-chip" href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join('') + '</div>' : '') +
+      (v.text ? '<details class="lp-orig"><summary>Original message' + (v.from ? ' from ' + esc(v.from) : '') + '</summary><pre>' + esc(v.text) + '</pre></details>' : '') +
+      '<div class="lp-fd-acts"><button type="button" class="link small" data-fd-discard>Discard</button><span class="r"><button type="button" class="btn ghost" data-fd-log>Save to log only</button><button type="button" class="btn" data-fd-apply' + (ticked && v.container ? '' : ' disabled') + '>Update ' + ticked + ' field' + (ticked === 1 ? '' : 's') + '</button></span></div></div>';
+  }
+  function fdLoad(id) { fdBusy('Opening…'); fdOpen(); fetch(FB + '/' + id + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); F.view = j.view; F.tick = {}; fdView(); }).catch(function (x) { fd.close(); toast(x.message); }); }
+  function fdDone(cid, j, msg) { var uid = F.view && F.view.id; fd.close(); H.done(cid, j, msg, uid); }
+  function addFiles(list) { for (var i = 0; i < list.length; i++) F.files.push(list[i]); F.text = (fd.querySelector('[data-fd-text]') || {}).value || F.text; fdInput(); }
+  function bind() {
+  fd.addEventListener('click', function (e) {
+    if (e.target === fd || e.target.closest('[data-fd-close]')) { fd.close(); return; }
+    var b;
+    if (e.target.closest('[data-fd-choose]')) { fd.querySelector('[data-fd-file]').click(); return; }
+    if ((b = e.target.closest('[data-fd-rm]'))) { F.text = fd.querySelector('[data-fd-text]').value; F.files.splice(Number(b.getAttribute('data-fd-rm')), 1); fdInput(); return; }
+    if (e.target.closest('[data-fd-check]')) {
+      F.text = fd.querySelector('[data-fd-text]').value;
+      if (!F.text.trim() && !F.files.length) { toast('Paste the email or drop a file first'); return; }
+      var body = new FormData(); body.append('container', F.cid); body.append('text', F.text); F.files.forEach(function (f) { body.append('file', f, f.name); });
+      fdBusy('Reading and comparing…');
+      fetch(FB + '/check', { method: 'POST', body: body, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); if (j.customs) { location.href = '/admin/logistics/customs?review=' + encodeURIComponent(j.customs); return; } F.view = j.view; F.tick = {}; H.added(F.cid, j.view.id); fdView(); }).catch(function (x) { toast(x.message); fdInput(); });
+      return;
+    }
+    if ((b = e.target.closest('[data-fd-act]'))) {
+      var a = F.view.alerts[Number(b.getAttribute('data-fd-act'))].action;
+      if (a.kind === 'box') { H.box(F.cid, a.box).then(function () { return fetch(FB + '/' + F.view.id + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (j.ok) { F.view = j.view; fdView(); } }); }).catch(function (x) { toast(x.message); }); return; }
+      if (a.kind === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(a.text) : Promise.reject()).then(function () { toast('Reply copied — paste it into your email'); }, function () { window.prompt('Copy this reply:', a.text); }); return; }
+    }
+    if (e.target.closest('[data-fd-apply]')) {
+      var keys = F.view.rows.filter(function (r) { return r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick); }).map(function (r) { return r.key; });
+      fdBusy('Saving…'); var cid = F.cid;
+      post(FB + '/' + F.view.id + '/apply', { only: keys.join(',') }).then(function (j) { fdDone(cid, j, 'Updated ' + keys.length + ' field' + (keys.length === 1 ? '' : 's') + ' — kept in the log'); }).catch(function (x) { toast(x.message); fdView(); });
+      return;
+    }
+    if (e.target.closest('[data-fd-log]')) { var cid2 = F.cid; fdBusy('Saving…'); post(FB + '/' + F.view.id + '/logonly').then(function (j) { fdDone(cid2, j, 'Kept in the log — nothing changed'); }).catch(function (x) { toast(x.message); fdView(); }); return; }
+    if (e.target.closest('[data-fd-discard]')) { var cid3 = F.cid; post(FB + '/' + F.view.id + '/discard').then(function () { fdDone(cid3, null, 'Discarded'); }).catch(function (x) { toast(x.message); }); return; }
+  });
+  fd.addEventListener('change', function (e) {
+    var k = e.target.getAttribute && e.target.getAttribute('data-fd-tick'); if (k) { F.tick[k] = e.target.checked; fdView(); return; }
+    if (e.target.hasAttribute && e.target.hasAttribute('data-fd-file') && e.target.files.length) addFiles(e.target.files);
+  });
+  fd.addEventListener('dragover', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (z) { e.preventDefault(); z.classList.add('over'); } });
+  fd.addEventListener('dragleave', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (z) z.classList.remove('over'); });
+  fd.addEventListener('drop', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (!z) return; e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  fd.addEventListener('paste', function (e) { if (!fd.querySelector('[data-fd-drop]')) return; var fl = e.clipboardData && e.clipboardData.files; if (fl && fl.length) { e.preventDefault(); addFiles(fl); } });
+  }
+  function fdLog(cid) {
+    fdBusy('Opening the log…'); fdOpen();
+    fetch(FB + '/container/' + cid + '/log', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error);
+      fd.innerHTML = '<div class="lp-fd">' + fdTop('Forwarder log' + (F.meta.name ? ' · ' + esc(F.meta.name) : '')) + (j.log.length ? '<ul class="lp-fd-log">' + j.log.map(function (x) {
+        return '<li><span class="d">' + esc(x.at) + '</span><span><b>' + esc(x.type) + '</b>' + (x.changes.length ? ' — ' + esc(x.changes.join(', ')) : x.summary ? ' — ' + esc(x.summary) : '') + '<span class="sub">' + esc(x.how) + x.files.map(function (f) { return ' · <a href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join('') + '</span>' +
+          (x.text ? '<details class="lp-orig"><summary>Original</summary><pre>' + esc(x.text) + '</pre></details>' : '') + '</span><span class="cp-tag ' + (x.status === 'accepted' ? 'ok' : '') + '">' + (x.status === 'accepted' ? 'Updated' : 'Logged') + '</span></li>';
+      }).join('') + '</ul>' : '<p class="sub">Nothing logged yet.</p>') + '</div>';
+    }).catch(function (x) { fd.close(); toast(x.message); });
+  }
+  function start(cid, hooks) { H = {}; Object.keys(DEF).forEach(function (k) { H[k] = (hooks && hooks[k]) || DEF[k]; }); dlg(); F = { cid: cid, files: [], text: '', tick: {}, meta: H.meta(cid) }; }
+  window.FwdCheck = {
+    input: function (cid, hooks) { start(cid, hooks); fdInput(); fdOpen(); var t = fd.querySelector('[data-fd-text]'); if (t) t.focus(); },
+    review: function (cid, uid, hooks) { start(cid, hooks); fdLoad(uid); },
+    log: function (cid, hooks) { start(cid, hooks); fdLog(cid); },
+  };
+  // any page: <button data-fwc="containerId" data-fwc-name="…" data-fwc-sub="…">, data-fwc-rev="updateId", data-fwc-log
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-fwc]'); if (!b) return; e.preventDefault();
+    var cid = b.getAttribute('data-fwc'), hooks = { meta: function () { return { name: b.getAttribute('data-fwc-name') || '', sub: b.getAttribute('data-fwc-sub') || '' }; } };
+    if (b.hasAttribute('data-fwc-rev')) window.FwdCheck.review(cid, b.getAttribute('data-fwc-rev'), hooks);
+    else if (b.hasAttribute('data-fwc-log')) window.FwdCheck.log(cid, hooks);
+    else window.FwdCheck.input(cid, hooks);
+  });
+})();
+
 // Container planning → Load containers: drag PO lines into containers, cartons animate in, fill bar.
 (function () {
   var root = document.querySelector('[data-loadplan]'); if (!root) return;
@@ -1703,96 +1825,21 @@
     });
   }
 
-  // Forwarder update: paste / drop an email → AI compares it with the container → tick what to update
-  var FB = '/admin/orders/shipping/fwd';
-  var fd = document.createElement('dialog'); fd.className = 'rp-modal lp-fdlg'; fd.setAttribute('aria-labelledby', 'lp-fd-t'); document.body.appendChild(fd);
-  var F = null; // { cid, files: [], view }
-  function fdOpen() { if (fd.showModal) { if (!fd.open) fd.showModal(); } else fd.setAttribute('open', ''); }
-  function fdTop(t, extra) { return '<div class="rp-top"><h2 id="lp-fd-t">' + t + '</h2>' + (extra || '') + '<button type="button" class="icon-btn" data-fd-close aria-label="Close">×</button></div>'; }
-  function fdInput() {
-    var c = cById(F.cid);
-    fd.innerHTML = '<form class="lp-fd" data-fd-form>' + fdTop('Forwarder update · ' + esc(cName(c)), '<span class="sub">' + esc(D.box[c.box].lcl ? 'LCL' : D.box[c.box].name) + (c.fwd && c.fwd.forwarder ? ' · ' + esc(c.fwd.forwarder) : '') + '</span>') +
-      '<div class="lp-fd-drop" data-fd-drop tabindex="0"><b>Drop the email, PDF or screenshot here</b><span>or paste with ⌘V · <button type="button" class="link small" data-fd-choose>choose a file</button></span><input type="file" multiple hidden data-fd-file accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.xlsx,.csv,image/*,application/pdf"></div>' +
-      '<div class="lp-fd-files" data-fd-files>' + F.files.map(function (f, i) { return '<span class="fw-chip">📄 ' + esc(f.name) + ' <button type="button" class="lp-x" data-fd-rm="' + i + '" aria-label="Remove">×</button></span>'; }).join('') + '</div>' +
-      '<textarea rows="8" data-fd-text placeholder="…or paste the email text, including the subject line" aria-label="Email text">' + esc(F.text || '') + '</textarea>' +
-      '<div class="lp-fd-acts"><span class="sub">AI reads it and compares with what the portal has — nothing changes until you choose.</span><span class="r"><button type="button" class="btn ghost" data-fd-close>Cancel</button><button type="button" class="btn" data-fd-check>Check</button></span></div></form>';
-  }
-  function fdBusy(t) { fd.innerHTML = '<div class="lp-fd">' + fdTop('Forwarder update') + '<div class="lp-fd-busy"><span class="lp-spin"></span>' + esc(t) + '</div></div>'; }
-  var ALERT_I = { bad: '⚠', warn: '⚠', ok: '✓' };
-  function fdView() {
-    var v = F.view, diffN = v.rows.filter(function (r) { return r.state !== 'same'; }).length;
-    var rows = v.rows.slice().sort(function (a, b) { return (a.state === 'same') - (b.state === 'same'); });
-    var st = { same: ['SAME', 'same'], new: ['NEW', 'new'], changed: ['DIFFERENT', 'chg'], suggest: ['SUGGESTED', 'new'] };
-    var ticked = rows.filter(function (r) { return r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick); }).length;
-    var probs = v.alerts.filter(function (a) { return a.level !== 'ok'; }).length;
-    fd.innerHTML = '<div class="lp-fd">' + fdTop(esc(v.type) + (v.forwarder ? ' · ' + esc(v.forwarder) : ''), (diffN || probs ? '<span class="cp-tag wait">' + [probs ? probs + ' to check' : '', diffN ? diffN + ' difference' + (diffN > 1 ? 's' : '') : ''].filter(Boolean).join(' · ') + '</span>' : '<span class="cp-tag ok">All the same</span>')) +
-      (v.container ? '' : '<p class="lp-warn">Not attached to a container.</p>') +
-      (v.summary ? '<div class="lp-fd-sum"><b>✦ AI summary</b>' + esc(v.summary) + '</div>' : '') +
-      (v.alerts.length ? '<div class="lp-fd-al">' + v.alerts.map(function (a, i) { return '<div class="lp-fd-a ' + a.level + '"><span>' + ALERT_I[a.level] + '</span><span>' + esc(a.text) + '</span>' + (a.action ? '<button type="button" class="btn small' + (a.action.kind === 'copy' ? ' ghost' : '') + '" data-fd-act="' + i + '">' + esc(a.action.label) + '</button>' : '<span></span>') + '</div>'; }).join('') + '</div>' : '') +
-      (rows.length ? '<div class="table-wrap"><table class="lp-fd-t"><thead><tr><th></th><th>Field</th><th>In the portal</th><th>In the email</th><th></th></tr></thead><tbody>' + rows.map(function (r) {
-        var on = r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick), s2 = st[r.state] || st.new;
-        return '<tr class="' + (r.state === 'same' ? 'same' : '') + '"><td><input type="checkbox" data-fd-tick="' + esc(r.key) + '"' + (on ? ' checked' : '') + (r.state === 'same' ? ' disabled' : '') + ' aria-label="Update ' + esc(r.label) + '"></td><td>' + esc(r.label) + '</td><td class="was">' + (esc(r.old) || '—') + '</td><td><b>' + esc(r.value) + '</b>' + (r.note ? ' <span class="sub">' + esc(r.note) + '</span>' : '') + '</td><td><span class="lp-fd-st ' + s2[1] + '">' + s2[0] + '</span></td></tr>';
-      }).join('') + '</tbody></table></div>' : (v.read ? '' : '<p class="sub">Nothing readable found in it.</p>')) +
-      (v.files.length ? '<div class="lp-fd-files">' + v.files.map(function (f) { return '<a class="fw-chip" href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join('') + '</div>' : '') +
-      (v.text ? '<details class="lp-orig"><summary>Original message' + (v.from ? ' from ' + esc(v.from) : '') + '</summary><pre>' + esc(v.text) + '</pre></details>' : '') +
-      '<div class="lp-fd-acts"><button type="button" class="link small" data-fd-discard>Discard</button><span class="r"><button type="button" class="btn ghost" data-fd-log>Save to log only</button><button type="button" class="btn" data-fd-apply' + (ticked && v.container ? '' : ' disabled') + '>Update ' + ticked + ' field' + (ticked === 1 ? '' : 's') + '</button></span></div></div>';
-  }
-  function fdLoad(id) { fdBusy('Opening…'); fdOpen(); fetch(FB + '/' + id + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); F.view = j.view; F.tick = {}; fdView(); }).catch(function (x) { fd.close(); toast(x.message); }); }
-  function fdDone(cid, j, msg) {
-    var c = cById(cid); if (c) { c.fwdReview = (c.fwdReview || []).filter(function (x) { return x !== F.view.id; }); if (j && j.container) { c.status = j.container.status === 'shipped' ? c.status : j.container.status; c.loading = j.container.loading || c.loading; c.containerNo = j.container.containerNo || c.containerNo; c.fwd = j.container.fwd; } if (j && j.log != null) c.fwdLog = j.log; }
-    fd.close(); render(); toast(msg);
-  }
-  function addFiles(list) { for (var i = 0; i < list.length; i++) F.files.push(list[i]); F.text = (fd.querySelector('[data-fd-text]') || {}).value || F.text; fdInput(); }
-  fd.addEventListener('click', function (e) {
-    if (e.target === fd || e.target.closest('[data-fd-close]')) { fd.close(); return; }
-    var b;
-    if (e.target.closest('[data-fd-choose]')) { fd.querySelector('[data-fd-file]').click(); return; }
-    if ((b = e.target.closest('[data-fd-rm]'))) { F.text = fd.querySelector('[data-fd-text]').value; F.files.splice(Number(b.getAttribute('data-fd-rm')), 1); fdInput(); return; }
-    if (e.target.closest('[data-fd-check]')) {
-      F.text = fd.querySelector('[data-fd-text]').value;
-      if (!F.text.trim() && !F.files.length) { toast('Paste the email or drop a file first'); return; }
-      var body = new FormData(); body.append('container', F.cid); body.append('text', F.text); F.files.forEach(function (f) { body.append('file', f, f.name); });
-      fdBusy('Reading and comparing…');
-      fetch(FB + '/check', { method: 'POST', body: body, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); if (j.customs) { location.href = '/admin/logistics/customs?review=' + encodeURIComponent(j.customs); return; } F.view = j.view; F.tick = {}; var c = cById(F.cid); if (c) { c.fwdReview = (c.fwdReview || []).concat([j.view.id]); } fdView(); }).catch(function (x) { toast(x.message); fdInput(); });
-      return;
-    }
-    if ((b = e.target.closest('[data-fd-act]'))) {
-      var a = F.view.alerts[Number(b.getAttribute('data-fd-act'))].action, c = cById(F.cid);
-      if (a.kind === 'box' && c) { c.box = a.box; itemsOf(c).forEach(function (o) { fresh[o.id] = 1; }); render(); post(D.base + '/containers/' + c.id, { box: a.box }).then(function () { toast(cName(c) + ' — now ' + D.box[a.box].name); return fetch(FB + '/' + F.view.id + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (j.ok) { F.view = j.view; fdView(); } }); }).catch(fail); return; }
-      if (a.kind === 'copy') { (navigator.clipboard ? navigator.clipboard.writeText(a.text) : Promise.reject()).then(function () { toast('Reply copied — paste it into your email'); }, function () { window.prompt('Copy this reply:', a.text); }); return; }
-    }
-    if (e.target.closest('[data-fd-apply]')) {
-      var keys = F.view.rows.filter(function (r) { return r.state !== 'same' && (F.tick[r.key] != null ? F.tick[r.key] : r.tick); }).map(function (r) { return r.key; });
-      fdBusy('Saving…'); var cid = F.cid;
-      post(FB + '/' + F.view.id + '/apply', { only: keys.join(',') }).then(function (j) { fdDone(cid, j, 'Updated ' + keys.length + ' field' + (keys.length === 1 ? '' : 's') + ' — kept in the log'); }).catch(function (x) { toast(x.message); fdView(); });
-      return;
-    }
-    if (e.target.closest('[data-fd-log]')) { var cid2 = F.cid; fdBusy('Saving…'); post(FB + '/' + F.view.id + '/logonly').then(function (j) { fdDone(cid2, j, 'Kept in the log — nothing changed'); }).catch(function (x) { toast(x.message); fdView(); }); return; }
-    if (e.target.closest('[data-fd-discard]')) { var cid3 = F.cid; post(FB + '/' + F.view.id + '/discard').then(function () { fdDone(cid3, null, 'Discarded'); }).catch(function (x) { toast(x.message); }); return; }
-  });
-  fd.addEventListener('change', function (e) {
-    var k = e.target.getAttribute && e.target.getAttribute('data-fd-tick'); if (k) { F.tick[k] = e.target.checked; fdView(); return; }
-    if (e.target.hasAttribute && e.target.hasAttribute('data-fd-file') && e.target.files.length) addFiles(e.target.files);
-  });
-  fd.addEventListener('dragover', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (z) { e.preventDefault(); z.classList.add('over'); } });
-  fd.addEventListener('dragleave', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (z) z.classList.remove('over'); });
-  fd.addEventListener('drop', function (e) { var z = e.target.closest && e.target.closest('[data-fd-drop]'); if (!z) return; e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
-  fd.addEventListener('paste', function (e) { if (!fd.querySelector('[data-fd-drop]')) return; var fl = e.clipboardData && e.clipboardData.files; if (fl && fl.length) { e.preventDefault(); addFiles(fl); } });
-  function fdLog(cid) {
-    fdBusy('Opening the log…'); fdOpen();
-    fetch(FB + '/container/' + cid + '/log', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) throw new Error(j.error);
-      fd.innerHTML = '<div class="lp-fd">' + fdTop('Forwarder log · ' + esc(cName(cById(cid)))) + (j.log.length ? '<ul class="lp-fd-log">' + j.log.map(function (x) {
-        return '<li><span class="d">' + esc(x.at) + '</span><span><b>' + esc(x.type) + '</b>' + (x.changes.length ? ' — ' + esc(x.changes.join(', ')) : x.summary ? ' — ' + esc(x.summary) : '') + '<span class="sub">' + esc(x.how) + x.files.map(function (f) { return ' · <a href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join('') + '</span>' +
-          (x.text ? '<details class="lp-orig"><summary>Original</summary><pre>' + esc(x.text) + '</pre></details>' : '') + '</span><span class="cp-tag ' + (x.status === 'accepted' ? 'ok' : '') + '">' + (x.status === 'accepted' ? 'Updated' : 'Logged') + '</span></li>';
-      }).join('') + '</ul>' : '<p class="sub">Nothing logged yet.</p>') + '</div>';
-    }).catch(function (x) { fd.close(); toast(x.message); });
-  }
+  // Forwarder update: shared check window (FwdCheck, above) with this page's live container cards
+  var lpFwd = {
+    meta: function (cid) { var c = cById(cid); return { name: cName(c), sub: (D.box[c.box].lcl ? 'LCL' : D.box[c.box].name) + (c.fwd && c.fwd.forwarder ? ' · ' + c.fwd.forwarder : '') }; },
+    added: function (cid, uid) { var c = cById(cid); if (c) c.fwdReview = (c.fwdReview || []).concat([uid]); },
+    done: function (cid, j, msg, uid) {
+      var c = cById(cid); if (c) { c.fwdReview = (c.fwdReview || []).filter(function (x) { return x !== uid; }); if (j && j.container) { c.status = j.container.status === 'shipped' ? c.status : j.container.status; c.loading = j.container.loading || c.loading; c.containerNo = j.container.containerNo || c.containerNo; c.fwd = j.container.fwd; } if (j && j.log != null) c.fwdLog = j.log; }
+      render(); toast(msg);
+    },
+    box: function (cid, box) { var c = cById(cid); if (!c) return Promise.resolve(); c.box = box; itemsOf(c).forEach(function (o) { fresh[o.id] = 1; }); render(); return post(D.base + '/containers/' + c.id, { box: box }).then(function () { toast(cName(c) + ' — now ' + D.box[box].name); }); },
+  };
   root.addEventListener('click', function (e) {
-    var b = e.target.closest('button'); if (!b) return; var id;
-    if ((id = b.getAttribute('data-lp-fwd'))) { F = { cid: id, files: [], text: '', tick: {} }; fdInput(); fdOpen(); var t = fd.querySelector('[data-fd-text]'); if (t) t.focus(); return; }
-    if ((id = b.getAttribute('data-lp-fwdrev'))) { var c = cById(id); F = { cid: id, files: [], tick: {} }; fdLoad(c.fwdReview[0]); return; }
-    if ((id = b.getAttribute('data-lp-fwdlog'))) { F = { cid: id, files: [] }; fdLog(id); }
+    var b = e.target.closest('button'); if (!b || !window.FwdCheck) return; var id;
+    if ((id = b.getAttribute('data-lp-fwd'))) { window.FwdCheck.input(id, lpFwd); return; }
+    if ((id = b.getAttribute('data-lp-fwdrev'))) { window.FwdCheck.review(id, cById(id).fwdReview[0], lpFwd); return; }
+    if ((id = b.getAttribute('data-lp-fwdlog'))) window.FwdCheck.log(id, lpFwd);
   });
 
   // Request quotations popup
