@@ -100,7 +100,7 @@ function loadPlanRoutes(router, { db, config }) {
     const data = {
       base: BASE, port, portName: portName(port), today: day, box: BOX,
       orders: here.map((o, i) => ({
-        id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', qty: Number(o.qty) || 0,
+        id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', sku: o.sku || '', qty: Number(o.qty) || 0,
         cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],

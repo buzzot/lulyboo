@@ -1581,7 +1581,7 @@
     var head = c ? 'Fit ' + esc(cName(c)) + ' · ' + esc(t.name) : 'Split ' + esc((lines[0] && (lines[0].product || lines[0].po)) || '');
     var row = function (o) {
       var q = unitOf(o), on = sel && sel.id === o.id, ok = canSplit(o);
-      var r = '<div class="lp-sd-it' + (on ? ' on' : '') + (ok ? '' : ' no') + '" data-sd-pick="' + (ok ? o.id : '') + '"><input type="radio" name="lp-sd-it"' + (on ? ' checked' : '') + (ok ? '' : ' disabled') + ' aria-label="Split ' + esc(o.product || o.po) + '"><span class="lp-sd-n">' + esc(o.product || o.po) + (o.part ? ' <em class="lp-chip-pt">part ' + o.part + '</em>' : '') + '</span>' +
+      var r = '<div class="lp-sd-it' + (on ? ' on' : '') + (ok ? '' : ' no') + '" data-sd-pick="' + (ok ? o.id : '') + '"><input type="radio" name="lp-sd-it"' + (on ? ' checked' : '') + (ok ? '' : ' disabled') + ' aria-label="Split ' + esc(o.product || o.po) + '"><span class="lp-sd-sku' + (o.sku ? '' : ' none') + '">' + (o.sku ? esc(o.sku) : '—') + '</span><span class="lp-sd-n">' + esc(o.product || o.po) + (o.part ? ' <em class="lp-chip-pt">part ' + o.part + '</em>' : '') + '</span>' +
         '<span class="r">' + (o.qty ? int(o.qty) + ' pcs' : '') + '</span><span class="r">' + (o.cartons ? int(o.cartons) + ' ctns' : '—') + '</span><span class="r">' + n2(o.cbm) + ' m³</span><span class="r' + (c && o.ready && o.ready === readyOf(lines) ? ' late' : '') + '">' + (o.ready ? esc(short(o.ready)) : '—') + '</span>' +
         '<button type="button" class="lp-star' + (o.urgent ? ' on' : '') + '" data-sd-star="' + o.id + '" title="' + (o.urgent ? 'Urgent — kept whole' : 'Mark urgent — keep whole') + '" aria-pressed="' + (o.urgent ? 'true' : 'false') + '" aria-label="Urgent">★</button></div>';
       if (on) {
