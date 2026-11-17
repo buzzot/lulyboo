@@ -2654,3 +2654,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .lp-sd-x{margin-left:136px}
 @media(max-width:700px){.lp-sd-it{grid-template-columns:20px 70px minmax(0,1fr) 66px 56px 24px}.lp-sd-x{margin-left:12px}}
 @media(max-width:700px){.lp-sd-it>span:nth-of-type(3),.lp-sd-it>span:nth-of-type(4){display:none}}
+.lp-step button:disabled{color:#c9c4be;cursor:default}

@@ -26,7 +26,7 @@ function divide(l, keep) {
   const k = Math.round(Number(keep));
   if (!(k >= 1 && k < whole)) throw Object.assign(new Error(`Keep between 1 and ${whole - 1} ${byCtn ? 'cartons' : 'pcs'}`), { status: 400 });
   const ratio = k / whole;
-  const keepQty = qty == null ? null : byCtn ? (upc > 0 ? Math.min(qty, k * upc) : Math.round(qty * ratio)) : k;
+  const keepQty = qty == null ? null : byCtn ? (upc > 0 && upc * ctn === qty ? k * upc : Math.max(1, Math.min(qty - 1, Math.round(qty * ratio)))) : k;
   const a = {
     cartons: byCtn ? k : ctn != null ? Math.max(0, Math.round(ctn * ratio)) || null : null,
     qty: keepQty, cbm: cbm == null ? null : r2(cbm * ratio), gross_kg: kg == null ? null : r1(kg * ratio),

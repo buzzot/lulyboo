@@ -3413,6 +3413,12 @@ test('split by quantity: whole cartons, linked parts, auto-merge when they meet 
   assert.equal(r.merged, true);
   assert.equal(db.tables.plan_orders.filter((x) => x.po === '500030').length, 1);
 
+  // pieces never exceed the line: 3,520 pcs in 50 cartons with "100 pcs/carton" on file splits by share
+  const SPL = require('../src/split');
+  const d = SPL.divide({ qty: 3520, cartons: 50, units_per_carton: 100, cbm: 1.01 }, 40);
+  assert.deepEqual([d.a.qty, d.b.qty, d.a.cartons, d.b.cartons], [2816, 704, 40, 10]);
+  assert.throws(() => SPL.divide({ qty: 5000, cartons: 50, cbm: 1 }, 50), /between 1 and 49/);
+  assert.throws(() => SPL.divide({ qty: 5000, cartons: 50, cbm: 1 }, 75), /between 1 and 49/);
   // urgent flag
   await req(base, 'POST', `${P}/urgent`, { cookie, form: { order: l.id, urgent: '1' } });
   assert.equal(db.tables.plan_orders.find((x) => x.id === l.id).urgent, true);

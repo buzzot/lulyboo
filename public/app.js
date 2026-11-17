@@ -1586,8 +1586,8 @@
         '<button type="button" class="lp-star' + (o.urgent ? ' on' : '') + '" data-sd-star="' + o.id + '" title="' + (o.urgent ? 'Urgent — kept whole' : 'Mark urgent — keep whole') + '" aria-pressed="' + (o.urgent ? 'true' : 'false') + '" aria-label="Urgent">★</button></div>';
       if (on) {
         var k = S.keep, m = q.whole - k, f = function (n) { return n / q.whole; };
-        var qa = q.byC ? (o.upc ? Math.min(o.qty, k * o.upc) : Math.round(o.qty * f(k))) : k;
-        r += '<div class="lp-sd-x"><div class="lp-sd-row"><span>' + (c ? 'Keep in this container' : 'Part 1') + '</span><span class="lp-step"><button type="button" data-sd-d="-1" aria-label="One less">−</button><input type="number" min="1" max="' + (q.whole - 1) + '" value="' + k + '" data-sd-keep aria-label="Keep"><button type="button" data-sd-d="1" aria-label="One more">+</button></span><span class="sub">of ' + int(q.whole) + ' ' + q.u + (q.byC && o.upc ? ' · ' + int(o.upc) + ' pcs/ctn' : '') + ' · ' + (Math.round(q.per * 1000) / 1000) + ' m³/' + (q.byC ? 'ctn' : 'pc') + '</span>' + (c && usedOf(c) > t.cap && o.cbm > usedOf(c) - t.cap ? '<button type="button" class="link small" data-sd-fit>Fit exactly</button>' : '') + '</div>' +
+        var qa = q.byC ? (o.upc && o.upc * o.cartons === o.qty ? k * o.upc : Math.max(1, Math.min(o.qty - 1, Math.round(o.qty * f(k))))) : k;
+        r += '<div class="lp-sd-x"><div class="lp-sd-row"><span>' + (c ? 'Keep in this container' : 'Part 1') + '</span><span class="lp-step"><button type="button" data-sd-d="-1" aria-label="One less"' + (k <= 1 ? ' disabled' : '') + '>−</button><input type="number" min="1" max="' + (q.whole - 1) + '" value="' + k + '" data-sd-keep aria-label="Keep"><button type="button" data-sd-d="1" aria-label="One more"' + (k >= q.whole - 1 ? ' disabled' : '') + '>+</button></span><span class="sub">of ' + int(q.whole) + ' ' + q.u + ' (max ' + int(q.whole - 1) + ')' + (q.byC && o.upc ? ' · ' + int(o.upc) + ' pcs/ctn' : '') + ' · ' + (Math.round(q.per * 1000) / 1000) + ' m³/' + (q.byC ? 'ctn' : 'pc') + '</span>' + (c && usedOf(c) > t.cap && o.cbm > usedOf(c) - t.cap ? '<button type="button" class="link small" data-sd-fit>Fit exactly</button>' : '') + '</div>' +
           '<div class="lp-sd-two"><div class="a"><span>' + (c ? 'Stays in ' + esc(cName(c)) : 'Part 1 — stays where it is') + '</span><b>' + int(k) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg * f(k))) + ' kg' : '') + '</span></div>' +
           '<div class="b"><span>' + (o.container ? 'Back to “Not loaded yet” as a new part' : 'Part 2 — a new line in “Not loaded yet”') + '</span><b>' + int(m) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(o.qty - qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm - o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg - o.kg * f(k))) + ' kg' : '') + '</span></div></div>' +
           (q.byC ? '' : '<p class="sub">No carton count on this line — split by pieces; volume is estimated.</p>') + '</div>';
@@ -1625,11 +1625,21 @@
   });
   sd.addEventListener('change', function (e) {
     if (e.target.name === 'lp-sd-opt') { S.opt = Number(e.target.value); S.touched = false; sdRender(); return; }
-    if (e.target.hasAttribute('data-sd-keep')) { var q = unitOf(byId(S.sel)); S.keep = Math.max(1, Math.min(q.whole - 1, Math.round(Number(e.target.value) || 1))); S.touched = true; S.opt = matchOpt(); sdRender(); }
+    if (e.target.hasAttribute('data-sd-keep')) { var q = unitOf(byId(S.sel)), v = Math.max(1, Math.min(q.whole - 1, Math.round(Number(e.target.value) || 1))); if (v === S.keep && !S.typing) return; S.keep = v; S.typing = false; S.touched = true; S.opt = matchOpt(); sdRender(); }
   });
   sd.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-sd-keep')) { e.preventDefault(); e.target.blur(); } });
+  // never more than the line has: clamp as you type
+  sd.addEventListener('input', function (e) {
+    if (!(e.target.hasAttribute && e.target.hasAttribute('data-sd-keep')) || e.target.value === '') return;
+    var max = unitOf(byId(S.sel)).whole - 1, v = Math.round(Number(e.target.value));
+    if (v > max) { e.target.value = max; v = max; } else if (v < 1) { e.target.value = 1; v = 1; }
+    // live update, keeping the cursor in the box (so a click on Split right after typing still counts)
+    S.keep = v; S.touched = true; S.opt = matchOpt();
+    clearTimeout(S.tt); S.tt = setTimeout(function () { if (!sd.open) return; sdRender(); var inp = sd.querySelector('[data-sd-keep]'); if (inp) { inp.focus(); var n = String(inp.value).length; try { inp.setSelectionRange(n, n); } catch (x) { /* number inputs */ } } }, 450);
+  });
   function matchOpt() { for (var i = 0; i < (S.opts || []).length; i++) { var x = S.opts[i]; if (x.kind === 'split' && x.o.id === S.sel && x.keep === S.keep) return i; } return null; }
   function go() {
+    clearTimeout(S.tt);
     var opt = S.opt != null ? S.opts[S.opt] : null, btn = sd.querySelector('[data-sd-go]'); btn.disabled = true;
     if (opt && opt.kind === 'move') {
       var ls = opt.ids.map(byId); ls.forEach(function (o) { o.container = null; }); sd.close(); render();
