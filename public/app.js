@@ -1523,11 +1523,15 @@
       post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast('Container shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' closed'); }).catch(fail);
     }
   });
-  // Split by quantity: "Split to fit…" on an over-full container (with suggestions), or "Split…" on one line
+  // Split by quantity: "Split to fit…" on an over-full container (with suggestions), or "Split…" on one line.
+  // Tick any number of lines; each starts at its full quantity and you reduce what stays. One button applies them all.
   var sd = document.createElement('dialog'); sd.className = 'rp-modal lp-sdlg'; sd.setAttribute('aria-labelledby', 'lp-sd-t'); document.body.appendChild(sd);
-  var S = null; // { container, line, sel, keep, opt, opts }
+  var S = null; // { container, line, plan: { id: keep }, mem: { id: keep }, opt, opts }
   function unitOf(o) { var byC = (o.cartons || 0) > 1; var whole = byC ? o.cartons : o.qty; return { byC: byC, whole: whole, per: o.cbm / whole, u: byC ? 'ctns' : 'pcs' }; }
   function lateKey(o) { return o.ready || '9999-12-31'; }
+  function moveCbm(o, keep) { var q = unitOf(o); return o.cbm * (q.whole - keep) / q.whole; }
+  function planned() { return Object.keys(S.plan).filter(function (id) { var o = byId(id); return o && S.plan[id] < unitOf(o).whole; }); }
+  function afterPlan(c, skip) { var u = usedOf(c); Object.keys(S.plan).forEach(function (id) { var o = byId(id); if (o && id !== skip && o.container === c.id) u -= moveCbm(o, S.plan[id]); }); return u; }
   function suggestions(c) {
     var t = D.box[c.box], items = itemsOf(c).filter(function (o) { return o.cbm; }), u = usedOf(c), ex = u - t.cap, out = [];
     if (ex <= 0) return out;
@@ -1536,13 +1540,22 @@
       if (o.urgent) return;
       if (canSplit(o) && o.cbm > ex) {
         var q = unitOf(o), move = Math.ceil(ex / q.per - 1e-9), keep = q.whole - move, kc = o.cbm * keep / q.whole;
-        if (keep >= 1 && !(kc < 1 && keep / q.whole < 0.1)) splits.push({ kind: 'split', o: o, keep: keep, move: move, after: u - o.cbm + kc });
+        if (keep >= 1 && !(kc < 1 && keep / q.whole < 0.1)) splits.push({ kind: 'split', parts: [{ o: o, keep: keep, move: move }], o: o, after: u - o.cbm + kc });
       }
       if (o.cbm >= ex) wholes.push({ kind: 'move', ids: [o.id], o: o, after: u - o.cbm });
     });
     splits.sort(function (a, b) { return lateKey(b.o) < lateKey(a.o) ? -1 : lateKey(b.o) > lateKey(a.o) ? 1 : b.after - a.after; });
     wholes.sort(function (a, b) { return lateKey(b.o) < lateKey(a.o) ? -1 : lateKey(b.o) > lateKey(a.o) ? 1 : a.o.cbm - b.o.cbm; });
     if (splits[0]) out.push(splits[0]);
+    else {
+      // no single line covers it: take from several lines, latest-ready first
+      var left = ex, parts = [], pool = items.filter(function (o) { return !o.urgent && canSplit(o); }).sort(function (a, b) { return lateKey(b) < lateKey(a) ? -1 : lateKey(b) > lateKey(a) ? 1 : b.cbm - a.cbm; });
+      for (var i = 0; i < pool.length && left > 1e-9; i++) {
+        var o = pool[i], q = unitOf(o), mv = Math.min(q.whole - 1, Math.ceil(left / q.per - 1e-9));
+        if (mv < 1) continue; parts.push({ o: o, keep: q.whole - mv, move: mv }); left -= mv * q.per;
+      }
+      if (parts.length > 1 && left <= 1e-9) out.push({ kind: 'split', parts: parts, after: u - parts.reduce(function (a, x) { return a + x.move * unitOf(x.o).per; }, 0) });
+    }
     if (wholes[0]) out.push(wholes[0]);
     // the PO that is ready last: moving it out makes the cargo ready sooner
     var gs = groupBy(items), last = items.map(function (o) { return o.ready; }).filter(Boolean).sort().pop();
@@ -1556,88 +1569,109 @@
     return out.slice(0, 3);
   }
   function optHTML(x, i, c) {
-    var t = D.box[c.box], pct = x.after / t.cap * 100, q = x.o ? unitOf(x.o) : null;
-    var what = x.kind === 'split' ? '<b>Split ' + esc(x.o.product || x.o.po) + ' (' + esc(x.o.po) + ')</b> — keep ' + int(x.keep) + ' ' + q.u + ', move ' + int(x.move) + ' ' + q.u + ' to the next shipment'
-      : x.po ? '<b>Move all of ' + esc(x.po.po) + ' out</b> — no split' : '<b>Move ' + esc(x.o.product || x.o.po) + (x.o.product ? ' (' + esc(x.o.po) + ')' : '') + ' out whole</b> — no split';
-    var why = x.po ? 'Cargo ready <b>' + esc(x.earlier ? short(x.earlier) : '—') + '</b> instead of ' + esc(short(readyOf(itemsOf(c)))) : (x.o.ready ? 'Ready ' + esc(short(x.o.ready)) : 'No ready date') + (x.o.ready && x.o.ready === readyOf(itemsOf(c)) ? ' — ready last' : '') + ' · not marked urgent' + (x.kind === 'split' ? ' · whole ' + (q.byC ? 'cartons' : 'pieces') : '');
-    var tag = x.kind === 'split' ? '<span class="cp-tag ok">Best fill</span>' : x.po ? '<span class="cp-tag plan">Earliest</span>' : '<span></span>';
+    var t = D.box[c.box], pct = x.after / t.cap * 100;
+    var nm = function (o) { return esc(o.sku || o.product || o.po); };
+    var what, why, tag;
+    if (x.kind === 'split') {
+      what = x.parts.length === 1 ? '<b>Split ' + esc(x.o.product || x.o.po) + ' (' + esc(x.o.po) + ')</b> — keep ' + int(x.parts[0].keep) + ' ' + unitOf(x.o).u + ', move ' + int(x.parts[0].move) + ' ' + unitOf(x.o).u + ' to the next shipment'
+        : '<b>Split ' + x.parts.length + ' lines</b> — ' + x.parts.map(function (p) { return nm(p.o) + ' move ' + int(p.move) + ' ' + unitOf(p.o).u; }).join(' · ');
+      why = x.parts.length === 1 ? (x.o.ready ? 'Ready ' + esc(short(x.o.ready)) : 'No ready date') + (x.o.ready && x.o.ready === readyOf(itemsOf(c)) ? ' — ready last' : '') + ' · not marked urgent · whole ' + (unitOf(x.o).byC ? 'cartons' : 'pieces') : 'No single line covers it — latest-ready lines first, not marked urgent';
+      tag = '<span class="cp-tag ok">Best fill</span>';
+    } else {
+      what = x.po ? '<b>Move all of ' + esc(x.po.po) + ' out</b> — no split' : '<b>Move ' + esc(x.o.product || x.o.po) + (x.o.product ? ' (' + esc(x.o.po) + ')' : '') + ' out whole</b> — no split';
+      why = x.po ? 'Cargo ready <b>' + esc(x.earlier ? short(x.earlier) : '—') + '</b> instead of ' + esc(short(readyOf(itemsOf(c)))) : (x.o.ready ? 'Ready ' + esc(short(x.o.ready)) : 'No ready date') + (x.o.ready && x.o.ready === readyOf(itemsOf(c)) ? ' — ready last' : '') + ' · not marked urgent';
+      tag = x.po ? '<span class="cp-tag plan">Earliest</span>' : '<span></span>';
+    }
     return '<label class="lp-sd-opt"><input type="radio" name="lp-sd-opt" value="' + i + '"' + (S.opt === i ? ' checked' : '') + '><span>' + what + '<span class="sub">' + why + '</span></span><b class="lp-sd-pct">' + Math.round(pct * 10) / 10 + '% full</b>' + tag + '</label>';
   }
-  function keepFor(o, c) {
-    var q = unitOf(o);
-    if (c) { var t = D.box[c.box], ex = usedOf(c) - t.cap; if (ex > 0 && o.cbm > ex) return Math.max(1, q.whole - Math.ceil(ex / q.per - 1e-9)); }
-    return Math.max(1, Math.floor(q.whole / 2));
-  }
+  function qtyOf(o, k) { var q = unitOf(o); if (!q.byC) return k; if (k >= q.whole) return o.qty; return o.upc && o.upc * o.cartons === o.qty ? k * o.upc : Math.max(1, Math.min(o.qty - 1, Math.round(o.qty * k / q.whole))); }
   function sdRender() {
     var c = S.container ? cById(S.container) : null, t = c ? D.box[c.box] : null, u = c ? usedOf(c) : 0;
     var lines = c ? itemsOf(c).filter(function (o) { return o.cbm; }) : [byId(S.line)].filter(Boolean);
     var opts = S.opts = c ? suggestions(c) : [];
-    if (S.opt == null && opts.length && !S.touched) { S.opt = 0; }
     var opt = S.opt != null ? opts[S.opt] : null;
-    if (opt && opt.kind === 'split') { S.sel = opt.o.id; if (!S.touched) S.keep = opt.keep; }
-    if (opt && opt.kind === 'move') S.sel = null;
-    var sel = S.sel ? byId(S.sel) : null;
-    var after = c ? (opt && opt.kind === 'move' ? opt.after : sel ? u - sel.cbm + sel.cbm * S.keep / unitOf(sel).whole : u) : 0;
+    var after = c ? (opt && opt.kind === 'move' ? opt.after : afterPlan(c)) : 0;
+    var n = planned().length;
     var head = c ? 'Fit ' + esc(cName(c)) + ' · ' + esc(t.name) : 'Split ' + esc((lines[0] && (lines[0].product || lines[0].po)) || '');
     var row = function (o) {
-      var q = unitOf(o), on = sel && sel.id === o.id, ok = canSplit(o);
-      var r = '<div class="lp-sd-it' + (on ? ' on' : '') + (ok ? '' : ' no') + '" data-sd-pick="' + (ok ? o.id : '') + '"><input type="radio" name="lp-sd-it"' + (on ? ' checked' : '') + (ok ? '' : ' disabled') + ' aria-label="Split ' + esc(o.product || o.po) + '"><span class="lp-sd-sku' + (o.sku ? '' : ' none') + '">' + (o.sku ? esc(o.sku) : '—') + '</span><span class="lp-sd-n">' + esc(o.product || o.po) + (o.part ? ' <em class="lp-chip-pt">part ' + o.part + '</em>' : '') + '</span>' +
+      var q = unitOf(o), on = S.plan[o.id] != null && !(opt && opt.kind === 'move'), ok = canSplit(o);
+      var r = '<div class="lp-sd-it' + (on ? ' on' : '') + (ok ? '' : ' no') + '" data-sd-pick="' + (ok ? o.id : '') + '"><input type="checkbox"' + (on ? ' checked' : '') + (ok ? '' : ' disabled') + ' aria-label="Split ' + esc(o.product || o.po) + '"><span class="lp-sd-sku' + (o.sku ? '' : ' none') + '">' + (o.sku ? esc(o.sku) : '—') + '</span><span class="lp-sd-n">' + esc(o.product || o.po) + (o.part ? ' <em class="lp-chip-pt">part ' + o.part + '</em>' : '') + '</span>' +
         '<span class="r">' + (o.qty ? int(o.qty) + ' pcs' : '') + '</span><span class="r">' + (o.cartons ? int(o.cartons) + ' ctns' : '—') + '</span><span class="r">' + n2(o.cbm) + ' m³</span><span class="r' + (c && o.ready && o.ready === readyOf(lines) ? ' late' : '') + '">' + (o.ready ? esc(short(o.ready)) : '—') + '</span>' +
         '<button type="button" class="lp-star' + (o.urgent ? ' on' : '') + '" data-sd-star="' + o.id + '" title="' + (o.urgent ? 'Urgent — kept whole' : 'Mark urgent — keep whole') + '" aria-pressed="' + (o.urgent ? 'true' : 'false') + '" aria-label="Urgent">★</button></div>';
       if (on) {
-        var k = S.keep, m = q.whole - k, f = function (n) { return n / q.whole; };
-        var qa = q.byC ? (o.upc && o.upc * o.cartons === o.qty ? k * o.upc : Math.max(1, Math.min(o.qty - 1, Math.round(o.qty * f(k))))) : k;
-        r += '<div class="lp-sd-x"><div class="lp-sd-row"><span>' + (c ? 'Keep in this container' : 'Part 1') + '</span><span class="lp-step"><button type="button" data-sd-d="-1" aria-label="One less"' + (k <= 1 ? ' disabled' : '') + '>−</button><input type="number" min="1" max="' + (q.whole - 1) + '" value="' + k + '" data-sd-keep aria-label="Keep"><button type="button" data-sd-d="1" aria-label="One more"' + (k >= q.whole - 1 ? ' disabled' : '') + '>+</button></span><span class="sub">of ' + int(q.whole) + ' ' + q.u + ' (max ' + int(q.whole - 1) + ')' + (q.byC && o.upc ? ' · ' + int(o.upc) + ' pcs/ctn' : '') + ' · ' + (Math.round(q.per * 1000) / 1000) + ' m³/' + (q.byC ? 'ctn' : 'pc') + '</span>' + (c && usedOf(c) > t.cap && o.cbm > usedOf(c) - t.cap ? '<button type="button" class="link small" data-sd-fit>Fit exactly</button>' : '') + '</div>' +
-          '<div class="lp-sd-two"><div class="a"><span>' + (c ? 'Stays in ' + esc(cName(c)) : 'Part 1 — stays where it is') + '</span><b>' + int(k) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg * f(k))) + ' kg' : '') + '</span></div>' +
-          '<div class="b"><span>' + (o.container ? 'Back to “Not loaded yet” as a new part' : 'Part 2 — a new line in “Not loaded yet”') + '</span><b>' + int(m) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(o.qty - qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm - o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg - o.kg * f(k))) + ' kg' : '') + '</span></div></div>' +
+        var k = S.plan[o.id], m = q.whole - k, f = function (x) { return x / q.whole; }, qa = qtyOf(o, k);
+        var over = c ? afterPlan(c, o.id) - t.cap : 0;
+        r += '<div class="lp-sd-x' + (m ? '' : ' full') + '"><div class="lp-sd-row"><span>' + (c ? 'Keep in this container' : 'Part 1') + '</span><span class="lp-step"><button type="button" data-sd-d="-1" data-id="' + o.id + '" aria-label="One less"' + (k <= 1 ? ' disabled' : '') + '>−</button><input type="number" min="1" max="' + q.whole + '" value="' + k + '" data-sd-keep="' + o.id + '" aria-label="Keep"><button type="button" data-sd-d="1" data-id="' + o.id + '" aria-label="One more"' + (k >= q.whole ? ' disabled' : '') + '>+</button></span><span class="sub">of ' + int(q.whole) + ' ' + q.u + (q.byC && o.upc ? ' · ' + int(o.upc) + ' pcs/ctn' : '') + ' · ' + (Math.round(q.per * 1000) / 1000) + ' m³/' + (q.byC ? 'ctn' : 'pc') + '</span>' + (c && over > 0 ? '<button type="button" class="link small" data-sd-fit="' + o.id + '">Fit exactly</button>' : '') + '</div>' +
+          (m ? '<div class="lp-sd-two"><div class="a"><span>' + (c ? 'Stays in ' + esc(cName(c)) : 'Part 1') + '</span><b>' + int(k) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg * f(k))) + ' kg' : '') + '</span></div>' +
+            '<div class="b"><span>' + (o.container ? 'Back to “Not loaded yet” as a new part' : 'Part 2 — a new line in “Not loaded yet”') + '</span><b>' + int(m) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(o.qty - qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm - o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg - o.kg * f(k))) + ' kg' : '') + '</span></div></div>'
+            : '<p class="sub lp-sd-hint">Full quantity — reduce what stays to split this line.</p>') +
           (q.byC ? '' : '<p class="sub">No carton count on this line — split by pieces; volume is estimated.</p>') + '</div>';
       }
       return r;
     };
     var pct = c ? after / t.cap * 100 : 0;
+    var plan = planned().map(byId);
+    var label = opt && opt.kind === 'move' ? 'Move out' : !n ? (c ? 'Split &amp; load' : 'Split') : n === 1 ? (c ? 'Split &amp; load' : 'Split') : 'Split ' + n + ' lines';
     sd.innerHTML = '<form method="dialog" class="lp-sd"><div class="rp-top"><h2 id="lp-sd-t">' + head + '</h2>' + (c && u > t.cap ? '<span class="cp-tag wait">Over by ' + n2(u - t.cap) + ' m³</span>' : '') + '<button type="button" class="icon-btn" data-sd-close aria-label="Close">×</button></div>' +
-      (c ? (opts.length ? '<div class="lp-sd-sug"><div class="lp-sd-sh">✦ Suggested</div>' + opts.map(function (x, i) { return optHTML(x, i, c); }).join('') + '</div>' : (u > t.cap ? '<p class="lp-warn">No single change fits — split one product below, then split another if still over.</p>' : '')) : '') +
+      (c ? (opts.length ? '<div class="lp-sd-sug"><div class="lp-sd-sh">✦ Suggested</div>' + opts.map(function (x, i) { return optHTML(x, i, c); }).join('') + '</div>' : '') : '') +
+      (c ? '<p class="sub lp-sd-how">Tick the lines to split — each starts at its full quantity; reduce what stays.</p>' : '') +
       groupBy(lines).map(function (ls) { var o = ls[0]; return '<div class="lp-sd-po"><div class="lp-sd-ph"><i style="background:' + o.color + '"></i><b>' + esc(o.po) + '</b><span>' + esc(o.supplier) + '</span><span class="sub">' + (readyOf(ls) ? 'ready ' + esc(short(readyOf(ls))) + ' · ' : '') + n2(ls.reduce(function (a, x) { return a + x.cbm; }, 0)) + ' m³</span></div>' + ls.map(row).join('') + '</div>'; }).join('') +
+      (plan.length > 1 ? '<div class="lp-sd-plan"><b>' + plan.length + ' lines to split:</b> ' + plan.map(function (o) { var q = unitOf(o); return esc(o.sku || o.product || o.po) + ' keep ' + int(S.plan[o.id]) + ' of ' + int(q.whole) + ' ' + q.u; }).join(' · ') + '</div>' : '') +
       '<div class="lp-sd-foot">' + (c ? '<div class="lp-track"><i class="' + (pct > 100 ? 'full' : pct > 85 ? 'mid' : '') + '" style="width:' + Math.min(100, pct) + '%"></i></div><b>' + n2(after) + ' / ' + t.cap + ' m³ · ' + Math.round(pct * 10) / 10 + '%</b>' : '<span></span>') +
-        '<span class="lp-sd-acts"><button type="button" class="btn ghost" data-sd-close>Cancel</button><button type="button" class="btn" data-sd-go' + (opt || sel ? '' : ' disabled') + '>' + (opt && opt.kind === 'move' ? 'Move out' : c ? 'Split &amp; load' : 'Split') + '</button></span></div>' +
+        '<span class="lp-sd-acts"><button type="button" class="btn ghost" data-sd-close>Cancel</button><button type="button" class="btn" data-sd-go' + ((opt && opt.kind === 'move') || n ? '' : ' disabled') + '>' + label + '</button></span></div>' +
       '<p class="sub lp-sd-note">★ urgent: kept whole and never suggested for splitting.</p></form>';
   }
   function openSplit(o) {
     var line = o.line ? byId(o.line) : null;
-    S = { container: o.container || null, line: o.line || null, sel: line ? line.id : null, keep: line ? keepFor(line, line.container ? cById(line.container) : null) : 1, opt: null, touched: !!line };
-    if (line && line.container && D.box[cById(line.container).box] && !D.box[cById(line.container).box].lcl) { S.container = line.container; S.opt = null; S.touched = true; }
+    S = { container: o.container || null, line: o.line || null, plan: {}, mem: {}, opt: null };
+    if (line) { S.plan[line.id] = unitOf(line).whole; if (line.container && D.box[cById(line.container).box] && !D.box[cById(line.container).box].lcl) S.container = line.container; }
     sdRender(); if (sd.showModal) sd.showModal(); else sd.setAttribute('open', '');
+  }
+  function setKeep(id, v) { var o = byId(id), q = unitOf(o); S.plan[id] = Math.max(1, Math.min(q.whole, Math.round(v))); S.opt = matchOpt(); }
+  function fitKeep(id) { var o = byId(id), c = cById(S.container), q = unitOf(o), over = afterPlan(c, id) - D.box[c.box].cap; return over <= 0 ? q.whole : Math.max(1, q.whole - Math.ceil(over / q.per - 1e-9)); }
+  function matchOpt() {
+    var ids = planned();
+    for (var i = 0; i < (S.opts || []).length; i++) {
+      var x = S.opts[i]; if (x.kind !== 'split' || x.parts.length !== ids.length) continue;
+      if (x.parts.every(function (p) { return S.plan[p.o.id] === p.keep; })) return i;
+    }
+    return null;
   }
   sd.addEventListener('click', function (e) {
     if (e.target === sd || e.target.closest('[data-sd-close]')) { sd.close(); return; }
     var b, id;
     if ((b = e.target.closest('[data-sd-star]'))) {
-      e.preventDefault(); var o = byId(b.getAttribute('data-sd-star')); o.urgent = !o.urgent; S.opt = null; S.touched = !!S.sel; sdRender(); render();
+      e.preventDefault(); var o = byId(b.getAttribute('data-sd-star')); o.urgent = !o.urgent; S.opt = matchOpt(); sdRender(); render();
       post(D.base + '/urgent', { order: o.id, urgent: o.urgent ? '1' : '' }).catch(fail); return;
     }
-    if ((b = e.target.closest('[data-sd-d]'))) { var q = unitOf(byId(S.sel)); S.keep = Math.max(1, Math.min(q.whole - 1, S.keep + Number(b.getAttribute('data-sd-d')))); S.touched = true; S.opt = matchOpt(); sdRender(); return; }
-    if (e.target.closest('[data-sd-fit]')) { S.keep = keepFor(byId(S.sel), cById(S.container)); S.touched = true; S.opt = matchOpt(); sdRender(); return; }
+    if ((b = e.target.closest('[data-sd-d]'))) { id = b.getAttribute('data-id'); setKeep(id, S.plan[id] + Number(b.getAttribute('data-sd-d'))); sdRender(); return; }
+    if ((b = e.target.closest('[data-sd-fit]'))) { id = b.getAttribute('data-sd-fit'); setKeep(id, fitKeep(id)); sdRender(); return; }
     if ((b = e.target.closest('[data-sd-pick]')) && (id = b.getAttribute('data-sd-pick')) && !e.target.closest('.lp-sd-x')) {
-      if (S.sel !== id) { S.sel = id; S.keep = keepFor(byId(id), S.container ? cById(S.container) : null); }
-      S.touched = true; S.opt = matchOpt(); sdRender(); return;
+      e.preventDefault();
+      if (S.opt != null && S.opts[S.opt] && S.opts[S.opt].kind === 'move') S.opt = null;
+      if (S.plan[id] != null) { S.mem[id] = S.plan[id]; delete S.plan[id]; } else S.plan[id] = S.mem[id] != null ? S.mem[id] : unitOf(byId(id)).whole;
+      S.opt = matchOpt(); sdRender(); return;
     }
     if (e.target.closest('[data-sd-go]')) go();
   });
   sd.addEventListener('change', function (e) {
-    if (e.target.name === 'lp-sd-opt') { S.opt = Number(e.target.value); S.touched = false; sdRender(); return; }
-    if (e.target.hasAttribute('data-sd-keep')) { var q = unitOf(byId(S.sel)), v = Math.max(1, Math.min(q.whole - 1, Math.round(Number(e.target.value) || 1))); if (v === S.keep && !S.typing) return; S.keep = v; S.typing = false; S.touched = true; S.opt = matchOpt(); sdRender(); }
+    if (e.target.name === 'lp-sd-opt') {
+      var x = S.opts[Number(e.target.value)]; S.opt = Number(e.target.value);
+      if (x.kind === 'split') { S.plan = {}; x.parts.forEach(function (p) { S.plan[p.o.id] = p.keep; }); }
+      sdRender(); return;
+    }
+    var id = e.target.getAttribute && e.target.getAttribute('data-sd-keep');
+    if (id) { var v = Math.round(Number(e.target.value) || 1); if (v === S.plan[id] && !S.typing) return; S.typing = false; setKeep(id, v); sdRender(); }
   });
   sd.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-sd-keep')) { e.preventDefault(); e.target.blur(); } });
-  // never more than the line has: clamp as you type
+  // never more than the line has: clamp as you type, update live keeping the cursor in the box
   sd.addEventListener('input', function (e) {
-    if (!(e.target.hasAttribute && e.target.hasAttribute('data-sd-keep')) || e.target.value === '') return;
-    var max = unitOf(byId(S.sel)).whole - 1, v = Math.round(Number(e.target.value));
+    var id = e.target.getAttribute && e.target.getAttribute('data-sd-keep'); if (!id || e.target.value === '') return;
+    var max = unitOf(byId(id)).whole, v = Math.round(Number(e.target.value));
     if (v > max) { e.target.value = max; v = max; } else if (v < 1) { e.target.value = 1; v = 1; }
-    // live update, keeping the cursor in the box (so a click on Split right after typing still counts)
-    S.keep = v; S.touched = true; S.opt = matchOpt();
-    clearTimeout(S.tt); S.tt = setTimeout(function () { if (!sd.open) return; sdRender(); var inp = sd.querySelector('[data-sd-keep]'); if (inp) { inp.focus(); var n = String(inp.value).length; try { inp.setSelectionRange(n, n); } catch (x) { /* number inputs */ } } }, 450);
+    setKeep(id, v);
+    clearTimeout(S.tt); S.tt = setTimeout(function () { if (!sd.open) return; sdRender(); var inp = sd.querySelector('[data-sd-keep="' + id + '"]'); if (inp) { inp.focus(); var n = String(inp.value).length; try { inp.setSelectionRange(n, n); } catch (x) { /* number inputs */ } } }, 450);
   });
-  function matchOpt() { for (var i = 0; i < (S.opts || []).length; i++) { var x = S.opts[i]; if (x.kind === 'split' && x.o.id === S.sel && x.keep === S.keep) return i; } return null; }
   function go() {
     clearTimeout(S.tt);
     var opt = S.opt != null ? S.opts[S.opt] : null, btn = sd.querySelector('[data-sd-go]'); btn.disabled = true;
@@ -1646,15 +1680,27 @@
       toast((opt.po ? opt.po.po : (opt.o.product || opt.o.po)) + ' moved to Not loaded yet');
       assignAll(ls, '').catch(fail); return;
     }
-    var o = byId(S.sel); if (!o) return;
-    post(D.base + '/split', { order: o.id, keep: S.keep }).then(function (j) {
-      var k = j.kept, p = j.part, n = {}; Object.keys(o).forEach(function (key) { n[key] = o[key]; });
-      o.qty = k.qty; o.cartons = k.cartons; o.cbm = k.cbm; o.kg = k.kg; o.est = k.est; o.part = k.part; o.root = k.root;
-      n.id = p.id; n.qty = p.qty; n.cartons = p.cartons; n.cbm = p.cbm; n.kg = p.kg; n.est = p.est; n.part = p.part; n.root = p.root; n.container = null; n.urgent = o.urgent;
-      D.orders.push(n); fresh[o.id] = 1; sd.close(); render();
-      var c = o.container ? cById(o.container) : null, t = c ? D.box[c.box] : null;
-      toast('Split — part ' + p.part + ' (' + n2(p.cbm) + ' m³) is in Not loaded yet' + (c && !t.lcl && usedOf(c) > t.cap ? ' · still ' + n2(usedOf(c) - t.cap) + ' m³ over' : ''));
-    }).catch(function (x) { btn.disabled = false; toast(x.message); });
+    var ids = planned(), done = [], c0 = S.container ? cById(S.container) : null;
+    if (!ids.length) return;
+    btn.textContent = 'Splitting…';
+    ids.reduce(function (p, id) {
+      return p.then(function () {
+        var o = byId(id);
+        return post(D.base + '/split', { order: o.id, keep: S.plan[id] }).then(function (j) {
+          var k = j.kept, pt = j.part, n = {}; Object.keys(o).forEach(function (key) { n[key] = o[key]; });
+          o.qty = k.qty; o.cartons = k.cartons; o.cbm = k.cbm; o.kg = k.kg; o.est = k.est; o.part = k.part; o.root = k.root;
+          n.id = pt.id; n.qty = pt.qty; n.cartons = pt.cartons; n.cbm = pt.cbm; n.kg = pt.kg; n.est = pt.est; n.part = pt.part; n.root = pt.root; n.container = null; n.urgent = o.urgent;
+          D.orders.push(n); fresh[o.id] = 1; done.push(o);
+        }).catch(function (x) { x.line = o; throw x; });
+      });
+    }, Promise.resolve()).then(function () {
+      sd.close(); render();
+      var t = c0 ? D.box[c0.box] : null, over = c0 && !t.lcl ? usedOf(c0) - t.cap : 0;
+      toast((done.length > 1 ? done.length + ' lines split' : 'Split') + ' — the rest is in Not loaded yet' + (over > 0 ? ' · still ' + n2(over) + ' m³ over' : ''));
+    }).catch(function (x) {
+      sd.close(); render();
+      toast((done.length ? done.length + ' split · ' : '') + (x.line ? (x.line.sku || x.line.product || x.line.po) + ' failed: ' : '') + x.message);
+    });
   }
 
   // Forwarder update: paste / drop an email → AI compares it with the container → tick what to update
