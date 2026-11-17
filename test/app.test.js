@@ -3577,3 +3577,60 @@ test('customs entries: AI reads a 7501, links container / POs / products, checks
   const csv = (await req(base, 'GET', '/admin/logistics/customs/export.csv', { cookie })).text;
   assert.match(csv, /9T2-0090981-5,2026-11-21,002,"OTHER, OTHER, OTHER TOYS, NSPF",9503\.00\.0073/);
 });
+
+test('shipments: shipped containers and courier parcels, stages and flags, detail page, mark delivered with a shortage', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const PL = require('../src/planning');
+  const today = PL.today(); const d = (n) => PL.addDays(today, n);
+  const s = await db.insert('suppliers', { name: 'Shenzhen Kean' });
+  // on the water, ETA slipped, docs missing
+  const c1 = await db.insert('plan_containers', { port: 'CNYTN', box: '20GP', status: 'shipped', created_at: '2026-01-01T00:00:00Z', fwd: { forwarder: 'Sino Freight', booking_no: 'YN0012', carrier: 'MSC', atd: d(-5), etd: d(-5), eta: d(5), eta_prev: d(2), ocean_usd: 6500 } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '500024', sku: 'SB 001', product: 'Silicone bib', qty: 8400, cartons: 210, cbm: 8.4, unit_price: 1.2, container_id: c1.id, shipped: true });
+  await db.insert('ship_confirmations', { supplier_id: s.id, pos: ['500024'], container_id: c1.id, mode: 'FCL', status: 'received', missing: ['Bill of lading'], log: [] });
+  // arrived, free time over, customs entry saved
+  const c2 = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', created_at: '2026-01-02T00:00:00Z', fwd: { forwarder: 'Affinity', hbl_no: 'SNAL2610035A', atd: d(-20), eta: d(-3), ata: d(-3), free_until: d(-1) } });
+  const l2 = await db.insert('plan_orders', { supplier_id: s.id, po: '800022', sku: 'DPS 001', product: 'Potty seat', qty: 1968, cartons: 492, cbm: 6, unit_price: 1.45, container_id: c2.id, shipped: true });
+  const l3 = await db.insert('plan_orders', { supplier_id: s.id, po: 'PO310002', sku: 'SWS 001', product: 'Water squirt', qty: 3816, cartons: 159, cbm: 6, unit_price: 2.5, container_id: c2.id, shipped: true });
+  await db.insert('customs_entries', { entry_no: '9T2-0090981-5', entry_date: d(-2), status: 'saved', container_id: c2.id, duty: 3234.43, fees: 88.29, lines: [{ no: '001', products: [{ code: 'DPS 001', line_id: l2.id, per_pc: 0.642 }] }] });
+  // courier parcel
+  await db.insert('ship_confirmations', { supplier_id: s.id, pos: ['DP-0144'], mode: 'COURIER', status: 'complete', confirmed_at: d(-2), facts: { carrier: 'DHL', tracking_no: '4482119022' }, missing: [], log: [] });
+  // planned container: not a shipment
+  await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'planned', created_at: '2026-01-03T00:00:00Z' });
+
+  let pg = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
+  assert.match(pg, /At port \/ customs/); assert.match(pg, /On the water/); assert.match(pg, /Courier/);
+  assert.match(pg, /Yantian · Container 1 · 20′ GP/); assert.match(pg, /YN0012/);
+  assert.match(pg, /ETA \+3 days/); assert.match(pg, /Docs: Bill of lading \(500024\) missing/); assert.match(pg, /Arrives in 5 days/);
+  assert.match(pg, /Free time over/); assert.match(pg, /7501 ✓ duty \$3,234/);
+  assert.match(pg, /Courier · Shenzhen Kean/); assert.match(pg, /DHL · 4482119022/);
+  assert.doesNotMatch(pg, /Container 3/);
+  // search and tiles
+  assert.doesNotMatch((await req(base, 'GET', '/admin/orders/shipments?q=DPS001', { cookie })).text, /YN0012/);
+  assert.match((await req(base, 'GET', '/admin/orders/shipments?tile=soon', { cookie })).text, /YN0012/);
+
+  // detail: landed cost per piece, timeline, cost
+  const det = (await req(base, 'GET', `/admin/orders/shipments/${c2.id}`, { cookie })).text;
+  assert.match(det, /Arrived · customs/); assert.match(det, /Customs entry 9T2-0090981-5/);
+  assert.match(det, /\$2\.09<\/b><div class="sub">\$1\.45 \+ duty \$0\.64/);
+  assert.match(det, /Mark delivered…/);
+
+  // mark delivered with a 2-carton shortage
+  const fd = new FormData(); fd.append('date', today); fd.append('to', 'Lake Forest warehouse'); fd.append(`r_${l2.id}`, '492'); fd.append(`r_${l3.id}`, '157'); fd.append('note', '2 cartons missing');
+  fd.append('file', new Blob([Buffer.from('%PDF pod')], { type: 'application/pdf' }), 'POD.pdf');
+  const r = await fetch(`${base}/admin/orders/shipments/${c2.id}/delivered`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
+  assert.equal(r.status, 303);
+  const C2 = db.tables.plan_containers.find((x) => x.id === c2.id);
+  assert.equal(C2.delivered_at, today); assert.equal(C2.delivery_files.length, 1);
+  assert.equal(C2.received.find((x) => x.line_id === l3.id).received, 157);
+  assert.equal(db.tables.plan_orders.find((x) => x.id === l3.id).received_qty, 157);
+  assert.match(db.tables.supplier_activities.at(-1).summary, /Shortage on delivery .*PO PO310002 SWS 001 −2 ctns — 2 cartons missing/);
+  pg = (await req(base, 'GET', '/admin/orders/shipments?view=delivered', { cookie })).text;
+  assert.match(pg, /Short 2 ctns/);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/orders/shipments', { cookie })).text, /SNAL2610035A/);
+  // reopen
+  await req(base, 'POST', `/admin/orders/shipments/${c2.id}/reopen`, { cookie, form: {} });
+  assert.equal(db.tables.plan_containers.find((x) => x.id === c2.id).delivered_at, null);
+});

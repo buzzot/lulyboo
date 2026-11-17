@@ -25,9 +25,9 @@ const FIELDS = [
   ['container_no', 'Container'], ['container_type', 'Container type'], ['carrier', 'Carrier'], ['vessel', 'Vessel'], ['voyage', 'Voyage'],
   ['pol', 'Port of loading'], ['pod', 'Port of discharge'], ['si_cutoff', 'SI cut-off'], ['cy_cutoff', 'CY cut-off'], ['cfs_cutoff', 'CFS cut-off'],
   ['etd', 'ETD'], ['atd', 'Sailed'], ['eta', 'ETA'], ['ata', 'Arrived'], ['transit', 'Transit'],
-  ['ocean_usd', 'Ocean freight (USD)'], ['rate_valid', 'Rate valid until'], ['volume_cbm', 'Volume (m³)'], ['cartons', 'Cartons'], ['gross_kg', 'Weight (kg)'],
+  ['free_until', 'Last free day'], ['ocean_usd', 'Ocean freight (USD)'], ['rate_valid', 'Rate valid until'], ['volume_cbm', 'Volume (m³)'], ['cartons', 'Cartons'], ['gross_kg', 'Weight (kg)'],
 ];
-const DATES = ['si_cutoff', 'cy_cutoff', 'cfs_cutoff', 'etd', 'atd', 'eta', 'ata', 'rate_valid'];
+const DATES = ['si_cutoff', 'cy_cutoff', 'cfs_cutoff', 'etd', 'atd', 'eta', 'ata', 'rate_valid', 'free_until'];
 const NUMS = ['booking_no', 'hbl_no', 'mbl_no', 'container_no'];
 const MONEY = ['ocean_usd', 'volume_cbm', 'cartons', 'gross_kg'];
 // checked against the loaded cargo, not copied onto the container
@@ -60,6 +60,7 @@ const TOOL = {
       transit: { type: 'string', description: 'Transit time as written, e.g. "16-18 days"' },
       ocean_usd: { type: 'number', description: 'Ocean freight / rate in USD for the whole shipment (per container × count for FCL)' },
       rate_valid: { type: 'string', description: 'Date the rate is valid until, YYYY-MM-DD' },
+      free_until: { type: 'string', description: 'Last free day at the destination port / CFS before storage, demurrage or detention charges (from an arrival notice), YYYY-MM-DD' },
       volume_cbm: { type: 'number', description: 'Total volume in m³ / CBM as stated' },
       cartons: { type: 'number', description: 'Total cartons / packages as stated' },
       gross_kg: { type: 'number', description: 'Total gross weight in kg as stated' },

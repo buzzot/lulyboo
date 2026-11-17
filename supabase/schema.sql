@@ -1010,3 +1010,20 @@ create table if not exists public.customs_entries (
 create index if not exists customs_entries_no_idx on public.customs_entries (entry_no);
 create index if not exists customs_entries_date_idx on public.customs_entries (entry_date);
 alter table public.customs_entries enable row level security;
+
+-- Shipments (run once): delivery confirmation on containers / LCL shipments and courier parcels, received quantities on PO lines
+alter table public.plan_containers add column if not exists delivered_at date;
+alter table public.plan_containers add column if not exists delivered_to text;
+alter table public.plan_containers add column if not exists delivered_by text;
+alter table public.plan_containers add column if not exists delivery_note text;
+alter table public.plan_containers add column if not exists delivery_files jsonb default '[]';
+alter table public.plan_containers add column if not exists received jsonb;          -- [{ line_id, po, sku, shipped, received, unit }]
+alter table public.plan_containers add column if not exists drayage_usd numeric;
+alter table public.ship_confirmations add column if not exists delivered_at date;
+alter table public.ship_confirmations add column if not exists delivered_to text;
+alter table public.ship_confirmations add column if not exists delivered_by text;
+alter table public.ship_confirmations add column if not exists delivery_note text;
+alter table public.ship_confirmations add column if not exists delivery_files jsonb default '[]';
+alter table public.ship_confirmations add column if not exists received jsonb;
+alter table public.plan_orders add column if not exists received_at date;
+alter table public.plan_orders add column if not exists received_qty numeric;          -- cartons (or pcs when no cartons)

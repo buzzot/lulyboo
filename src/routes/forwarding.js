@@ -138,7 +138,7 @@ async function onTheWater(db, port) {
   const cs = Object.values(await numbered(db)).filter((c) => c.port === port && c.status === 'shipped' && !(c.fwd?.ata || c.fwd?.arrived));
   if (!cs.length) return '';
   const lines = await db.list('plan_orders').catch(() => []);
-  return html`<section class="card fw-otw"><h2 class="sec">On the water <span class="sub">${cs.length}</span></h2>
+  return html`<section class="card fw-otw"><div class="rh-head"><h2 class="sec">On the water <span class="sub">${cs.length}</span></h2><a class="link small" href="/admin/orders/shipments">All shipments →</a></div>
     ${cs.map((c) => { const ls = lines.filter((l) => l.container_id === c.id); const pos = [...new Map(ls.map((l) => [`${l.supplier_id}|${PL.normPo(l.po)}`, l])).values()]; const f = c.fwd || {};
       return html`<div class="fw-otw-c" id="c-${c.id}"><div class="fw-otw-h"><b>${cName(c)}</b> <span class="cp-tag ${FW.stageOf(f) === 'arrived_due' ? 'wait' : 'plan'}">${FW.stageLabel(FW.stageOf(f)) || 'Shipped'}</span>
         <span class="sub">${[f.forwarder, f.hbl_no ? `HBL ${f.hbl_no}` : '', f.container_no ? fmtCont(f.container_no) : '', [f.vessel, f.voyage].filter(Boolean).join(' ')].filter(Boolean).join(' · ')}</span></div>
