@@ -971,3 +971,9 @@ create table if not exists public.freight_quotes (
 );
 create index if not exists freight_quotes_lane_idx on public.freight_quotes (pol, pod, box, quoted_on);
 alter table public.freight_quotes enable row level security;
+
+-- Split order lines by quantity (run once): a line split into parts keeps a link to the original line
+alter table public.plan_orders add column if not exists split_of uuid;      -- the original line (null on the original itself)
+alter table public.plan_orders add column if not exists split_no int;       -- part number once split (1 = the original)
+alter table public.plan_orders add column if not exists urgent boolean not null default false;  -- keep whole, never suggested for splitting
+create index if not exists plan_orders_split_idx on public.plan_orders (split_of);

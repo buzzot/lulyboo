@@ -119,6 +119,13 @@ async function factsOf(db, sc) {
   const sailing = c?.sailing_id ? await db.get('sailings', c.sailing_id).catch(() => null) : null;
   let lines = (await Promise.all((sc.order_ids || []).map((id) => db.get('plan_orders', id).catch(() => null)))).filter(Boolean);
   if (!lines.length && (sc.pos || []).length) lines = (await db.list('plan_orders', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((l) => sc.pos.some((p) => PL.normPo(p) === PL.normPo(l.po)));
+  // split lines: say which part of the PO line ships in this container
+  for (const l of lines) {
+    if (!l.split_no && !l.split_of) continue;
+    const root = l.split_of || l.id;
+    const all = (await db.list('plan_orders', { filters: { supplier_id: l.supplier_id } }).catch(() => [])).filter((x) => x.id === root || x.split_of === root);
+    if (all.length > 1) l.of_total = { cartons: all.reduce((s, x) => s + (Number(x.cartons) || 0), 0), qty: all.reduce((s, x) => s + (Number(x.qty) || 0), 0) };
+  }
   return { supplier, c, sailing, lines };
 }
 const filesOf = async (db, sc) => (sc.id ? (await db.list('plan_files', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((f) => f.shipment_id === sc.id) : []);
@@ -192,7 +199,7 @@ function draftParts(sc, { supplier, c, sailing, lines }, { kind = 'request', lis
   }
   const received = list.filter((x) => x.state === 'have').map((x) => (x.key === 'confirm' ? (sc.container_no ? `Container ${sc.container_no}` : 'Shipment confirmation') : x.label));
   if (sc.container_no && !received.some((r) => /^Container /.test(r))) received.push(`Container ${sc.container_no}`);
-  const rows = lines.map((l) => ({ po: l.po, product: l.product || '', qty: l.qty ? int(l.qty) : '', cartons: l.cartons ? int(l.cartons) : '', cbm: l.cbm ? n2(l.cbm) : '' }));
+  const rows = lines.map((l) => ({ po: l.po, product: `${l.product || ''}${l.of_total ? ` — partial: ${l.of_total.cartons && l.cartons ? `${int(l.cartons)} of ${int(l.of_total.cartons)} cartons` : `${int(l.qty)} of ${int(l.of_total.qty)} pcs`}, the rest ships later` : ''}`, qty: l.qty ? int(l.qty) : '', cartons: l.cartons ? int(l.cartons) : '', cbm: l.cbm ? n2(l.cbm) : '' }));
   return { subject, intro, defaultIntro: intro, items, listLabel, received, rows, shipment, name: supplier?.contact_name || supplier?.name || '' };
 }
 

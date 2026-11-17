@@ -3359,3 +3359,61 @@ test('forwarder: a shipping advice before the ETD is not "sailed" yet; supplier 
   assert.equal(db.tables.plan_containers[0].status, 'booked'); assert.equal(db.tables.plan_orders[0].shipped, false);
 });
 function PL_add(n) { return new Date(Date.now() + n * 864e5).toISOString().slice(0, 10); }
+
+test('split by quantity: whole cartons, linked parts, auto-merge when they meet again, merge back, partial quantity in the supplier email', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Yuanyi' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '20GP', status: 'planned', created_at: new Date().toISOString() });
+  const l = await db.insert('plan_orders', { supplier_id: h.id, po: '500024', product: 'Silicone bib', qty: 8400, cartons: 210, units_per_carton: 40, cbm: 8.4, gross_kg: 1029, port: 'CNYTN', container_id: c.id, ready_date: '2026-11-15' });
+  const P = '/admin/logistics/planning';
+  const rows = () => db.tables.plan_orders.filter((x) => x.po === '500024');
+
+  // the load page carries what the split dialog needs
+  const page = (await req(base, 'GET', `${P}/load?port=CNYTN`, { cookie })).text;
+  assert.match(page, /&quot;upc&quot;:40/); assert.match(page, /&quot;root&quot;:/);
+
+  // invalid amounts
+  let r = await req(base, 'POST', `${P}/split`, { cookie, form: { order: l.id, keep: '210' } });
+  assert.equal(JSON.parse(r.text).ok, false);
+
+  r = JSON.parse((await req(base, 'POST', `${P}/split`, { cookie, form: { order: l.id, keep: '93' } })).text);
+  assert.ok(r.ok);
+  assert.deepEqual([r.kept.cartons, r.kept.qty, r.kept.cbm, r.kept.kg, r.kept.part, r.kept.container], [93, 3720, 3.72, 455.7, 1, c.id]);
+  assert.deepEqual([r.part.cartons, r.part.qty, r.part.cbm, r.part.kg, r.part.part, r.part.root, r.part.container], [117, 4680, 4.68, 573.3, 2, l.id, null]);
+  assert.equal(rows().length, 2);
+  const p2 = rows().find((x) => x.split_no === 2);
+  assert.equal(p2.product, 'Silicone bib'); assert.equal(p2.ready_date, '2026-11-15'); assert.equal(p2.split_of, l.id);
+
+  // supplier shipping email for the container says it is partial
+  const SD = require('../src/shipdocs');
+  const sc = await db.insert('ship_confirmations', { supplier_id: h.id, pos: ['500024'], order_ids: [l.id], container_id: c.id, mode: 'FCL', status: 'pending', log: [] });
+  const facts = await SD.factsOf(db, sc);
+  const parts = SD.draftParts(sc, facts, { kind: 'request', list: SD.checklistOf(sc, [], null, '2026-11-01') });
+  assert.match(parts.rows[0].product, /partial: 93 of 210 cartons, the rest ships later/);
+
+  // loading part 2 into the same container joins the parts again
+  r = JSON.parse((await req(base, 'POST', `${P}/assign`, { cookie, form: { order: p2.id, container: c.id } })).text);
+  assert.deepEqual(r.removed, [p2.id]);
+  assert.equal(rows().length, 1);
+  assert.deepEqual([rows()[0].cartons, rows()[0].qty, rows()[0].cbm, rows()[0].split_no], [210, 8400, 8.4, null]);
+
+  // split again, then "Merge back" from the pool part
+  r = JSON.parse((await req(base, 'POST', `${P}/split`, { cookie, form: { order: l.id, keep: '200' } })).text);
+  r = JSON.parse((await req(base, 'POST', `${P}/merge`, { cookie, form: { order: r.part.id } })).text);
+  assert.ok(r.ok); assert.equal(rows().length, 1); assert.equal(rows()[0].container_id, c.id); assert.equal(rows()[0].cartons, 210);
+
+  // without carton data: split by pieces, volume marked estimated; deleting the container rejoins pool parts
+  const l2 = await db.insert('plan_orders', { supplier_id: h.id, po: '500030', product: 'Cup', qty: 1000, cbm: 2, port: 'CNYTN', container_id: c.id });
+  r = JSON.parse((await req(base, 'POST', `${P}/split`, { cookie, form: { order: l2.id, keep: '250' } })).text);
+  assert.deepEqual([r.kept.qty, r.kept.cbm, r.kept.est, r.part.qty, r.part.cbm], [250, 0.5, true, 750, 1.5]);
+  r = JSON.parse((await req(base, 'POST', `${P}/containers/${c.id}/delete`, { cookie, form: {} })).text);
+  assert.equal(r.merged, true);
+  assert.equal(db.tables.plan_orders.filter((x) => x.po === '500030').length, 1);
+
+  // urgent flag
+  await req(base, 'POST', `${P}/urgent`, { cookie, form: { order: l.id, urgent: '1' } });
+  assert.equal(db.tables.plan_orders.find((x) => x.id === l.id).urgent, true);
+});

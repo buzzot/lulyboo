@@ -1186,7 +1186,7 @@
     var row = function (x) {
       if (x.container) { var c = cById(x.container); return '<div class="lp-pr done" title="' + esc(tip(x)) + '"><span class="lp-h"></span><span class="lp-pn">' + esc(x.product || x.po) + '</span><span class="lp-ptag">' + esc(c ? cName(c) : 'Loaded') + '</span></div>'; }
       if (!x.cbm) return '<div class="lp-pr nov" title="' + esc(tip(x)) + '"><span class="lp-h"></span><span class="lp-pn">' + esc(x.product || 'Volume of the PO') + '</span><input class="lp-pin" type="number" step="0.01" min="0" inputmode="decimal" placeholder="m³" aria-label="Volume of ' + esc(x.product || x.po) + ' in m³" data-lp-v="' + x.id + '"><button type="button" class="lp-pok" data-lp-savecbm="' + x.id + '" aria-label="Save volume">✓</button></div>';
-      return '<div class="lp-pr" draggable="true" data-id="' + x.id + '" title="' + esc(tip(x)) + ' — drag to ship separately"><span class="lp-h" aria-hidden="true">⋮⋮</span><span class="lp-pn">' + esc(x.product || x.po) + '</span><span class="lp-pv">' + vol(x.cbm, x.est) + '</span></div>';
+      return '<div class="lp-pr" draggable="true" data-id="' + x.id + '" title="' + esc(tip(x)) + ' — drag to ship separately"><span class="lp-h" aria-hidden="true">⋮⋮</span><span class="lp-pn">' + esc(x.product || x.po) + (x.part ? ' <em class="lp-chip-pt">part ' + x.part + '</em>' : '') + '</span><span class="lp-pv">' + vol(x.cbm, x.est) + '</span>' + partActs(x) + '</div>';
     };
     var sub = esc(o.supplier) + (!multi && o.product ? ' · ' + esc(o.product) : '');
     var flags = (noVol.length ? '<span class="lp-flag warn">' + (multi ? noVol.length + ' needs m³' : 'needs m³') + '</span>' : '') + (loaded.length ? '<span class="lp-flag blue">' + loaded.length + ' of ' + all.length + ' loaded</span>' : '');
@@ -1194,10 +1194,24 @@
       '<div class="lp-pm"><div class="lp-r1"><a class="lp-polink" draggable="false" href="/admin/orders/view?supplier=' + encodeURIComponent(pk.split('|')[0]) + '&amp;po=' + encodeURIComponent(o.po) + '" title="Open PO ' + esc(o.po) + '">' + esc(o.po) + '</a><span class="lp-v">' + (ready.length ? vol(tot, est) : '<em>m³ ?</em>') + '</span>' +
         (D.containers.length && ready.length ? '<button type="button" class="lp-ld-btn" data-lp-loadmenu="' + esc(pk) + '" aria-haspopup="true" aria-label="Load ' + esc(o.po) + ' into a container">Load ▾</button>' : '') + '</div>' +
       '<div class="lp-sup">' + sub + '</div>' +
-      '<div class="lp-r3">' + whenChip(ls) + flags + (multi ? '<button type="button" class="lp-pbtn" data-lp-open="' + esc(pk) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + all.length + ' products <span class="lp-car">▾</span></button>' : '') + '</div></div>' +
+      '<div class="lp-r3">' + whenChip(ls) + flags + (!multi ? (o.part ? '<span class="lp-flag vio">part ' + o.part + '</span>' : '') + partActs(o) : '') + (multi ? '<button type="button" class="lp-pbtn" data-lp-open="' + esc(pk) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + all.length + ' products <span class="lp-car">▾</span></button>' : '') + '</div></div>' +
       (!multi && !o.cbm ? '<div class="lp-prs single">' + row(o) + '</div>' : '') +
       (open ? '<div class="lp-prs">' + all.map(row).join('') + (ready.length > 1 ? '<div class="lp-phint">Drag a product to ship it separately</div>' : '') + '</div>' : '') +
       '</div>';
+  }
+  // split helpers
+  function canSplit(x) { return x.cbm > 0 && ((x.cartons || 0) > 1 || (!(x.cartons > 0) && (x.qty || 0) > 1)); }
+  function siblings(x) { return D.orders.filter(function (y) { return y.root === x.root && y.id !== x.id; }); }
+  function partActs(x) {
+    var a = '';
+    if (x.part && siblings(x).length) a += '<button type="button" class="link small lp-pa" data-lp-merge="' + x.id + '" title="Join this part with the rest of the line">Merge back</button>';
+    if (canSplit(x)) a += '<button type="button" class="link small lp-pa" data-lp-splitone="' + x.id + '" title="Split by quantity">Split…</button>';
+    return a;
+  }
+  function biggerBox(c, u) {
+    var cur = D.box[c.box], best = null;
+    Object.keys(D.box).forEach(function (b) { var t = D.box[b]; if (t.lcl || t.cap <= cur.cap || t.cap < u) return; if (!best || t.cap < D.box[best].cap) best = b; });
+    return best;
   }
   // "Load ▾" menu: one shared popover
   var menu = document.createElement('div'); menu.className = 'lp-menu'; menu.hidden = true; menu.setAttribute('role', 'menu'); document.body.appendChild(menu);
@@ -1268,7 +1282,7 @@
     var mixed = Object.keys(days).length > 1;
     return '<span class="lp-pop" role="tooltip"><span class="lp-pop-h"><b>' + esc(o.po) + '</b><span>' + esc(o.supplier) + '</span></span>' +
       '<span class="lp-pop-r"><span>Ready</span><b>' + (readyOf(ls) ? esc(short(readyOf(ls))) + (mixed ? ' <em>last item</em>' : '') : '<em>not set</em>') + '</b></span>' +
-      '<span class="lp-pop-l">' + ls.map(function (x) { return '<span><span class="lp-pop-n">' + esc(x.product || '(whole PO)') + '</span><span>' + (x.qty ? int(x.qty) + ' pcs' : '') + (x.cartons ? ' · ' + int(x.cartons) + ' ctns' : '') + (x.cbm ? ' · ' + n2(x.cbm) + ' m³' : '') + (mixed && x.ready ? ' · ' + esc(x.readyText) : '') + '</span></span>'; }).join('') + '</span>' +
+      '<span class="lp-pop-l">' + ls.map(function (x) { return '<span><span class="lp-pop-n">' + esc(x.product || '(whole PO)') + (x.part ? ' <em class="lp-chip-pt">part ' + x.part + '</em>' : '') + (canSplit(x) ? '<button type="button" class="link small lp-pop-s" data-lp-splitone="' + x.id + '">Split…</button>' : '') + '</span><span>' + (x.qty ? int(x.qty) + ' pcs' : '') + (x.cartons ? ' · ' + int(x.cartons) + ' ctns' : '') + (x.cbm ? ' · ' + n2(x.cbm) + ' m³' : '') + (mixed && x.ready ? ' · ' + esc(x.readyText) : '') + '</span></span>'; }).join('') + '</span>' +
       '<a class="lp-pop-a" href="/admin/orders/view?supplier=' + encodeURIComponent(sid) + '&po=' + encodeURIComponent(o.po) + '">Open PO →</a></span>';
   }
   function readyOf(ls) { var d = ls.map(function (x) { return x.ready; }).filter(Boolean).sort(); return d.length ? d[d.length - 1] : null; }
@@ -1279,6 +1293,7 @@
     return '<div class="lp-chips">' + groupBy(items).map(function (ls) {
       var o = ls[0], tot = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), all = linesOfPo(o.pk).length, rd = readyOf(ls);
       var part = all > ls.length ? ' <em class="lp-chip-part" title="' + ls.length + ' of ' + all + ' products of this PO are in this container">' + ls.length + '/' + all + '</em>' : '';
+      if (ls.some(function (x) { return x.part; })) part += ' <em class="lp-chip-pt" title="Part of a split line — the rest ships separately">part</em>';
       return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" tabindex="0" data-po="' + esc(o.pk) + '" data-from="' + cid + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<span class="lp-chip-rd' + (rd ? '' : ' none') + '">' + (rd ? esc(short(rd)) : 'no date') + '</span>' + popHTML(o, ls) + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
     }).join('') + '</div>';
   }
@@ -1364,6 +1379,7 @@
       if (part > 0.15 || (!whole && n > 0)) slots.push({ o: o, k: k++, part: Math.max(part, 0.35) });
     });
     var inside = '', spill = '', cap = t.cols * t.rows;
+    if (!over && slots.length > cap) slots = slots.slice(0, cap);   // rounding of part cartons: nothing spills when it fits
     slots.forEach(function (s) {
       var ov = s.k >= cap, oi = s.k - cap;
       var x = ov ? cutW + 44 + (oi % 3) * cw : Math.floor(s.k / t.rows) * cw;
@@ -1374,7 +1390,7 @@
     });
     var lvl = pct > 100 ? 'full' : pct > 85 ? 'mid' : '';
     var sail = sById(c.sailing), warns = [];
-    if (over) warns.push('<div class="lp-warn bad">Over by ' + n2(u - t.cap) + ' m³ — move a PO out' + (c.box === '40GP' ? " or switch to 40' HQ" : c.box === '20GP' ? " or switch to 40' GP" : '') + '.</div>');
+    if (over) { var big = biggerBox(c, u); warns.push('<div class="lp-warn bad lp-over"><span>Over by <b>' + n2(u - t.cap) + ' m³</b>.</span><span class="lp-over-a">' + (big ? '<button type="button" class="btn ghost small" data-lp-switch="' + c.id + '" data-box="' + big + '">Switch to ' + esc(D.box[big].name) + ' — fits</button>' : '') + '<button type="button" class="btn small" data-lp-split="' + c.id + '">Split to fit…</button></span></div>'); }
     if (sail) { var late = items.filter(function (o) { return o.ready && o.ready > sail.etd; }); if (late.length) warns.push('<div class="lp-warn">' + esc(late.map(lineName).join(', ')) + (late.length > 1 ? ' are' : ' is') + " ready after this sailing's ETD.</div>"); }
     var noCbm = items.filter(function (o) { return o.est; }); if (noCbm.length) warns.push('<div class="lp-warn soft">' + esc(noCbm.map(lineName).join(', ')) + ' volume is estimated from carton size — confirm with the packing list.</div>');
     if (!over && items.length && u <= LCLC) warns.push('<div class="lp-warn soft">Only ' + n2(u) + ' m³ — LCL (sharing a container) is usually cheaper. <button type="button" class="link small" data-lp-switch="' + c.id + '" data-box="LCL">Switch to LCL</button></div>');
@@ -1405,10 +1421,17 @@
     if (!o.cbm) { toast('Add the volume first'); return; }
     o.container = cid; fresh[id] = 1; render();
     var t = D.box[c.box]; if (!t.lcl && usedOf(c) > t.cap) toast(o.po + " doesn't fit — " + n2(usedOf(c) - t.cap) + ' m³ over');
-    post(D.base + '/assign', { order: id, container: cid }).catch(fail);
+    post(D.base + '/assign', { order: id, container: cid }).then(function (j) { if (applyMerge(j)) render(); }).catch(fail);
   }
-  function unload(id) { var o = byId(id); if (!o || !o.container) return; o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).catch(fail); }
-  function assignAll(ls, cid) { return ls.reduce(function (p, o) { return p.then(function () { return post(D.base + '/assign', { order: o.id, container: cid || '' }); }); }, Promise.resolve()); }
+  function unload(id) { var o = byId(id); if (!o || !o.container) return; o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).then(function (j) { if (applyMerge(j)) render(); }).catch(fail); }
+  function applyMerge(j) {
+    if (!j || !j.removed || !j.removed.length) return false;
+    D.orders = D.orders.filter(function (o) { return j.removed.indexOf(o.id) < 0; });
+    (j.kept || []).forEach(function (k) { var o = byId(k.id); if (o) { o.qty = k.qty; o.cartons = k.cartons; o.cbm = k.cbm; o.kg = k.kg; o.est = k.est; o.part = k.part; o.container = k.container; } });
+    D.orders.forEach(function (o) { if (o.part && !siblings(o).length) o.part = 0; });
+    return true;
+  }
+  function assignAll(ls, cid) { return ls.reduce(function (p, o) { return p.then(function () { return post(D.base + '/assign', { order: o.id, container: cid || '' }).then(function (j) { if (applyMerge(j)) render(); }); }); }, Promise.resolve()); }
   function loadPo(pk, cid) {
     var c = cById(cid); if (!c) return;
     var ls = linesOfPo(pk).filter(function (o) { return !o.container && o.cbm; });
@@ -1465,6 +1488,13 @@
     if ((id = b.getAttribute('data-lp-outpo'))) { unloadPo(id, b.getAttribute('data-from')); return; }
     if ((id = b.getAttribute('data-lp-open'))) { opened[id] = !opened[id]; renderPool(); return; }
     if (b.hasAttribute('data-lp-loadmenu')) { if (!menu.hidden) { menu.hidden = true; return; } openMenu(b); return; }
+    if ((id = b.getAttribute('data-lp-split'))) { openSplit({ container: id }); return; }
+    if ((id = b.getAttribute('data-lp-splitone'))) { openSplit({ line: id }); return; }
+    if ((id = b.getAttribute('data-lp-merge'))) {
+      b.disabled = true;
+      post(D.base + '/merge', { order: id }).then(function (j) { applyMerge(j); render(); toast('Merged back into one line'); }).catch(fail);
+      return;
+    }
     if ((id = b.getAttribute('data-lp-switch'))) { var cs = cById(id), nb = b.getAttribute('data-box'); cs.box = nb; itemsOf(cs).forEach(function (o) { fresh[o.id] = 1; }); render(); toast(cName(cs) + ' — now ' + (D.box[nb].lcl ? 'LCL' : D.box[nb].name)); post(D.base + '/containers/' + id, { box: nb }).catch(fail); return; }
     if ((id = b.getAttribute('data-lp-savecbm'))) {
       var inp = root.querySelector('[data-lp-v="' + id + '"]'), v = parseFloat(String(inp.value).replace(',', '.'));
@@ -1476,7 +1506,7 @@
     if ((id = b.getAttribute('data-lp-del'))) {
       var c = cById(id); if (itemsOf(c).length && !confirm('Remove this container? Its POs go back to "Not loaded yet".')) return;
       itemsOf(c).forEach(function (o) { o.container = null; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render();
-      post(D.base + '/containers/' + id + '/delete').catch(fail); return;
+      post(D.base + '/containers/' + id + '/delete').then(function (j) { if (j.merged) location.reload(); }).catch(fail); return;
     }
     if ((id = b.getAttribute('data-lp-ship'))) {
       var c2 = cById(id), n = itemsOf(c2).length;
@@ -1485,6 +1515,130 @@
       post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast('Container shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' closed'); }).catch(fail);
     }
   });
+  // Split by quantity: "Split to fit…" on an over-full container (with suggestions), or "Split…" on one line
+  var sd = document.createElement('dialog'); sd.className = 'rp-modal lp-sdlg'; sd.setAttribute('aria-labelledby', 'lp-sd-t'); document.body.appendChild(sd);
+  var S = null; // { container, line, sel, keep, opt, opts }
+  function unitOf(o) { var byC = (o.cartons || 0) > 1; var whole = byC ? o.cartons : o.qty; return { byC: byC, whole: whole, per: o.cbm / whole, u: byC ? 'ctns' : 'pcs' }; }
+  function lateKey(o) { return o.ready || '9999-12-31'; }
+  function suggestions(c) {
+    var t = D.box[c.box], items = itemsOf(c).filter(function (o) { return o.cbm; }), u = usedOf(c), ex = u - t.cap, out = [];
+    if (ex <= 0) return out;
+    var splits = [], wholes = [];
+    items.forEach(function (o) {
+      if (o.urgent) return;
+      if (canSplit(o) && o.cbm > ex) {
+        var q = unitOf(o), move = Math.ceil(ex / q.per - 1e-9), keep = q.whole - move, kc = o.cbm * keep / q.whole;
+        if (keep >= 1 && !(kc < 1 && keep / q.whole < 0.1)) splits.push({ kind: 'split', o: o, keep: keep, move: move, after: u - o.cbm + kc });
+      }
+      if (o.cbm >= ex) wholes.push({ kind: 'move', ids: [o.id], o: o, after: u - o.cbm });
+    });
+    splits.sort(function (a, b) { return lateKey(b.o) < lateKey(a.o) ? -1 : lateKey(b.o) > lateKey(a.o) ? 1 : b.after - a.after; });
+    wholes.sort(function (a, b) { return lateKey(b.o) < lateKey(a.o) ? -1 : lateKey(b.o) > lateKey(a.o) ? 1 : a.o.cbm - b.o.cbm; });
+    if (splits[0]) out.push(splits[0]);
+    if (wholes[0]) out.push(wholes[0]);
+    // the PO that is ready last: moving it out makes the cargo ready sooner
+    var gs = groupBy(items), last = items.map(function (o) { return o.ready; }).filter(Boolean).sort().pop();
+    if (last && gs.length > 1) {
+      gs.forEach(function (ls) {
+        if (readyOf(ls) !== last || ls.some(function (x) { return x.urgent; })) return;
+        var rest = items.filter(function (x) { return ls.indexOf(x) < 0; }), after = u - ls.reduce(function (a, x) { return a + x.cbm; }, 0), nr = readyOf(rest);
+        if (after <= t.cap && rest.length && (!nr || nr < last) && !(ls.length === 1 && wholes[0] && wholes[0].o === ls[0])) out.push({ kind: 'move', ids: ls.map(function (x) { return x.id; }), po: ls[0], after: after, earlier: nr });
+      });
+    }
+    return out.slice(0, 3);
+  }
+  function optHTML(x, i, c) {
+    var t = D.box[c.box], pct = x.after / t.cap * 100, q = x.o ? unitOf(x.o) : null;
+    var what = x.kind === 'split' ? '<b>Split ' + esc(x.o.product || x.o.po) + ' (' + esc(x.o.po) + ')</b> — keep ' + int(x.keep) + ' ' + q.u + ', move ' + int(x.move) + ' ' + q.u + ' to the next shipment'
+      : x.po ? '<b>Move all of ' + esc(x.po.po) + ' out</b> — no split' : '<b>Move ' + esc(x.o.product || x.o.po) + (x.o.product ? ' (' + esc(x.o.po) + ')' : '') + ' out whole</b> — no split';
+    var why = x.po ? 'Cargo ready <b>' + esc(x.earlier ? short(x.earlier) : '—') + '</b> instead of ' + esc(short(readyOf(itemsOf(c)))) : (x.o.ready ? 'Ready ' + esc(short(x.o.ready)) : 'No ready date') + (x.o.ready && x.o.ready === readyOf(itemsOf(c)) ? ' — ready last' : '') + ' · not marked urgent' + (x.kind === 'split' ? ' · whole ' + (q.byC ? 'cartons' : 'pieces') : '');
+    var tag = x.kind === 'split' ? '<span class="cp-tag ok">Best fill</span>' : x.po ? '<span class="cp-tag plan">Earliest</span>' : '<span></span>';
+    return '<label class="lp-sd-opt"><input type="radio" name="lp-sd-opt" value="' + i + '"' + (S.opt === i ? ' checked' : '') + '><span>' + what + '<span class="sub">' + why + '</span></span><b class="lp-sd-pct">' + Math.round(pct * 10) / 10 + '% full</b>' + tag + '</label>';
+  }
+  function keepFor(o, c) {
+    var q = unitOf(o);
+    if (c) { var t = D.box[c.box], ex = usedOf(c) - t.cap; if (ex > 0 && o.cbm > ex) return Math.max(1, q.whole - Math.ceil(ex / q.per - 1e-9)); }
+    return Math.max(1, Math.floor(q.whole / 2));
+  }
+  function sdRender() {
+    var c = S.container ? cById(S.container) : null, t = c ? D.box[c.box] : null, u = c ? usedOf(c) : 0;
+    var lines = c ? itemsOf(c).filter(function (o) { return o.cbm; }) : [byId(S.line)].filter(Boolean);
+    var opts = S.opts = c ? suggestions(c) : [];
+    if (S.opt == null && opts.length && !S.touched) { S.opt = 0; }
+    var opt = S.opt != null ? opts[S.opt] : null;
+    if (opt && opt.kind === 'split') { S.sel = opt.o.id; if (!S.touched) S.keep = opt.keep; }
+    if (opt && opt.kind === 'move') S.sel = null;
+    var sel = S.sel ? byId(S.sel) : null;
+    var after = c ? (opt && opt.kind === 'move' ? opt.after : sel ? u - sel.cbm + sel.cbm * S.keep / unitOf(sel).whole : u) : 0;
+    var head = c ? 'Fit ' + esc(cName(c)) + ' · ' + esc(t.name) : 'Split ' + esc((lines[0] && (lines[0].product || lines[0].po)) || '');
+    var row = function (o) {
+      var q = unitOf(o), on = sel && sel.id === o.id, ok = canSplit(o);
+      var r = '<div class="lp-sd-it' + (on ? ' on' : '') + (ok ? '' : ' no') + '" data-sd-pick="' + (ok ? o.id : '') + '"><input type="radio" name="lp-sd-it"' + (on ? ' checked' : '') + (ok ? '' : ' disabled') + ' aria-label="Split ' + esc(o.product || o.po) + '"><span class="lp-sd-n">' + esc(o.product || o.po) + (o.part ? ' <em class="lp-chip-pt">part ' + o.part + '</em>' : '') + '</span>' +
+        '<span class="r">' + (o.qty ? int(o.qty) + ' pcs' : '') + '</span><span class="r">' + (o.cartons ? int(o.cartons) + ' ctns' : '—') + '</span><span class="r">' + n2(o.cbm) + ' m³</span><span class="r' + (c && o.ready && o.ready === readyOf(lines) ? ' late' : '') + '">' + (o.ready ? esc(short(o.ready)) : '—') + '</span>' +
+        '<button type="button" class="lp-star' + (o.urgent ? ' on' : '') + '" data-sd-star="' + o.id + '" title="' + (o.urgent ? 'Urgent — kept whole' : 'Mark urgent — keep whole') + '" aria-pressed="' + (o.urgent ? 'true' : 'false') + '" aria-label="Urgent">★</button></div>';
+      if (on) {
+        var k = S.keep, m = q.whole - k, f = function (n) { return n / q.whole; };
+        var qa = q.byC ? (o.upc ? Math.min(o.qty, k * o.upc) : Math.round(o.qty * f(k))) : k;
+        r += '<div class="lp-sd-x"><div class="lp-sd-row"><span>' + (c ? 'Keep in this container' : 'Part 1') + '</span><span class="lp-step"><button type="button" data-sd-d="-1" aria-label="One less">−</button><input type="number" min="1" max="' + (q.whole - 1) + '" value="' + k + '" data-sd-keep aria-label="Keep"><button type="button" data-sd-d="1" aria-label="One more">+</button></span><span class="sub">of ' + int(q.whole) + ' ' + q.u + (q.byC && o.upc ? ' · ' + int(o.upc) + ' pcs/ctn' : '') + ' · ' + (Math.round(q.per * 1000) / 1000) + ' m³/' + (q.byC ? 'ctn' : 'pc') + '</span>' + (c && usedOf(c) > t.cap && o.cbm > usedOf(c) - t.cap ? '<button type="button" class="link small" data-sd-fit>Fit exactly</button>' : '') + '</div>' +
+          '<div class="lp-sd-two"><div class="a"><span>' + (c ? 'Stays in ' + esc(cName(c)) : 'Part 1 — stays where it is') + '</span><b>' + int(k) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg * f(k))) + ' kg' : '') + '</span></div>' +
+          '<div class="b"><span>' + (o.container ? 'Back to “Not loaded yet” as a new part' : 'Part 2 — a new line in “Not loaded yet”') + '</span><b>' + int(m) + ' ' + q.u + (q.byC && o.qty ? ' · ' + int(o.qty - qa) + ' pcs' : '') + '</b><span>' + n2(o.cbm - o.cbm * f(k)) + ' m³' + (o.kg ? ' · ' + int(Math.round(o.kg - o.kg * f(k))) + ' kg' : '') + '</span></div></div>' +
+          (q.byC ? '' : '<p class="sub">No carton count on this line — split by pieces; volume is estimated.</p>') + '</div>';
+      }
+      return r;
+    };
+    var pct = c ? after / t.cap * 100 : 0;
+    sd.innerHTML = '<form method="dialog" class="lp-sd"><div class="rp-top"><h2 id="lp-sd-t">' + head + '</h2>' + (c && u > t.cap ? '<span class="cp-tag wait">Over by ' + n2(u - t.cap) + ' m³</span>' : '') + '<button type="button" class="icon-btn" data-sd-close aria-label="Close">×</button></div>' +
+      (c ? (opts.length ? '<div class="lp-sd-sug"><div class="lp-sd-sh">✦ Suggested</div>' + opts.map(function (x, i) { return optHTML(x, i, c); }).join('') + '</div>' : (u > t.cap ? '<p class="lp-warn">No single change fits — split one product below, then split another if still over.</p>' : '')) : '') +
+      groupBy(lines).map(function (ls) { var o = ls[0]; return '<div class="lp-sd-po"><div class="lp-sd-ph"><i style="background:' + o.color + '"></i><b>' + esc(o.po) + '</b><span>' + esc(o.supplier) + '</span><span class="sub">' + (readyOf(ls) ? 'ready ' + esc(short(readyOf(ls))) + ' · ' : '') + n2(ls.reduce(function (a, x) { return a + x.cbm; }, 0)) + ' m³</span></div>' + ls.map(row).join('') + '</div>'; }).join('') +
+      '<div class="lp-sd-foot">' + (c ? '<div class="lp-track"><i class="' + (pct > 100 ? 'full' : pct > 85 ? 'mid' : '') + '" style="width:' + Math.min(100, pct) + '%"></i></div><b>' + n2(after) + ' / ' + t.cap + ' m³ · ' + Math.round(pct * 10) / 10 + '%</b>' : '<span></span>') +
+        '<span class="lp-sd-acts"><button type="button" class="btn ghost" data-sd-close>Cancel</button><button type="button" class="btn" data-sd-go' + (opt || sel ? '' : ' disabled') + '>' + (opt && opt.kind === 'move' ? 'Move out' : c ? 'Split &amp; load' : 'Split') + '</button></span></div>' +
+      '<p class="sub lp-sd-note">★ urgent: kept whole and never suggested for splitting.</p></form>';
+  }
+  function openSplit(o) {
+    var line = o.line ? byId(o.line) : null;
+    S = { container: o.container || null, line: o.line || null, sel: line ? line.id : null, keep: line ? keepFor(line, line.container ? cById(line.container) : null) : 1, opt: null, touched: !!line };
+    if (line && line.container && D.box[cById(line.container).box] && !D.box[cById(line.container).box].lcl) { S.container = line.container; S.opt = null; S.touched = true; }
+    sdRender(); if (sd.showModal) sd.showModal(); else sd.setAttribute('open', '');
+  }
+  sd.addEventListener('click', function (e) {
+    if (e.target === sd || e.target.closest('[data-sd-close]')) { sd.close(); return; }
+    var b, id;
+    if ((b = e.target.closest('[data-sd-star]'))) {
+      e.preventDefault(); var o = byId(b.getAttribute('data-sd-star')); o.urgent = !o.urgent; S.opt = null; S.touched = !!S.sel; sdRender(); render();
+      post(D.base + '/urgent', { order: o.id, urgent: o.urgent ? '1' : '' }).catch(fail); return;
+    }
+    if ((b = e.target.closest('[data-sd-d]'))) { var q = unitOf(byId(S.sel)); S.keep = Math.max(1, Math.min(q.whole - 1, S.keep + Number(b.getAttribute('data-sd-d')))); S.touched = true; S.opt = matchOpt(); sdRender(); return; }
+    if (e.target.closest('[data-sd-fit]')) { S.keep = keepFor(byId(S.sel), cById(S.container)); S.touched = true; S.opt = matchOpt(); sdRender(); return; }
+    if ((b = e.target.closest('[data-sd-pick]')) && (id = b.getAttribute('data-sd-pick')) && !e.target.closest('.lp-sd-x')) {
+      if (S.sel !== id) { S.sel = id; S.keep = keepFor(byId(id), S.container ? cById(S.container) : null); }
+      S.touched = true; S.opt = matchOpt(); sdRender(); return;
+    }
+    if (e.target.closest('[data-sd-go]')) go();
+  });
+  sd.addEventListener('change', function (e) {
+    if (e.target.name === 'lp-sd-opt') { S.opt = Number(e.target.value); S.touched = false; sdRender(); return; }
+    if (e.target.hasAttribute('data-sd-keep')) { var q = unitOf(byId(S.sel)); S.keep = Math.max(1, Math.min(q.whole - 1, Math.round(Number(e.target.value) || 1))); S.touched = true; S.opt = matchOpt(); sdRender(); }
+  });
+  sd.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-sd-keep')) { e.preventDefault(); e.target.blur(); } });
+  function matchOpt() { for (var i = 0; i < (S.opts || []).length; i++) { var x = S.opts[i]; if (x.kind === 'split' && x.o.id === S.sel && x.keep === S.keep) return i; } return null; }
+  function go() {
+    var opt = S.opt != null ? S.opts[S.opt] : null, btn = sd.querySelector('[data-sd-go]'); btn.disabled = true;
+    if (opt && opt.kind === 'move') {
+      var ls = opt.ids.map(byId); ls.forEach(function (o) { o.container = null; }); sd.close(); render();
+      toast((opt.po ? opt.po.po : (opt.o.product || opt.o.po)) + ' moved to Not loaded yet');
+      assignAll(ls, '').catch(fail); return;
+    }
+    var o = byId(S.sel); if (!o) return;
+    post(D.base + '/split', { order: o.id, keep: S.keep }).then(function (j) {
+      var k = j.kept, p = j.part, n = {}; Object.keys(o).forEach(function (key) { n[key] = o[key]; });
+      o.qty = k.qty; o.cartons = k.cartons; o.cbm = k.cbm; o.kg = k.kg; o.est = k.est; o.part = k.part; o.root = k.root;
+      n.id = p.id; n.qty = p.qty; n.cartons = p.cartons; n.cbm = p.cbm; n.kg = p.kg; n.est = p.est; n.part = p.part; n.root = p.root; n.container = null; n.urgent = o.urgent;
+      D.orders.push(n); fresh[o.id] = 1; sd.close(); render();
+      var c = o.container ? cById(o.container) : null, t = c ? D.box[c.box] : null;
+      toast('Split — part ' + p.part + ' (' + n2(p.cbm) + ' m³) is in Not loaded yet' + (c && !t.lcl && usedOf(c) > t.cap ? ' · still ' + n2(usedOf(c) - t.cap) + ' m³ over' : ''));
+    }).catch(function (x) { btn.disabled = false; toast(x.message); });
+  }
+
   // Request quotations popup
   var rq = document.querySelector('[data-lp-req]'), rqForm = rq && rq.querySelector('[data-lp-req-form]'), rqId = null, fws = [];
   function fwRow(f, checked) {

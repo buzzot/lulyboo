@@ -13,6 +13,7 @@ const SC = require('../schedules');
 const SCR = require('./schedules');
 const FR = require('./forwarding');
 const RH = require('../rate-history');
+const SPL = require('../split');
 
 const BASE = '/admin/logistics/planning';
 const BOX = {
@@ -100,6 +101,7 @@ function loadPlanRoutes(router, { db, config }) {
         cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,
         cbm: o.cbm ? Number(o.cbm) : null, est: !!o.cbm_estimated, ready: o.ready_date || null, readyText: o.ready_date ? PL.short(o.ready_date) : '',
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],
+        upc: Number(o.units_per_carton) || 0, urgent: !!o.urgent, part: o.split_no || 0, root: o.split_of || o.id,
       })),
       containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
@@ -185,9 +187,12 @@ function loadPlanRoutes(router, { db, config }) {
   router.post(`${BASE}/containers/:id/delete`, json(async (req) => {
     const c = await getContainer(req.params.id);
     await RH.syncContainer(db, c.id);   // keep its priced quotes in the rate history
+    const ls = await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => []);
     await db.update('plan_orders', { container_id: c.id }, { container_id: null, updated_at: now() });
     await db.remove('plan_containers', { id: c.id });
-    return {};
+    let merged = false;
+    for (const l of ls.filter((x) => x.split_no || x.split_of)) if ((await SPL.settle(db, { ...l, container_id: null })).removed.length) merged = true;
+    return { merged };
   }));
 
   router.post(`${BASE}/containers/:id/shipped`, json(async (req) => {
@@ -209,7 +214,34 @@ function loadPlanRoutes(router, { db, config }) {
       if (!(Number(o.cbm) > 0)) throw new HttpError(400, `Add the volume of ${o.po} first`);
     }
     await db.update('plan_orders', { id: o.id }, { container_id: f.container || null, updated_at: now() });
+    // split parts that meet again (same container, or both back in the pool) join into one line
+    if (o.split_no || o.split_of) return slim(await SPL.settle(db, { ...o, container_id: f.container || null }));
     return {};
+  }));
+
+  const lineOut = (l) => ({ id: l.id, qty: Number(l.qty) || 0, cartons: Number(l.cartons) || 0, cbm: l.cbm != null ? Number(l.cbm) : null, kg: Number(l.gross_kg) || 0, est: !!l.cbm_estimated, part: l.split_no || 0, root: l.split_of || l.id, container: l.container_id || null });
+  const slim = (r) => ({ removed: r.removed, kept: r.kept.map(lineOut) });
+
+  /** Split a line by quantity: it keeps `keep` cartons (pcs without carton data); the rest becomes a new part, not loaded. */
+  router.post(`${BASE}/split`, json(async (req) => {
+    const { fields: f } = await parseForm(req);
+    const o = await db.get('plan_orders', String(f.order || '')).catch(() => null);
+    if (!o) throw new HttpError(404, 'Order line not found');
+    const r = await SPL.split(db, o, f.keep, { by: req.staff?.name || 'Owner' });
+    return { kept: lineOut(r.kept), part: lineOut(r.part) };
+  }));
+  router.post(`${BASE}/merge`, json(async (req) => {
+    const { fields: f } = await parseForm(req);
+    const o = await db.get('plan_orders', String(f.order || '')).catch(() => null);
+    if (!o) throw new HttpError(404, 'Order line not found');
+    return slim(await SPL.mergeBack(db, o));
+  }));
+  router.post(`${BASE}/urgent`, json(async (req) => {
+    const { fields: f } = await parseForm(req);
+    const o = await db.get('plan_orders', String(f.order || '')).catch(() => null);
+    if (!o) throw new HttpError(404, 'Order line not found');
+    await db.update('plan_orders', { id: o.id }, { urgent: f.urgent === '1', updated_at: now() });
+    return { urgent: f.urgent === '1' };
   }));
 
   /** Lines, suppliers and sailing of a container — for the quotation request. */
