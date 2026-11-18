@@ -2695,3 +2695,25 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && card && !card.hidden) { card.hidden = true; cur = null; } });
   window.addEventListener('scroll', function () { if (card && !card.hidden) { card.hidden = true; cur = null; } }, true);
 })();
+
+// Hover cards for [data-popcard]: the card's content sits hidden inside the element; it is shown in a floating
+// card on top of everything (never clipped by a scrolling table), and stays open while the pointer is on it.
+(function () {
+  var card = null, t = null, cur = null;
+  function el() { if (!card) { card = document.createElement('div'); card.className = 'pop-card'; card.setAttribute('role', 'tooltip'); card.hidden = true; document.body.appendChild(card); card.addEventListener('mouseenter', function () { clearTimeout(t); }); card.addEventListener('mouseleave', hide); } return card; }
+  function show(x) {
+    var src = x.querySelector('.or-pc-card'); if (!src) return; cur = x;
+    var c = el(); var host = x.closest('dialog[open]') || document.body; if (c.parentNode !== host) host.appendChild(c);
+    c.innerHTML = src.innerHTML; c.hidden = false;
+    var r = x.getBoundingClientRect(), w = c.offsetWidth, h = c.offsetHeight;
+    c.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+    var top = r.bottom + 6; if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6); c.style.top = top + 'px';
+  }
+  function hide() { clearTimeout(t); t = setTimeout(function () { if (card) card.hidden = true; cur = null; }, 160); }
+  document.addEventListener('mouseover', function (e) { var x = e.target.closest && e.target.closest('[data-popcard]'); if (!x || x === cur) { if (x) clearTimeout(t); return; } clearTimeout(t); t = setTimeout(function () { show(x); }, 200); });
+  document.addEventListener('mouseout', function (e) { var x = e.target.closest && e.target.closest('[data-popcard]'); if (x && !x.contains(e.relatedTarget) && !(card && card.contains(e.relatedTarget))) hide(); });
+  document.addEventListener('focusin', function (e) { var x = e.target.closest && e.target.closest('[data-popcard]'); if (x) show(x); });
+  document.addEventListener('focusout', function (e) { if (e.target.closest && e.target.closest('[data-popcard]') && !(card && card.contains(e.relatedTarget))) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && card && !card.hidden) { card.hidden = true; cur = null; } });
+  window.addEventListener('scroll', function () { if (card && !card.hidden) { card.hidden = true; cur = null; } }, true);
+})();
