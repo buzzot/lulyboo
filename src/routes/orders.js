@@ -122,8 +122,6 @@ module.exports = function orderRoutes(router, { db, config }) {
     // PO-level terms (payment, ship-to, method) shown once; line notes only when they say something about that line
     const split = ls.map((o) => ({ o, ...PL.splitTerms(o.notes, o.po_terms) }));
     const terms = [...new Set(split.flatMap((x) => String(x.po_terms || '').split(/(?<=[.;])\s+(?=[A-Z])/).map((t) => t.trim().replace(/[.;]$/, '')).filter(Boolean)))];
-    const lineNotes = split.filter((x) => x.notes);
-    const oneNote = lineNotes.length > 1 && lineNotes.length === ls.length && new Set(lineNotes.map((x) => x.notes)).size === 1;
     // tidy what older imports stored: terms out of the line notes (skipped quietly on a database without po_terms)
     for (const x of split) if ((x.notes || null) !== (x.o.notes || null) || (x.po_terms || null) !== (x.o.po_terms || null)) await db.update('plan_orders', { id: x.o.id }, { notes: x.notes, po_terms: x.po_terms }).catch(() => null);
     for (const x of split) { x.o.notes = x.notes; x.o.po_terms = x.po_terms; }
@@ -131,6 +129,24 @@ module.exports = function orderRoutes(router, { db, config }) {
     const prods = await db.list('products', { filters: { supplier_id: supplier.id } }).catch(() => []);
     const inCat = (o) => (o.product ? PL.catalogMatch(o, prods) : null);
     const missingCat = ls.filter((o) => o.product && !inCat(o));
+    // reminders: what the supplier waits on from us, inspection to book, line notes — grouped, out of the table
+    const open = ls.filter((o) => !o.shipped);
+    const groupBy = (arr, key) => { const m = new Map(); for (const o of arr) { const k = key(o); if (!k) continue; if (!m.has(k)) m.set(k, []); m.get(k).push(o); } return [...m.entries()]; };
+    const who = (g) => (g.length === ls.length ? (ls.length > 1 ? `all ${ls.length} lines` : '') : g.map((o) => o.product || o.sku || 'line').join(', '));
+    const todo = [];
+    for (const [text, g] of groupBy(open.filter((o) => o.st === 'waiting'), (o) => String(o.pending_from_us || '').trim())) {
+      const m = text.match(/^(.*?)\s*\((.+)\)\s*$/);
+      todo.push({ kind: 'wait', level: 'warn', icon: '⏳', title: `Waiting on you: ${m ? m[1] : text}`, sub: [m ? m[2] : '', who(g)].filter(Boolean).join(' · '), ids: g.map((o) => o.id), text });
+    }
+    for (const [k, g] of groupBy(open, (o) => (o.inspection_date ? `d:${o.inspection_date}` : o.inspection_note ? `n:${String(o.inspection_note).trim()}` : ''))) {
+      if (k.startsWith('d:')) { const d = k.slice(2); todo.push({ kind: 'insp', level: d < PL.today() ? 'ok' : 'info', icon: '🔍', title: `Inspection ${d < PL.today() ? 'was' : 'booked for'} ${PL.short(d)}`, sub: who(g), ids: g.map((o) => o.id), date: d }); continue; }
+      const note = k.slice(2); const days = (note.match(/(\d+)\s*days?\s*before/i) || [])[1];
+      const ready = g.map((o) => o.ready_date).filter(Boolean).sort()[0];
+      const by = days && ready ? PL.addDays(ready, -Number(days)) : null;
+      const late = by && by < PL.today(); const soon = by && !late && by <= PL.addDays(PL.today(), 7);
+      todo.push({ kind: 'insp', level: late ? 'bad' : soon ? 'warn' : 'info', icon: '🔍', title: by ? `Book inspection by ${PL.short(by)}${late ? ' — overdue' : ''}` : 'Inspection to book', sub: [by ? `${days} days before the ready date ${PL.short(ready)}` : note, who(g)].filter(Boolean).join(' · '), note, ids: g.map((o) => o.id), by });
+    }
+    const notesG = groupBy(ls.filter((o) => o.notes), (o) => String(o.notes).trim());
     const shipSection = await require('./shipping').shipmentSection(db, supplier, p?.po || poQ, back);
     // where this PO's goods are now (Orders → Shipments), and the volume the supplier actually loaded
     const SH = require('./shipments');
@@ -154,13 +170,23 @@ module.exports = function orderRoutes(router, { db, config }) {
             : html`<div class="cp-kpi"><span>Volume</span><b>${p.cbm ? `${n2(p.cbm)} m³` : '—'}</b><small>${p.cbm ? `≈ ${PL.suggest(p.cbm).text}` : 'CBM missing'}</small></div>`}
           ${p.pending.length ? html`<div class="cp-kpi warn"><span>Waiting on Lulyboo</span><b>${p.pending.length}</b><small>${p.pending.join(', ')}</small></div>` : ''}</div>
         ${PL.duplicateGroups(ls).length ? html`<form method="post" action="/admin/logistics/planning/dedupe" class="flash warn cp-dup"><span><b>The same item appears more than once on this PO.</b> Merge keeps one line per item with all its details.</span><button class="btn small">Merge duplicates</button></form>` : ''}
-        <section class="card"><div class="head-row"><h2>Lines</h2>${missingCat.length ? html`<form method="post" action="/admin/orders/catalog" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn ghost small">Add ${missingCat.length} product${missingCat.length === 1 ? '' : 's'} to ${supplier.name}'s product list</button></form>` : ''}</div><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">Amount</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Waiting on us</th><th>Container</th><th></th></tr></thead>
-          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${o.product || html`<span class="sub">(whole PO)</span>`}${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${o.product ? (inCat(o) ? html`<a class="sub or-cat" href="/admin/products/${inCat(o).id}">✓ In ${supplier.name}'s products</a>` : html`<span class="sub or-cat no">Not in product list</span>`) : ''}${o.units_per_carton || o.carton_l_cm ? html`<div class="sub or-pack">📦 ${[o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean).join(' · ')}</div>` : ''}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.unit_price ? money(o.unit_price, o.currency, 3) : '—'}</td><td class="r">${o.unit_price && o.qty ? money(o.unit_price * o.qty, o.currency) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
-            <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${o.inspection_date ? PL.short(o.inspection_date) : o.inspection_note || '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
-            <td>${tag(o.st)}${o.production_status ? html`<div class="sub">${o.production_status}</div>` : ''}</td><td>${o.st === 'waiting' ? o.pending_from_us : '—'}</td>
+        ${todo.length || notesG.length ? html`<section class="card or-todo"><div class="head-row"><h2>To do &amp; notes ${todo.length ? html`<span class="cp-tag ${todo.some((t) => t.level === 'bad') ? 'late' : 'wait'}">${todo.filter((t) => t.level !== 'ok').length} open</span>` : ''}</h2></div>
+          ${todo.map((t) => html`<div class="or-td ${t.level}"><span class="or-td-i">${t.icon}</span><div class="or-td-t"><b>${t.title}</b>${t.sub ? html`<div class="sub">${t.sub}</div>` : ''}</div>
+            <div class="or-td-a">${t.kind === 'wait' ? html`<form method="post" action="/admin/orders/todo" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="ids" value="${t.ids.join(',')}"><input type="hidden" name="what" value="done"><input type="hidden" name="back" value="${back}"><button class="btn small ghost">✓ Done</button></form>`
+              : html`<form method="post" action="/admin/orders/todo" class="inline or-td-date"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="ids" value="${t.ids.join(',')}"><input type="hidden" name="what" value="inspection"><input type="hidden" name="back" value="${back}"><input type="date" name="date" value="${t.date || ''}" aria-label="Inspection date" required><button class="btn small ghost">${t.date ? 'Change' : 'Set date'}</button></form>`}</div></div>`)}
+          ${notesG.length ? html`<details class="or-td-notes" ${todo.length ? '' : raw('open')}><summary>Notes <span class="sub">${notesG.length}</span></summary>${notesG.map(([n, g]) => html`<p>${who(g) && g.length < ls.length ? html`<b>${who(g)}:</b> ` : ''}${n}</p>`)}</details>` : ''}
+        </section>` : ''}
+        <section class="card"><div class="head-row"><h2>Lines</h2>${missingCat.length ? html`<form method="post" action="/admin/orders/catalog" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn ghost small">Add ${missingCat.length} product${missingCat.length === 1 ? '' : 's'} to ${supplier.name}'s product list</button></form>` : ''}</div><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">Amount</th><th class="r">CBM</th><th>Ready</th><th>Port</th><th>Status</th><th>Container</th><th></th></tr></thead>
+          <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${(() => { const c = inCat(o); const pack = [o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg/ctn` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean);
+              if (!o.product) return html`<span class="sub">(whole PO)</span>`;
+              return html`<span class="or-pc" tabindex="0">${o.product}${c ? html`<span class="or-pc-i" aria-label="Product details">i</span>` : ''}
+                <span class="or-pc-card" role="tooltip"><b>${o.product}</b>${o.sku ? html`<span class="cu-mono">${o.sku}</span>` : ''}${c ? html`<a href="/admin/products/${c.id}">✓ In ${supplier.name}'s products →</a>` : ''}${pack.length ? html`<span>📦 ${pack.join(' · ')}</span>` : html`<span class="sub">No packing data yet</span>`}</span></span>
+                ${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${c ? '' : html`<span class="or-cat no">Not in product list</span>`}`; })()}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.unit_price ? money(o.unit_price, o.currency, 3) : '—'}</td><td class="r">${o.unit_price && o.qty ? money(o.unit_price * o.qty, o.currency) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
+            <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
+            <td>${tag(o.st === 'waiting' ? 'production' : o.st)}${o.production_status && !/^in production$/i.test(o.production_status) ? html`<div class="sub">${o.production_status}</div>` : ''}</td>
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
             <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody></table></div>
-          ${lineNotes.length ? html`<div class="or-notes">${oneNote ? html`<p><b>Note:</b> ${lineNotes[0].notes}</p>` : lineNotes.map((x) => html`<p><b>${x.o.product || 'Note'}:</b> ${x.notes}</p>`)}</div>` : ''}</section>` : ''}
+          </section>` : ''}
         ${shipSection}
         ${await (async () => { const list = await require('./customs').forPo(db, p?.po || poQ).catch(() => []); if (!list.length) return ''; return html`<section class="card cu-po" id="customs"><div class="head-row"><h2>Customs</h2></div>${list.map((x) => html`<div class="cu-pr"><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a><span class="sub">${x.date ? String(x.date).slice(0, 10) : ''} · ${x.items.join(', ')}</span><span class="cu-pr-v">duty <b>$${x.duty.toLocaleString('en-US', { minimumFractionDigits: 2 })}</b> + fees $${x.fees.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="sub">for this PO</span></span></div>`)}</section>`; })()}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
@@ -187,6 +213,19 @@ module.exports = function orderRoutes(router, { db, config }) {
           </div></section>
         ${PR.editDialog(back)}`,
     }));
+  }));
+
+  // reminders on the PO page: "Done" clears what the supplier waited on; a date books the inspection
+  router.post('/admin/orders/todo', G(async (req, res) => {
+    const { fields: f } = await parseForm(req);
+    const ids = String(f.ids || '').split(',').filter(Boolean).slice(0, 500);
+    const ls = (await db.list('plan_orders', { filters: { supplier_id: f.supplier } })).filter((l) => ids.includes(l.id));
+    if (!ls.length) throw new HttpError(404, 'Lines not found');
+    const now = new Date().toISOString();
+    if (f.what === 'done') { for (const l of ls) await db.update('plan_orders', { id: l.id }, { pending_from_us: null, updated_at: now }); flash(res, 'ok', `Marked done: ${String(ls[0].pending_from_us || '').slice(0, 80)}`); }
+    else if (f.what === 'inspection') { const d = PL.isoDay(f.date); if (!d) throw new HttpError(400, 'Pick a date'); for (const l of ls) await db.update('plan_orders', { id: l.id }, { inspection_date: d, inspection_note: null, updated_at: now }); flash(res, 'ok', `Inspection set for ${PL.short(d)}`); }
+    else throw new HttpError(400, 'Unknown action');
+    res.redirect(String(f.back || '').startsWith('/admin/') ? f.back : '/admin/orders');
   }));
 
   router.post('/admin/orders/catalog', G(async (req, res) => {

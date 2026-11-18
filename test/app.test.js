@@ -2725,7 +2725,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const plate2 = db.tables.plan_orders.find((o) => o.po === 'PO900018' && o.sku === 'KS-200');
   assert.equal(plate2.cartons, 72); assert.equal(plate2.cbm, 4.67);                              // 3600 / 50 × 0.0648 m³
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
-  assert.match(po.text, /50 pcs\/ctn · 54×40×30 cm · 12 kg · 72 ctns/); assert.match(po.text, /✓ In Shenzhen Kean(?:'|&#39;)s products/); assert.doesNotMatch(po.text, /Add \d+ products? to/);
+  assert.match(po.text, /50 pcs\/ctn · 54×40×30 cm · 12 kg\/ctn · 72 ctns/); assert.match(po.text, /✓ In Shenzhen Kean(?:'|&#39;)s products/); assert.doesNotMatch(po.text, /Add \d+ products? to/);
   // lines imported before this existed: button adds them
   await db.insert('plan_orders', { supplier_id: k.id, po: 'PO900018', product: 'Flower rattle & teether', sku: 'FRT 001', qty: 5040 });
   const po2 = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
@@ -3825,4 +3825,28 @@ test('orders@: a PO by email waits under Import orders; check & save stores line
   assert.match((await req(base, 'GET', `/admin/logistics/planning/import/inbox/${imp2.id}`, { cookie })).text, /Which supplier is this PO for\?/);
   assert.equal((await req(base, 'POST', `/admin/logistics/planning/import/inbox/${imp2.id}/discard`, { cookie, form: {} })).status, 303);
   assert.equal(db.tables.order_imports.find((x) => x.id === imp2.id).status, 'discarded');
+});
+
+test('PO page: To do & notes block (waiting on us, inspection deadline, notes) and actions', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const PL = require('../src/planning');
+  const s = await db.insert('suppliers', { name: 'Yuanyi' });
+  const ready = PL.addDays(PL.today(), 30);
+  const W = 'Pre-production sample approval (factory to send photos/video within 7-10 days of PO date)';
+  for (const [prod, note] of [['Breast Pump', 'Testing: Lulyboo pays up to 2,000 units.'], ['Milk Collector', 'Testing: Lulyboo pays up to 2,000 units.']]) await db.insert('plan_orders', { supplier_id: s.id, po: '500026', product: prod, qty: 3000, ready_date: ready, port: 'CNYTN', pending_from_us: W, inspection_note: 'to be booked (at least 7 days before FOB ready date)', notes: note });
+  let pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=500026`, { cookie })).text;
+  assert.match(pg, /Waiting on you: Pre-production sample approval/); assert.match(pg, /all 2 lines/);
+  assert.match(pg, new RegExp(`Book inspection by ${PL.short(PL.addDays(ready, -7))}`));
+  assert.match(pg, /Notes <span class="sub">1<\/span>/);
+  assert.doesNotMatch(pg, /<th>Inspection<\/th>/); assert.doesNotMatch(pg, /<th>Waiting on us<\/th>/);
+  const ids = db.tables.plan_orders.map((o) => o.id).join(',');
+  assert.equal((await req(base, 'POST', '/admin/orders/todo', { cookie, form: { supplier: s.id, ids, what: 'done', back: '/admin/orders' } })).status, 303);
+  assert.ok(db.tables.plan_orders.every((o) => !o.pending_from_us));
+  await req(base, 'POST', '/admin/orders/todo', { cookie, form: { supplier: s.id, ids, what: 'inspection', date: PL.addDays(ready, -10) } });
+  assert.ok(db.tables.plan_orders.every((o) => o.inspection_date === PL.addDays(ready, -10) && !o.inspection_note));
+  pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=500026`, { cookie })).text;
+  assert.match(pg, /Inspection booked for/); assert.doesNotMatch(pg, /Waiting on you/);
 });

@@ -2790,3 +2790,17 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .or-table td:nth-child(6){white-space:nowrap}
 .or-table th:nth-child(8),.or-table td:nth-child(8){width:220px;max-width:220px}
 .or-needs{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* PO page: To do & notes (out of the lines table) */
+.or-todo{padding-bottom:12px}.or-todo .head-row h2{display:flex;gap:8px;align-items:center}
+.or-td{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 12px;border-radius:10px;margin-top:8px;border:1px solid var(--line);background:#fff}
+.or-td.warn{background:#fff8ec;border-color:#f1dcb0}.or-td.bad{background:#fff3f1;border-color:#f0c6c0}.or-td.bad .or-td-t b{color:#b23a2a}.or-td.ok{opacity:.75}
+.or-td-i{font-size:16px;text-align:center}.or-td-t b{font-size:13.5px}.or-td-t .sub{font-size:12.5px;margin-top:1px}
+.or-td-a{display:flex;gap:6px;align-items:center}.or-td-date{display:flex;gap:6px;align-items:center}.or-td-date input[type=date]{width:auto;font-size:12.5px;padding:4px 6px}
+.or-td-notes{margin-top:10px;font-size:13px}.or-td-notes>summary{cursor:pointer;font-weight:600;color:#6b665f}.or-td-notes p{margin:6px 0 0;color:#3d3a36}
+/* product cell: details on hover */
+.or-pc{position:relative;display:inline-flex;align-items:center;gap:5px;outline:none}
+.or-pc-i{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;background:#eef7f1;color:#1d6b40;font-size:10px;font-weight:700;font-style:italic;cursor:help}
+.or-pc-card{display:none;position:absolute;z-index:30;top:calc(100% + 6px);left:0;width:280px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.14);padding:10px 12px;font-size:12.5px;line-height:1.5;flex-direction:column;gap:3px;font-weight:400}
+.or-pc-card b{font-size:13px}.or-pc-card a{color:#1d6b40}
+.or-pc:hover .or-pc-card,.or-pc:focus-within .or-pc-card{display:flex}
+.or-cat.no{display:inline-block;margin-top:2px;font-size:11px;font-weight:600;color:#9a5b00;background:#fff3e0;border-radius:6px;padding:1px 6px}
