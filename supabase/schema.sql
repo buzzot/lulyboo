@@ -1097,3 +1097,9 @@ alter table public.settings add column if not exists report_weekday int;
 alter table public.settings add column if not exists report_hour int;
 alter table public.settings add column if not exists payments_reminded_on date;
 alter table public.settings add column if not exists report_made_on date;
+
+-- Payments: reminder channels
+alter table public.settings add column if not exists payment_telegram boolean not null default true;
+alter table public.settings add column if not exists payment_email    boolean not null default true;
+alter table public.settings add column if not exists broker_telegram  boolean not null default true;
+alter table public.settings add column if not exists report_telegram  boolean not null default true;

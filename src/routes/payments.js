@@ -134,7 +134,13 @@ module.exports = function paymentRoutes(router, { db, config }) {
             <label>Accountant email <input type="email" name="accountant_email" value="${st.accountant_email || ''}" placeholder="accountant@…"></label>
             <label class="cp-chk"><input type="checkbox" name="report_to_accountant" value="1" ${st.report_to_accountant ? raw('checked') : ''}> Email the weekly PDF to the accountant</label>
             <label>Weekly report on <select name="report_weekday">${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => html`<option value="${i}" ${(st.report_weekday ?? PM.DEF.report_weekday) === i ? raw('selected') : ''}>${d}</option>`)}</select> at <input type="number" name="report_hour" min="6" max="22" value="${st.report_hour ?? PM.DEF.report_hour}">:00</label>
-            <p class="sub">${require('../telegram').enabled() && st.telegram_chat_id ? '✓ Telegram: reminders go to the portal bot, with Mark paid / Snooze buttons.' : 'Telegram is not connected — connect the bot on the CRM page (Reminders).'} Email reminders go to you.</p>
+            <fieldset class="pm-ch"><legend>Send to</legend>
+              <div class="pm-ch-h"><span></span><b>Telegram</b><b>Email</b></div>
+              <div><span>Payment reminders</span><input type="checkbox" name="payment_telegram" value="1" ${st.payment_telegram !== false ? raw('checked') : ''} aria-label="Payment reminders on Telegram"><input type="checkbox" name="payment_email" value="1" ${st.payment_email !== false ? raw('checked') : ''} aria-label="Payment reminders by email"></div>
+              <div><span>Docs to the broker</span><input type="checkbox" name="broker_telegram" value="1" ${st.broker_telegram !== false ? raw('checked') : ''} aria-label="Broker reminders on Telegram"><span class="sub">—</span></div>
+              <div><span>Weekly report ready</span><input type="checkbox" name="report_telegram" value="1" ${st.report_telegram !== false ? raw('checked') : ''} aria-label="Weekly report on Telegram"><span class="sub">—</span></div>
+            </fieldset>
+            <p class="sub">${require('../telegram').enabled() && st.telegram_chat_id ? 'Telegram goes to the portal bot, with Mark paid / Snooze buttons.' : 'Telegram is not connected — connect the bot on the CRM page (Reminders).'} Email reminders go to you.</p>
             <button class="btn small">Save</button></form>
         </section></aside></div>
         ${paidDialog()}`,
@@ -170,7 +176,7 @@ module.exports = function paymentRoutes(router, { db, config }) {
     const n = (v, lo, hi, d) => { const x = Math.round(Number(v)); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d; };
     const em = (v) => { const s = String(v || '').trim(); if (s && !EMAIL_RE.test(s)) throw new HttpError(400, `“${s}” is not an email address`); return s || null; };
     const st = (await db.list('settings', { limit: 1 }))[0];
-    await db.update('settings', { id: st?.id ?? 1 }, { payment_remind_days: n(f.payment_remind_days, 1, 30, 3), broker_remind_days: n(f.broker_remind_days, 1, 30, 5), broker_email: em(f.broker_email), accountant_email: em(f.accountant_email), report_to_accountant: f.report_to_accountant === '1', report_weekday: n(f.report_weekday, 0, 6, 5), report_hour: n(f.report_hour, 6, 22, 16) });
+    await db.update('settings', { id: st?.id ?? 1 }, { payment_remind_days: n(f.payment_remind_days, 1, 30, 3), broker_remind_days: n(f.broker_remind_days, 1, 30, 5), broker_email: em(f.broker_email), accountant_email: em(f.accountant_email), report_to_accountant: f.report_to_accountant === '1', report_weekday: n(f.report_weekday, 0, 6, 5), report_hour: n(f.report_hour, 6, 22, 16), payment_telegram: f.payment_telegram === '1', payment_email: f.payment_email === '1', broker_telegram: f.broker_telegram === '1', report_telegram: f.report_telegram === '1' });
     flash(res, 'ok', 'Reminder settings saved'); res.redirect(BASE);
   }));
   router.post(`${BASE}/report`, G(async (req, res) => {

@@ -268,7 +268,7 @@ async function runReminders({ db, config }) {
         .filter((x) => x.n < 0 || x.n === 0 || x.n === days).sort((a, b) => a.n - b.n);
       for (const { r, n } of due) {
         const head = n < 0 ? `⚠️ <b>Overdue ${-n} day${n === -1 ? '' : 's'}</b>` : n === 0 ? '💵 <b>Payment due today</b>' : `💵 <b>Payment due in ${n} days</b>`;
-        await telegram(db, `${head}\n${E(r.supplier)} · PO ${E(r.po)}\n${E(r.describe)} — <b>${usd(r.left)}</b> · due ${E(PL.short(effectiveDue(r)))}${r.fixed ? '' : ' (est.)'}`,
+        if (st.payment_telegram !== false) await telegram(db, `${head}\n${E(r.supplier)} · PO ${E(r.po)}\n${E(r.describe)} — <b>${usd(r.left)}</b> · due ${E(PL.short(effectiveDue(r)))}${r.fixed ? '' : ' (est.)'}`,
           [[{ text: '✓ Mark paid', data: `pp:${r.id}` }, { text: 'Snooze 1 day', data: `pz:${r.id}` }], [{ text: 'Open PO ↗', url: `${url}/admin/orders/view?supplier=${r.supplier_id}&po=${encodeURIComponent(r.po)}` }]]);
       }
       if (due.length && st.payment_email !== false) {
@@ -286,7 +286,7 @@ async function runReminders({ db, config }) {
       const n = between(today, eta); if (n > bd || n < -3) continue;
       const docs = await brokerDocs(db, c);
       const have = (re) => docs.some((x) => re.test(x.kind));
-      await telegram(db, `📄 <b>Send docs to the broker</b>\n${E(c.name || `${c.box === 'LCL' ? 'LCL shipment' : 'Container'}`)}${f.container_no ? ` · ${E(f.container_no)}` : ''} · ETA <b>${E(PL.short(eta))}</b> (${n >= 0 ? `${n} day${n === 1 ? '' : 's'}` : `${-n} days ago`})\nCI ${have(/invoice/i) ? '✓' : '✗'} · PL ${have(/packing/i) ? '✓' : '✗'} · B/L ${have(/bill|b\/l/i) ? '✓' : '✗'} · Arrival notice ${have(/arrival/i) ? '✓' : '✗'}`,
+      if (st.broker_telegram !== false) await telegram(db, `📄 <b>Send docs to the broker</b>\n${E(c.name || `${c.box === 'LCL' ? 'LCL shipment' : 'Container'}`)}${f.container_no ? ` · ${E(f.container_no)}` : ''} · ETA <b>${E(PL.short(eta))}</b> (${n >= 0 ? `${n} day${n === 1 ? '' : 's'}` : `${-n} days ago`})\nCI ${have(/invoice/i) ? '✓' : '✗'} · PL ${have(/packing/i) ? '✓' : '✗'} · B/L ${have(/bill|b\/l/i) ? '✓' : '✗'} · Arrival notice ${have(/arrival/i) ? '✓' : '✗'}`,
         [[{ text: '✉ Email broker', url: `${url}/admin/orders/shipments/${c.id}#broker` }, { text: '✓ Already sent', data: `bs:${c.id}` }]]);
     }
   }
@@ -297,7 +297,7 @@ async function runReminders({ db, config }) {
     await db.update('settings', { id: st.id ?? 1 }, { report_made_on: today }).catch(() => null);
     try {
       const r = await makeReport(db, config, { send: !!st.report_to_accountant, by: 'schedule' });
-      await telegram(db, `📊 <b>Payments next week</b> (${E(PL.short(r.rep.week_start))} – ${E(PL.short(r.rep.week_end))})\n${r.count} payment${r.count === 1 ? '' : 's'} · <b>${usd(r.total)}</b>${r.sentTo ? `\nPDF sent to ${E(r.sentTo)}` : ''}`, [[{ text: 'Open PDF ↗', url: `${url}/admin/orders/payments/reports/${r.rep.id}` }]]);
+      if (st.report_telegram !== false) await telegram(db, `📊 <b>Payments next week</b> (${E(PL.short(r.rep.week_start))} – ${E(PL.short(r.rep.week_end))})\n${r.count} payment${r.count === 1 ? '' : 's'} · <b>${usd(r.total)}</b>${r.sentTo ? `\nPDF sent to ${E(r.sentTo)}` : ''}`, [[{ text: 'Open PDF ↗', url: `${url}/admin/orders/payments/reports/${r.rep.id}` }]]);
     } catch (e) { if (!/payment_reports|po_payments|PGRST205/.test(e.message)) console.error('Weekly payments report failed:', e.message); }
   }
 }

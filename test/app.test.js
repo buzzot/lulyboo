@@ -3928,3 +3928,24 @@ test('payments: terms → installments, dates follow the shipment, mark paid, re
   assert.ok(mails.some((x) => x.to.includes('ops@broker.com') && x.attachments?.[0]?.filename === 'CI.pdf'));
   assert.equal(db.tables.settings[0].broker_email, 'ops@broker.com');
 });
+
+test('payments: Telegram reminders can be turned off in settings', async (t) => {
+  const PM = require('../src/payments'); const PL = require('../src/planning'); const C = require('../src/crm');
+  const db = seedDb(); const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => { if (String(url).startsWith('https://api.telegram.org')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 }); } return realFetch(url, opts); };
+  process.env.TELEGRAM_BOT_TOKEN = 'tg'; process.env.EMAIL_DEV_LOG = 'true';
+  const { server, base } = await startServer(db);
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.EMAIL_DEV_LOG; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  db.tables.settings = [{ id: 1, telegram_chat_id: '42' }];
+  let pg = (await req(base, 'GET', '/admin/orders/payments', { cookie })).text;
+  assert.match(pg, /name="payment_telegram" value="1" checked/);
+  await req(base, 'POST', '/admin/orders/payments/settings', { cookie, form: { payment_remind_days: '3', broker_remind_days: '5', payment_email: '1', report_weekday: '5', report_hour: '16' } });
+  const st = db.tables.settings[0];
+  assert.equal(st.payment_telegram, false); assert.equal(st.payment_email, true); assert.equal(st.broker_telegram, false);
+  pg = (await req(base, 'GET', '/admin/orders/payments', { cookie })).text;
+  assert.doesNotMatch(pg, /name="payment_telegram" value="1" checked/);
+  const s = await db.insert('suppliers', { name: 'H' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '1', qty: 10, unit_price: 1, po_terms: 'Payment: 100% before shipment.', ready_date: PL.addDays(PL.today(), -1) });
+  if (C.localNow().hour >= 9) { await PM.runReminders({ db, config: { publicUrl: 'x' } }); assert.ok(!sent.some((x) => /Overdue/.test(x.text)), 'no payment Telegram when switched off'); }
+});

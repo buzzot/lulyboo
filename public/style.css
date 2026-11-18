@@ -2838,3 +2838,6 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .shp-brk-h{display:flex;justify-content:space-between;align-items:center;gap:8px}.shp-brk>details>summary{cursor:pointer;margin-top:4px}
 .shp-brk-f{display:flex;flex-direction:column;gap:8px;margin-top:8px}.shp-brk-f label{font-size:12px;display:flex;flex-direction:column;gap:3px}.shp-brk-docs{display:flex;flex-direction:column;gap:3px}.shp-brk-docs label{flex-direction:row}
 .shp-brk-a{display:flex;gap:12px;align-items:center}
+.pm-ch{border:1px solid var(--line);border-radius:10px;padding:6px 10px 8px;margin:2px 0 0}.pm-ch legend{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8a8680;padding:0 4px}
+.pm-ch>div{display:grid;grid-template-columns:1fr 64px 52px;align-items:center;gap:6px;padding:4px 0;font-size:13px}.pm-ch>div input{justify-self:center;width:auto;margin:0}.pm-ch>div .sub{justify-self:center}
+.pm-ch .pm-ch-h b{font-size:11px;color:#6b665f;text-align:center;font-weight:600}
