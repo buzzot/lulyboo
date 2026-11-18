@@ -327,11 +327,21 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             </div>
             <div>
               ${r.pd ? html`<h3>Documents by PO <span class="sub">each PO needs its own CI and PL</span></h3>
-              <div class="pd-t">${r.pd.pos.map((p) => { const cell = (list, k) => (list.length ? list.map((x) => fileA(pf2(x))) : html`<span class="pd-miss ${r.pd.shipped ? '' : 'soft'}">${r.pd.shipped ? 'missing' : 'not yet'}</span>`); return html`<div class="pd-r ${p.missing.length ? '' : 'ok'}">
+              <div class="pd-t">${r.pd.pos.map((p, pi) => { const cell = (list, k) => (list.length ? list.map((x) => fileA(pf2(x))) : html`<span class="pd-miss ${r.pd.shipped ? '' : 'soft'}">${r.pd.shipped ? 'missing' : 'not yet'}</span>`); return html`<div class="pd-r ${p.missing.length ? '' : 'ok'}">
                 <div class="pd-po"><b>${p.po}</b><span class="sub">${p.supplier}</span></div>
                 <div class="pd-c"><span class="pd-k">CI</span>${cell(p.ci, 'CI')}${p.pi.length && !p.ci.length ? p.pi.map((x) => html`<span class="pd-pi" title="Proforma invoice — not accepted as a commercial invoice">PI · ${fileA(pf2(x))}</span>`) : ''}</div>
                 <div class="pd-c"><span class="pd-k">PL</span>${cell(p.pl, 'PL')}</div>
-                <div class="pd-a">${p.missing.length ? html`<form method="post" action="${BASE}/${r.id}/request-docs" class="inline">${p.missing.map((k) => html`<input type="hidden" name="it" value="${`${p.sid}|${p.po}|${k}`}">`)}<button class="link small">${p.asked ? 'Request again' : 'Request'}</button></form>${p.asked ? html`<span class="sub">asked ${sh(p.asked)}</span>` : ''}` : html`<span class="pd-ok">✓</span>`}</div></div>`; })}</div>
+                <div class="pd-a">${p.missing.length ? html`<button type="button" class="link small" data-open-dialog="${`pd-po-${pi}`}">${p.asked ? 'Request again' : 'Request'}</button>${p.asked ? html`<span class="sub">asked ${sh(p.asked)}</span>` : ''}` : html`<span class="pd-ok">✓</span><button type="button" class="link small pd-ask" data-open-dialog="${`pd-po-${pi}`}">Ask</button>`}</div></div>`; })}</div>
+              ${r.pd.pos.map((p, pi) => { const PD = require('../podocs'); const have = { CI: p.ci, PL: p.pl }; return html`<dialog id="${`pd-po-${pi}`}" class="rp-modal pd-dlg" aria-labelledby="${`pd-po-t-${pi}`}"><form method="post" action="${BASE}/${r.id}/request-docs">
+                <input type="hidden" name="one" value="${`${p.sid}|${p.po}`}">
+                <div class="rp-top"><h2 id="${`pd-po-t-${pi}`}">Request documents · PO ${p.po}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+                <p class="sub">${p.supplier}${p.email ? ` · ${p.email}` : ''} — one email in English through this PO's shipping-document request; the reply is read by AI and filed to PO ${p.po}.</p>
+                <div class="pd-pick">${PD.KINDS.map(([k, l]) => { const files = have[k] || []; const miss = p.missing.includes(k);
+                  return html`<label class="pd-opt"><input type="checkbox" name="it" value="${`${p.sid}|${p.po}|${k}`}" ${miss ? raw('checked') : ''}><span><b>${l}</b>${k === 'CI' && p.pi.length && !files.length ? html` <span class="sub">— final invoice, not the PI</span>` : ''}</span>
+                    <span class="pd-st ${miss ? 'miss' : files.length ? 'ok' : ''}">${miss ? (r.pd.shipped ? 'missing' : 'not yet') : files.length ? `have ${files.length === 1 ? 'it' : files.length}` : ''}</span></label>`; })}
+                  <label class="pd-opt pd-oth"><span>Other</span><input name="other" placeholder="e.g. Certificate of origin, corrected invoice…" maxlength="300"></label></div>
+                <label class="pd-note"><span>Note to the supplier <span class="sub">(optional, added to the email)</span></span><textarea name="note" rows="2" maxlength="1000" placeholder="e.g. The packing list shows 335 cartons but the B/L says 330 — please check."></textarea></label>
+                <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send request</button></div></form></dialog>`; })}
               <h3>Shipment documents</h3>` : html`<h3>Documents</h3>`}
               <div class="shp-docs3">${docs.map((d) => { const ok = d.files.length > 0 || !!d.okIf; return html`<div class="shp-dr ${ok ? 'ok' : ''}">
                 <span class="shp-dr-i">${ok ? '✓' : ''}</span><span class="shp-dr-l">${d.l}</span>
@@ -460,9 +470,11 @@ module.exports = function shipmentRoutes(router, { db, config }) {
   router.post(`${BASE}/:id/request-docs`, G(async (req, res) => {
     const { r } = await one(req.params.id); const { fields: f } = await parseForm(req);
     if (!r.c) throw new HttpError(400, 'Only for containers and LCL shipments');
-    const items = [].concat(f.it || []).flatMap((x) => String(x).split(',')).map((x) => { const [sid, po, kind] = String(x).split('|'); return { sid, po, kind }; }).filter((x) => x.sid && x.po && ['CI', 'PL'].includes(x.kind));
+    const PD = require('../podocs'); const any = !!f.one;
+    const items = [].concat(f.it || []).flatMap((x) => String(x).split(',')).map((x) => { const [sid, po, kind] = String(x).split('|'); return { sid, po, kind }; }).filter((x) => x.sid && x.po && (any ? PD.ASK[x.kind] : ['CI', 'PL'].includes(x.kind)));
+    if (any && String(f.other || '').trim()) { const [sid, po] = String(f.one).split('|'); items.push({ sid, po, kind: 'OTHER', text: String(f.other).trim() }); }
     if (!items.length) { flash(res, 'warn', 'Nothing selected'); return res.redirect(`${BASE}/${r.id}`); }
-    const out = await require('../podocs').request(db, config, r.c, items, { by: by(req) });
+    const out = await PD.request(db, config, r.c, items, { by: by(req), any, note: any ? f.note : '' });
     flash(res, out.failed.length ? (out.sent.length ? 'warn' : 'error') : 'ok', [out.sent.length ? `Requested from ${out.sent.join(', ')}` : '', out.failed.length ? `Not sent — ${out.failed.join(' · ')}` : ''].filter(Boolean).join(' · '));
     res.redirect(`${BASE}/${r.id}`);
   }));

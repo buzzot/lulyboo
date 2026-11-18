@@ -3999,6 +3999,14 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   const ym = mails.find((x) => x.to.includes('y@yuanyi.cn'));
   assert.match(ym.subject, /PO 500024/); assert.match(ym.text, /Commercial invoice for PO 500024/); assert.match(ym.text, /Packing list for PO 500024/);
   assert.ok(db.tables.ship_confirmations.some((s) => s.supplier_id === y.id && (s.log || []).some((l) => /Asked for CI 500024, PL 500024/.test(l.text))));
+  // per-PO dialog: choose what to ask — a received PL again, the B/L, something else, with a note
+  assert.match(det, /id="pd-po-0"/); assert.match(det, /Request documents · PO 400001/); assert.match(det, /Warehouse receipt/);
+  const n = mails.length;
+  const r2 = await req(base, 'POST', `/admin/orders/shipments/${c.id}/request-docs`, { cookie, form: { one: `${h.id}|800018`, it: [`${h.id}|800018|PL`, `${h.id}|800018|BL`], other: 'Certificate of origin', note: 'Carton count differs from the B/L.' } });
+  assert.equal(r2.status, 303); assert.equal(mails.length, n + 1);
+  const hm = mails[mails.length - 1];
+  assert.match(hm.text, /Packing list for PO 800018/); assert.match(hm.text, /Bill of lading for PO 800018/); assert.match(hm.text, /Certificate of origin/); assert.match(hm.text, /Carton count differs/);
+  assert.doesNotMatch(hm.text, /Commercial invoice for PO 800018/);
 });
 
 test('accountant: finance pages only, document checks, bank details, mark paid with slip, owner notified, reports', async (t) => {
