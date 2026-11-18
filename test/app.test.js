@@ -2445,7 +2445,7 @@ test('PO page: payment terms / ship-to shown once, line amount dropped, old note
   await db.insert('plan_orders', { supplier_id: s.id, po: 'PO7700', product: 'Heart Hook - Pink', qty: 8040, notes: terms('8,361.60') });
   await db.insert('plan_orders', { supplier_id: s.id, po: 'PO7700', product: 'Heart Hook - Cream', qty: 5040, notes: `Cream colour box. ${terms('5,241.60')}` });
   const page = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=PO7700`, { cookie })).text;
-  assert.equal((page.match(/30% deposit, 70% against BOL/g) || []).length, 1);
+  assert.equal((page.match(/<b>Payment terms<\/b> 30% deposit, 70% against BOL/g) || []).length, 1);
   assert.match(page, /class="or-terms"[\s\S]*<b>Ship-to<\/b> Bake Warehouse/);
   assert.doesNotMatch(page, /Line amount/);
   assert.match(page, /<b>Heart Hook - Cream:<\/b> Cream colour box\./);
@@ -3849,4 +3849,82 @@ test('PO page: To do & notes block (waiting on us, inspection deadline, notes) a
   assert.ok(db.tables.plan_orders.every((o) => o.inspection_date === PL.addDays(ready, -10) && !o.inspection_note));
   pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=500026`, { cookie })).text;
   assert.match(pg, /Inspection booked for/); assert.doesNotMatch(pg, /Waiting on you/);
+});
+
+test('payments: terms → installments, dates follow the shipment, mark paid, reminders, weekly PDF, broker email', async (t) => {
+  const PM = require('../src/payments'); const PL = require('../src/planning');
+  assert.deepEqual(PM.parseTerms('20% against BOL + 80% 50 days after arrival').map((x) => [x.pct, x.trigger, x.offset_days]), [[20, 'bl', 0], [80, 'arrival', 50]]);
+  assert.deepEqual(PM.parseTerms('30% deposit, 70% before shipment').map((x) => [x.pct, x.trigger]), [[30, 'po'], [70, 'before_shipment']]);
+  assert.equal(PM.parseTerms('net 30'), null);
+  const db = seedDb();
+  const realFetch = global.fetch; const tgSent = []; const mails = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('https://api.telegram.org')) { tgSent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 }); }
+    if (u.startsWith('https://api.resend.com')) { mails.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'm1' }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  process.env.TELEGRAM_BOT_TOKEN = 'tg'; process.env.RESEND_API_KEY = 're';
+  const { server, base } = await startServer(db);
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.RESEND_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const today = PL.today();
+  db.tables.settings = [{ id: 1, telegram_chat_id: '42', accountant_email: 'acc@books.com', payment_remind_days: 3 }];
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', fwd: { atd: PL.addDays(today, -60), ata: PL.addDays(today, -47), eta: PL.addDays(today, -47), hbl_no: 'HKAL1' } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether', qty: 8000, unit_price: 0.5, container_id: c.id, po_terms: 'Payment: 20% against BOL + 80% 50 days after arrival.', created_at: PL.addDays(today, -90) + 'T00:00:00Z' });
+  // page builds the schedule from the PO's terms
+  let pg = (await req(base, 'GET', '/admin/orders/payments', { cookie })).text;
+  assert.equal(db.tables.po_payments.length, 2);
+  const { rows } = await PM.list(db);
+  const bl = rows.find((r) => r.trigger === 'bl'); const bal = rows.find((r) => r.trigger === 'arrival');
+  assert.equal(bl.amount, 800); assert.equal(bl.due, PL.addDays(today, -60)); assert.ok(bl.fixed);
+  assert.equal(bal.amount, 3200); assert.equal(bal.due, PL.addDays(today, 3)); assert.ok(bal.fixed);
+  assert.match(pg, /Overdue/); assert.match(pg, /\$3,200\.00/);
+  // partial then full payment
+  let r = await req(base, 'POST', `/admin/orders/payments/${bl.id}/paid`, { cookie, form: { date: today, amount: '500', ref: 'TT1' } });
+  assert.equal(r.status, 303); assert.equal(db.tables.po_payments.find((x) => x.id === bl.id).status, 'open');
+  await req(base, 'POST', `/admin/orders/payments/${bl.id}/paid`, { cookie, form: { date: today, amount: '300' } });
+  assert.equal(db.tables.po_payments.find((x) => x.id === bl.id).status, 'paid');
+  // PO page card
+  pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
+  assert.match(pg, /id="payments"/); assert.match(pg, /80% 50 days after port arrival — \$3,200\.00/); assert.match(pg, /id="pm-paid"/);
+  // reminders: due in 3 days → Telegram with buttons + email digest (local time must be past 9:00 for this to run)
+  const C = require('../src/crm');
+  if (C.localNow().hour >= 9) {
+    await PM.runReminders({ db, config: { publicUrl: 'https://x' } });
+    const m = tgSent.find((x) => /Payment due in 3 days/.test(x.text));
+    assert.ok(m); assert.equal(m.reply_markup.inline_keyboard[0][0].callback_data, `pp:${bal.id}`);
+    assert.ok(mails.some((x) => /\[Payments\]/.test(x.subject)));
+  }
+  // Telegram "Mark paid" button
+  assert.match(await PM.handleCallback(db, `pp:${bal.id}`), /Paid \$3,200\.00/);
+  assert.equal(db.tables.po_payments.find((x) => x.id === bal.id).status, 'paid');
+  // terms edit rebuilds open installments
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800031', product: 'Ball', qty: 1000, unit_price: 2, ready_date: PL.addDays(today, 20) });
+  r = await req(base, 'POST', '/admin/orders/payments/terms', { cookie, form: { supplier: s.id, po: '800031', terms: '30% deposit, 70% before shipment', po_date: PL.addDays(today, -2), default: '1' } });
+  assert.equal(r.status, 303);
+  const p2 = (await PM.list(db)).rows.filter((x) => x.po === '800031');
+  assert.equal(p2.length, 2); assert.equal(p2[0].due, PL.addDays(today, -2)); assert.equal(p2[1].due, PL.addDays(today, 20)); assert.equal(p2[1].amount, 1400);
+  assert.equal(db.tables.suppliers.find((x) => x.id === s.id).payment_terms, '30% deposit, 70% before shipment');
+  // weekly PDF, emailed to the accountant
+  r = await req(base, 'POST', '/admin/orders/payments/report', { cookie, form: { from: PM.weekOf(today), send: '1' } });
+  assert.equal(r.status, 303);
+  const rep = db.tables.payment_reports[0]; assert.equal(rep.sent_to, 'acc@books.com');
+  const pdfRes = await fetch(`${base}/admin/orders/payments/reports/${rep.id}`, { headers: { cookie } });
+  const buf = Buffer.from(await pdfRes.arrayBuffer());
+  assert.equal(pdfRes.headers.get('content-type'), 'application/pdf'); assert.equal(buf.slice(0, 5).toString(), '%PDF-'); assert.match(buf.toString('latin1'), /Huanger/);
+  assert.ok(mails.some((x) => x.to.includes('acc@books.com') && x.attachments?.[0]?.filename.endsWith('.pdf')));
+  // docs to the broker
+  await db.update('plan_containers', { id: c.id }, { fwd: { eta: PL.addDays(today, 4) } });
+  const sc = await db.insert('ship_confirmations', { code: 'LBS-B', supplier_id: s.id, pos: ['800018'], container_id: c.id, status: 'complete', missing: [], log: [] });
+  await db.insert('plan_files', { supplier_id: s.id, name: 'CI.pdf', kind: 'Invoice', path: 'x/ci.pdf', content_type: 'application/pdf', pos: ['800018'], shipment_id: sc.id });
+  db.files.set('docs/x/ci.pdf', Buffer.from('%PDF ci'));
+  const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det, /Docs to the customs broker/); assert.match(det, /send by/);
+  r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/broker`, { cookie, form: { to: 'ops@broker.com', subject: 'Docs', body: 'Hi', doc: '0', go: 'send' } });
+  assert.equal(r.status, 303);
+  assert.ok(db.tables.plan_containers.find((x) => x.id === c.id).broker_docs_sent_at);
+  assert.ok(mails.some((x) => x.to.includes('ops@broker.com') && x.attachments?.[0]?.filename === 'CI.pdf'));
+  assert.equal(db.tables.settings[0].broker_email, 'ops@broker.com');
 });

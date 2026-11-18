@@ -187,6 +187,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td>${(() => { const x = ci.labelFor(o); return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a>` : o.shipped ? '—' : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a>`; })()}</td>
             <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody></table></div>
           </section>` : ''}
+        ${await require('./payments').poCard(db, supplier, p?.po || poQ, back).catch(() => '')}
         ${shipSection}
         ${await (async () => { const list = await require('./customs').forPo(db, p?.po || poQ).catch(() => []); if (!list.length) return ''; return html`<section class="card cu-po" id="customs"><div class="head-row"><h2>Customs</h2></div>${list.map((x) => html`<div class="cu-pr"><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a><span class="sub">${x.date ? String(x.date).slice(0, 10) : ''} · ${x.items.join(', ')}</span><span class="cu-pr-v">duty <b>$${x.duty.toLocaleString('en-US', { minimumFractionDigits: 2 })}</b> + fees $${x.fees.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="sub">for this PO</span></span></div>`)}</section>`; })()}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
@@ -211,7 +212,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <label class="dc-k">Type <select name="kind"><option value="">Detect from the file name</option>${PL.DOC_KINDS.map((k) => html`<option ${k === 'PO' ? raw('selected') : ''}>${k}</option>`)}</select></label>
             <div class="dc-ft">${AI.enabled() ? html`<label class="cp-chk"><input type="checkbox" name="read" value="1" checked> Read with AI</label><span class="dc-i" tabindex="0" title="${`PO / PI: each product becomes a line of ${poQ}. Packing list: pcs per carton and carton size are saved to the product; cartons, m³ and kg are calculated from the order quantity.`}">i</span>` : ''}<button class="btn small">Upload</button></div></form>
           </div></section>
-        ${PR.editDialog(back)}`,
+        ${PR.editDialog(back)}${require('./payments').paidDialog()}`,
     }));
   }));
 

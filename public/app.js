@@ -2717,3 +2717,15 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && card && !card.hidden) { card.hidden = true; cur = null; } });
   window.addEventListener('scroll', function () { if (card && !card.hidden) { card.hidden = true; cur = null; } }, true);
 })();
+
+// Payments: "Mark paid…" fills the shared dialog with this installment
+(function () {
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-pm-id]'); if (!b) return;
+    var d = document.getElementById('pm-paid'); if (!d) return; var f = d.querySelector('[data-pm-form]');
+    f.action = '/admin/orders/payments/' + b.getAttribute('data-pm-id') + '/paid';
+    f.querySelector('[data-pm-amount]').value = b.getAttribute('data-pm-amount') || '';
+    f.querySelector('[data-pm-back]').value = b.getAttribute('data-pm-back') || location.pathname + location.search;
+    d.querySelector('[data-pm-what]').textContent = b.getAttribute('data-pm-what') || '';
+  }, true);
+})();

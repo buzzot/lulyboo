@@ -338,6 +338,8 @@ module.exports = function crmRoutes(router, { db, config }) {
     if (u.callback_query) {
       const q = u.callback_query; const chat = q.message?.chat?.id;
       if (!st?.telegram_chat_id || String(chat) !== String(st.telegram_chat_id)) return;
+      const pay = await require('../payments').handleCallback(db, q.data).catch((e) => `Failed: ${e.message}`);
+      if (pay) { await tg.answerCallback(q.id, pay); await tg.editMessage(chat, q.message.message_id, `${q.message.text ? tg.escapeHtml(q.message.text) : ''}\n\n${pay}`); return; }
       const m = /^(d|s1|s7):([0-9a-f-]{36})$/.exec(q.data || '');
       if (!m) return tg.answerCallback(q.id);
       const task = await db.get('crm_tasks', m[2]);

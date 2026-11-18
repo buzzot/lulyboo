@@ -321,6 +321,21 @@ module.exports = function shipmentRoutes(router, { db, config }) {
                 <span class="shp-dr-i">${ok ? '✓' : ''}</span><span class="shp-dr-l">${d.l}</span>
                 <span class="shp-dr-f">${d.files.length ? d.files.map((x) => html`<span class="shp-dr-x">${fileA(x, d.gallery ? `g-${r.id}` : null)}${x.rm ? html`<form method="post" action="${BASE}/${r.id}/doc/remove" class="inline" data-confirm="${`Delete ${x.name}? It's removed from the portal.`}"><input type="hidden" name="src" value="${x.rm.src}"><input type="hidden" name="ref" value="${x.rm.ref}"><input type="hidden" name="i" value="${x.rm.i ?? ''}"><button class="shp-dr-rm" title="Delete this file" aria-label="${`Delete ${x.name}`}">×</button></form>` : ''}</span>`) : html`<span class="sub">${ok ? (d.note || 'no file') : d.optional ? 'optional' : 'waiting'}</span>`}${d.files.length && d.note ? html`<span class="sub cu-mono">${d.note}</span>` : ''}</span>
               </div>${d.customs ? r.entries.map((e) => html`<a class="shp-cu" href="/admin/logistics/customs?review=${e.id}"><span><b class="cu-mono">${e.entry_no || 'Entry'}</b> · ${sh(e.entry_date || e.created_at)}${e.status === 'pending' ? html` <span class="shp-f amb">to review</span>` : ''} · duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}</span><span class="shp-cu-go">Customs record →</span></a>`) : ''}`; })}</div>
+              ${r.c && r.kind !== 'courier' ? await (async () => {
+                const PM = require('../payments');
+                const bd = await PM.brokerDocs(db, r.c); const to = await PM.brokerEmail(db);
+                const sent = r.c.broker_docs_sent_at; const eta = day(f.eta);
+                const name = `${r.title}${f.container_no ? ` (${f.container_no})` : ''}`;
+                const body = [`Hello,`, '', `Please find attached the documents for our shipment ${name}${f.hbl_no ? `, house B/L ${f.hbl_no}` : ''}${f.mbl_no ? `, master B/L ${f.mbl_no}` : ''}${eta ? `, ETA ${eta}` : ''}${f.pod ? ` at ${f.pod}` : ''}.`, '', `POs: ${[...new Set(r.lines.map((l) => l.po))].join(', ')}`, '', 'Please let us know if anything else is needed for the customs entry.', '', 'Thank you,', 'Lulyboo'].join('\n');
+                return html`<div class="shp-brk ${sent ? 'ok' : ''}" id="broker"><div class="shp-brk-h"><b>Docs to the customs broker</b>${sent ? html`<span class="shp-f grn">sent ${sh(sent)}</span>` : eta ? html`<span class="shp-f ${daysBetween(today, eta) <= 5 ? 'amb' : 'gry'}">send by ${sh(PL.addDays(eta, -5))}</span>` : ''}</div>
+                  <details ${sent ? '' : raw('open')}><summary class="sub">${sent ? 'Send again' : 'Email the broker'}</summary>
+                  <form method="post" action="${BASE}/${r.id}/broker" class="shp-brk-f">
+                    <label>To <input type="email" name="to" value="${to}" required placeholder="broker@…"></label>
+                    <label>Subject <input name="subject" value="${`Customs documents · ${name}${eta ? ` · ETA ${sh(eta)}` : ''}`}"></label>
+                    <div class="shp-brk-docs">${bd.length ? bd.map((x, i) => html`<label class="cp-chk"><input type="checkbox" name="doc" value="${i}" checked> ${x.kind} · <span class="sub">${x.name}</span></label>`) : html`<span class="sub">No CI / PL / B/L files yet.</span>`}</div>
+                    <label>Message <textarea name="body" rows="7">${body}</textarea></label>
+                    <div class="shp-brk-a"><button class="btn small" name="go" value="send">Send email</button><button class="link small" name="go" value="mark">Already sent — mark it</button></div></form></details></div>`;
+              })() : ''}
               <details class="shp-cost-d"><summary><b>Cost</b> <span class="sub">${cost ? usd(cost, 2) : 'nothing yet'}</span></summary>
               <table class="shp-ct"><tbody>
                 <tr><td>Freight${r.forwarder ? ` (${r.forwarder})` : ''}</td><td class="r">${r.freight ? usd(r.freight, 2) : html`<span class="sub">—</span>`}</td></tr>
@@ -420,6 +435,22 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     for (const l of r.lines) await db.update('plan_orders', { id: l.id }, { received_at: null, updated_at: now() }).catch(() => null);
     flash(res, 'ok', 'Reopened.'); res.redirect(`${BASE}/${r.id}`);
   }));
+  router.post(`${BASE}/:id/broker`, G(async (req, res) => {
+    const { r } = await one(req.params.id); const { fields: f } = await parseForm(req);
+    if (!r.c) throw new HttpError(400, 'Only for containers and LCL shipments');
+    if (f.go === 'mark') { await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() }); flash(res, 'ok', 'Marked as sent to the broker'); return res.redirect(`${BASE}/${r.id}#broker`); }
+    const to = String(f.to || '').trim(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new HttpError(400, 'Enter the broker\'s email');
+    const PM = require('../payments'); const docs = await PM.brokerDocs(db, r.c);
+    const pick = [].concat(f.doc || []).map(Number).filter((i) => docs[i]);
+    const attachments = [];
+    for (const i of pick) { try { const buf = await db.docs.download(docs[i].path); if (buf?.length) attachments.push({ filename: docs[i].name, content: buf }); } catch { /* skip */ } }
+    const { sendEmail } = require('../email');
+    await sendEmail(config, { to, subject: String(f.subject || 'Customs documents').slice(0, 200), text: String(f.body || '').slice(0, 10000), attachments });
+    await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() });
+    const st = (await db.list('settings', { limit: 1 }).catch(() => []))[0]; if (st && !st.broker_email) await db.update('settings', { id: st.id ?? 1 }, { broker_email: to }).catch(() => null);
+    flash(res, 'ok', `Sent to ${to} with ${attachments.length} file${attachments.length === 1 ? '' : 's'}`); res.redirect(`${BASE}/${r.id}#broker`);
+  }));
+
   router.post(`${BASE}/:id/cost`, G(async (req, res) => {
     const { r } = await one(req.params.id);
     const { fields } = await parseForm(req);

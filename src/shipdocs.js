@@ -324,6 +324,7 @@ const TOOL = {
         items: { type: 'object', properties: { po: { type: 'string' }, product: { type: 'string' }, qty: { type: 'number', description: 'pieces' }, cartons: { type: 'number' }, gross_kg: { type: 'number', description: 'total gross weight of the line in kg' }, cbm: { type: 'number', description: 'total volume of the line in m³' }, carton_l_cm: { type: 'number' }, carton_w_cm: { type: 'number' }, carton_h_cm: { type: 'number' }, units_per_carton: { type: 'number' }, carton_gw_kg: { type: 'number' } } },
       },
       total_cartons: { type: 'number' }, total_gross_kg: { type: 'number' }, total_cbm: { type: 'number' },
+      invoice_no: { type: 'string', description: 'Commercial invoice number' }, invoice_total: { type: 'number', description: 'Commercial invoice total amount in USD' },
       summary: { type: 'string', description: 'One or two sentences: what the supplier said and which documents were sent' },
     },
     required: ['summary'],
@@ -360,6 +361,7 @@ function factsFrom(r) {
     loaded: !!r.loaded, delayed: !!r.delayed, new_date: PL.isoDay(r.new_date), loaded_on: PL.isoDay(r.loaded_on),
     container_no: cleanNo(r.container_no, 15), seal_no: cleanNo(r.seal_no, 30), bl_no: cleanNo(r.bl_no, 40), vessel: r.vessel ? String(r.vessel).slice(0, 80) : null,
     lines, cartons: num(r.total_cartons) ?? sum('cartons'), gross_kg: num(r.total_gross_kg) ?? sum('gross_kg'), cbm: num(r.total_cbm) ?? sum('cbm'),
+    invoice_no: r.invoice_no ? String(r.invoice_no).slice(0, 40) : null, invoice_total: num(r.invoice_total),
     summary: r.summary ? String(r.summary).slice(0, 1000) : '',
   };
 }
