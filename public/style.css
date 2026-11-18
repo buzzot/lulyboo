@@ -2778,3 +2778,9 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .hts-c-t{font-weight:700;font-size:13.5px}.hts-c-s{margin-top:3px;color:#4a463f}
 .hts-c-o{margin-top:8px;border-top:1px solid #f0ede8;padding-top:6px;color:#7a766f;font-size:11.5px;display:flex;flex-direction:column;gap:2px}
 .hts-c-f{margin-top:7px;font-size:10.5px;color:#a19b92}
+/* Import orders: POs from email */
+.oi-box{margin-bottom:16px}.oi-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.oi-h .sec{margin:0;display:flex;gap:8px;align-items:center}
+.oi-list{margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.oi-r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 12px;border-top:1px solid #f0ede8}.oi-r:first-child{border-top:0}
+.oi-r .r{display:flex;gap:10px;align-items:center;flex-shrink:0}.oi-nos{color:#9a5b00;font-weight:600}.oi-empty{margin:8px 0 0}
+.oi-acts{display:flex;gap:14px;align-items:center}

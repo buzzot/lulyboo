@@ -12,6 +12,8 @@ const SC = require('../schedules');
 const AI = require('../ai');
 const SCR = require('./schedules');
 const SAM = require('./samples');
+const OI = require('../order-inbox');
+const inboundDomain = () => (process.env.INBOUND_EMAIL_DOMAIN || 'in.lulyboo.space').toLowerCase();
 const LP = require('./loadplan');
 const PM = require('../portmap');
 const cleanItem = (o) => PL.cleanName(o.product, o.sku);
@@ -342,13 +344,70 @@ function planningRoutes(router, { db, config }) {
   }));
 
   // ── import ────────────────────────────────────────────────────────────────
+  // lines read by AI → defaults (port, CBM) and the change list against what's already planned
+  async function prepare(supplier, lines) {
+    // default port: from the documents, else the supplier's usual FOB port
+    let defPort = null;
+    {
+      const prods = await db.list('products', { filters: { supplier_id: supplier.id }, select: 'fob_port' }).catch(() => []);
+      const cnt = {}; for (const p of prods) { const c = SC.portCode(p.fob_port); if (c) cnt[c] = (cnt[c] || 0) + 1; }
+      defPort = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    }
+    for (const o of lines) if (!o.port && defPort) { o.port = defPort; o.port_from_supplier = true; }
+    await PL.estimateCbm(db, supplier.id, lines);
+    const existing = await db.list('plan_orders', { filters: { supplier_id: supplier.id } }).catch(() => []);
+    const d = PL.diff(lines, existing);
+    return d;
+  }
+  function checkPage(req, res, { supplier, created = false, aiName = null, notes = [], d, source, inboxId = null, from = null }) {
+    const count = (c) => d.filter((x) => x.change === c).length;
+    const portOpts = (sel) => html`<option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}" ${p.code === sel ? raw('selected') : ''}>${p.name}</option>`)}`;
+    res.html(page({
+      title: 'Check orders · Container planning', nav: adminNav('orders-import'), wide: true, req,
+      body: html`<p><a href="${BASE}/import">‹ Back</a></p><h1>Check what AI read</h1>${from ? html`<p class="sub">From email: ${from}</p>` : ''}
+        <p class="muted">${created ? html`New supplier: <b>${supplier.name}</b>` : supplier.name}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
+        <div class="cp-chips"><span class="cp-tag ok">${count('new')} new</span><span class="cp-tag plan">${count('updated')} updated</span><span class="cp-tag done">${count('same')} unchanged</span>${d.some((x) => !x.cbm) ? html`<span class="cp-tag wait">${d.filter((x) => !x.cbm).length} without CBM</span>` : ''}</div>
+        <form method="post" action="${BASE}/save" data-busy class="card">
+          <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
+          <input type="hidden" name="source" value="${source}">${inboxId ? html`<input type="hidden" name="inbox_id" value="${inboxId}">` : ''}
+          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>SKU</th><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
+          <tbody>${d.map((o, i) => html`<tr class="${o.change}">
+            <td><input type="checkbox" name="r${i}_on" value="1" ${o.change === 'same' ? '' : raw('checked')} aria-label="Save line ${i + 1}"><input type="hidden" name="r${i}_json" value="${JSON.stringify(o)}"></td>
+            <td><input name="r${i}_po" value="${o.po}" class="w-po"></td>
+            <td><input name="r${i}_sku" value="${o.sku || ''}" class="w-sku" placeholder="—" aria-label="SKU"></td>
+            <td><input name="r${i}_product" value="${o.product || ''}" class="w-prod" placeholder="(whole PO)"></td>
+            <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric"></td>
+            <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece"></td>
+            <td class="r"><input name="r${i}_cbm" value="${o.cbm ?? ''}" class="w-num ${o.cbm_estimated ? 'est' : ''}" inputmode="decimal" title="${o.cbm_estimated ? 'Estimated from carton size' : ''}"></td>
+            <td><input type="date" name="r${i}_ready" value="${o.ready_date || ''}"></td>
+            <td><input name="r${i}_status" value="${o.production_status || ''}" class="w-st"></td>
+            <td><input name="r${i}_pending" value="${o.pending_from_us || ''}" class="w-st"></td>
+            <td><select name="r${i}_port">${portOpts(o.port)}</select></td>
+            <td>${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
+          <p class="sub">Lines with no SKU and no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
+          <div class="oi-acts"><button class="btn">Save checked lines</button>${inboxId ? html`<button class="link small" form="oi-discard">Discard this email</button>` : ''}</div>
+        </form>${inboxId ? html`<form id="oi-discard" method="post" action="${BASE}/import/inbox/${inboxId}/discard" data-confirm="Discard this email import? Its lines won't be saved."></form>` : ''}`,
+    }));
+  }
+
   router.get(`${BASE}/import`, G(async (req, res) => {
     const all = await db.list('suppliers', { select: 'id,name,country,contact_name,email,active', order: 'name.asc' });
     const sups = SAM.pickableSuppliers(all, req.query.supplier);
+    const inbox = (await db.list('order_imports', { order: 'created_at.desc' }).catch(() => [])).filter((x) => x.status === 'pending');
+    const supName = Object.fromEntries(all.map((x) => [x.id, x.name]));
+    const addr = `orders@${inboundDomain()}`;
+    const inboxCard = html`<section class="card oi-box"><div class="oi-h"><h2 class="sec">From email ${inbox.length ? html`<span class="cp-tag wait">${inbox.length} to check</span>` : ''}</h2>
+        <span class="sub">Forward or CC new POs to <b class="cu-mono">${addr}</b> <button type="button" class="btn small ghost" data-copy-text="${addr}">Copy</button></span></div>
+      ${inbox.length ? html`<div class="oi-list">${inbox.map((x) => { const pos = [...new Set((x.lines || []).map((l) => l.po).filter(Boolean))]; return html`<div class="oi-r">
+          <div><b>${pos.length ? `PO ${pos.slice(0, 4).join(', ')}${pos.length > 4 ? ` +${pos.length - 4}` : ''}` : x.subject || 'Email'}</b>
+          <div class="sub">${x.supplier_id ? supName[x.supplier_id] || 'Supplier' : html`<span class="oi-nos">${x.supplier_name ? `“${x.supplier_name}” — not matched` : 'Supplier to choose'}</span>`} · ${(x.lines || []).length} line${(x.lines || []).length === 1 ? '' : 's'} · ${(x.files || []).length} file${(x.files || []).length === 1 ? '' : 's'} · ${PL.short(String(x.created_at).slice(0, 10))}${x.from_email ? ` · from ${String(x.from_email).replace(/<.*>/, '').replace(/"/g, '').trim() || x.from_email}` : ''}</div></div>
+          <span class="r"><form method="post" action="${BASE}/import/inbox/${x.id}/discard" class="inline" data-confirm="Discard this email import? Its lines won't be saved."><button class="link small">Discard</button></form><a class="btn small" href="${BASE}/import/inbox/${x.id}">Check &amp; save</a></span></div>`; })}</div>` : html`<p class="sub oi-empty">Nothing waiting. A PO sent to this address is read by AI and waits here until you check it — nothing is saved on its own.</p>`}
+    </section>`;
     res.html(page({
       title: 'Import orders · Container planning', nav: adminNav('orders-import'), flash: takeFlash(req, res), wide: true, req,
       body: html`<p><a href="${BASE}">‹ Container planning</a></p><h1>Import orders</h1>
         <p class="muted">Drop the supplier's open-order report, PO or production status (Excel, PDF, screenshot, or pasted email). AI reads every line; you check it before it is saved.</p>
+        ${inboxCard}
         <form method="post" action="${BASE}/import" enctype="multipart/form-data" data-busy class="cp-import">
           <section class="card"><h2 class="sec">1 · Supplier</h2>${SAM.supplierPicker(sups, req.query.supplier || '')}
             <label class="cp-new">Or a new supplier <input name="new_supplier" placeholder="Company name" autocomplete="off"></label></section>
@@ -385,51 +444,46 @@ function planningRoutes(router, { db, config }) {
     if (stored.saved.length) notes.push(`${stored.saved.length} file${stored.saved.length === 1 ? '' : 's'} stored`);
     if (stored.errors.length) notes.push(stored.errors.join(' · '));
     if (!lines.length) { flash(res, stored.saved.length ? 'warn' : 'error', `No order lines found. ${notes.join(' · ')}`); return res.redirect(stored.saved.length ? `${BASE}?view=docs&supplier=${supplier.id}` : `${BASE}/import`); }
-    // default port: from the documents, else the supplier's usual FOB port
-    let defPort = null;
-    {
-      const prods = await db.list('products', { filters: { supplier_id: supplier.id }, select: 'fob_port' }).catch(() => []);
-      const cnt = {}; for (const p of prods) { const c = SC.portCode(p.fob_port); if (c) cnt[c] = (cnt[c] || 0) + 1; }
-      defPort = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    }
-    for (const o of lines) if (!o.port && defPort) { o.port = defPort; o.port_from_supplier = true; }
-    await PL.estimateCbm(db, supplier.id, lines);
-    const existing = await db.list('plan_orders', { filters: { supplier_id: supplier.id } }).catch(() => []);
-    const d = PL.diff(lines, existing);
-    const count = (c) => d.filter((x) => x.change === c).length;
-    const portOpts = (sel) => html`<option value="">To confirm</option>${SC.ORIGINS.map((p) => html`<option value="${p.code}" ${p.code === sel ? raw('selected') : ''}>${p.name}</option>`)}`;
-    res.html(page({
-      title: 'Check orders · Container planning', nav: adminNav('orders-import'), wide: true, req,
-      body: html`<p><a href="${BASE}/import">‹ Back</a></p><h1>Check what AI read</h1>
-        <p class="muted">${created ? html`New supplier: <b>${supplier.name}</b>` : supplier.name}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
-        <div class="cp-chips"><span class="cp-tag ok">${count('new')} new</span><span class="cp-tag plan">${count('updated')} updated</span><span class="cp-tag done">${count('same')} unchanged</span>${d.some((x) => !x.cbm) ? html`<span class="cp-tag wait">${d.filter((x) => !x.cbm).length} without CBM</span>` : ''}</div>
-        <form method="post" action="${BASE}/save" data-busy class="card">
-          <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
-          <input type="hidden" name="source" value="${docs.map((f) => f.name).join(', ') || 'Pasted text'}">
-          <div class="table-wrap"><table class="list cp-review"><thead><tr><th>Save</th><th>PO</th><th>SKU</th><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">CBM</th><th>Ready</th><th>Status</th><th>Waiting on us</th><th>Port</th><th>Change</th></tr></thead>
-          <tbody>${d.map((o, i) => html`<tr class="${o.change}">
-            <td><input type="checkbox" name="r${i}_on" value="1" ${o.change === 'same' ? '' : raw('checked')} aria-label="Save line ${i + 1}"><input type="hidden" name="r${i}_json" value="${JSON.stringify(o)}"></td>
-            <td><input name="r${i}_po" value="${o.po}" class="w-po"></td>
-            <td><input name="r${i}_sku" value="${o.sku || ''}" class="w-sku" placeholder="—" aria-label="SKU"></td>
-            <td><input name="r${i}_product" value="${o.product || ''}" class="w-prod" placeholder="(whole PO)"></td>
-            <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric"></td>
-            <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece"></td>
-            <td class="r"><input name="r${i}_cbm" value="${o.cbm ?? ''}" class="w-num ${o.cbm_estimated ? 'est' : ''}" inputmode="decimal" title="${o.cbm_estimated ? 'Estimated from carton size' : ''}"></td>
-            <td><input type="date" name="r${i}_ready" value="${o.ready_date || ''}"></td>
-            <td><input name="r${i}_status" value="${o.production_status || ''}" class="w-st"></td>
-            <td><input name="r${i}_pending" value="${o.pending_from_us || ''}" class="w-st"></td>
-            <td><select name="r${i}_port">${portOpts(o.port)}</select></td>
-            <td>${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
-          <p class="sub">Lines with no SKU and no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
-          <button class="btn">Save checked lines</button>
-        </form>`,
-    }));
+    const d = await prepare(supplier, lines);
+    checkPage(req, res, { supplier, created, aiName, notes, d, source: docs.map((f) => f.name).join(', ') || 'Pasted text' });
   }));
 
   router.post(`${BASE}/dedupe`, G(async (req, res) => {
     const n = await PL.mergeDuplicates(db);
     flash(res, 'ok', n ? `Merged ${n} duplicate line${n === 1 ? '' : 's'}` : 'No duplicates found');
     res.redirect(BASE);
+  }));
+
+  // ── POs that arrived by email (orders@…): check and save like an upload ──
+  const getImp = async (id) => { const x = await db.get('order_imports', id).catch(() => null); if (!x) throw new HttpError(404, 'Email import not found'); return x; };
+  router.get(`${BASE}/import/inbox/:id`, G(async (req, res) => {
+    const imp = await getImp(req.params.id);
+    if (imp.status !== 'pending') { flash(res, 'warn', imp.status === 'saved' ? 'This email was already saved' : 'This email import was discarded'); return res.redirect(`${BASE}/import`); }
+    const supplier = await db.get('suppliers', String(req.query.supplier || imp.supplier_id || '')).catch(() => null);
+    const from = [imp.from_email, imp.subject ? `“${imp.subject}”` : ''].filter(Boolean).join(' · ');
+    if (!supplier) {
+      const all = await db.list('suppliers', { select: 'id,name,country,contact_name,email,active', order: 'name.asc' });
+      return res.html(page({ title: 'Choose the supplier · Import orders', nav: adminNav('orders-import'), req, flash: takeFlash(req, res),
+        body: html`<p><a href="${BASE}/import">‹ Import orders</a></p><h1>Which supplier is this PO for?</h1>
+          <p class="muted">${from}${imp.supplier_name ? html` · the PO names <b>${imp.supplier_name}</b>` : ''} · ${(imp.lines || []).length} lines read</p>
+          <form method="get" action="${BASE}/import/inbox/${imp.id}" class="card">${SAM.supplierPicker(SAM.pickableSuppliers(all, ''), '')}<button class="btn">Continue</button></form>
+          <form method="post" action="${BASE}/import/inbox/${imp.id}/supplier" class="card"><label class="cp-new">Or a new supplier <input name="new_supplier" value="${imp.supplier_name || ''}" required></label><button class="btn ghost">Create and continue</button></form>` }));
+    }
+    if (!(imp.lines || []).length) { flash(res, 'warn', `No order lines were read from this email — ${(imp.notes || []).join(' · ') || 'try Import orders with the file'}`); return res.redirect(`${BASE}/import`); }
+    const lines = JSON.parse(JSON.stringify(imp.lines));
+    const d = await prepare(supplier, lines);
+    checkPage(req, res, { supplier, aiName: imp.supplier_name, notes: imp.notes || [], d, source: (imp.files || []).map((f) => f.name).join(', ') || 'Email', inboxId: imp.id, from });
+  }));
+  router.post(`${BASE}/import/inbox/:id/supplier`, G(async (req, res) => {
+    const imp = await getImp(req.params.id); const { fields } = await parseForm(req);
+    const name = String(fields.new_supplier || '').trim().slice(0, 200); if (!name) throw new HttpError(400, 'Type the supplier name');
+    const sup = (await db.list('suppliers', { select: 'id,name' })).find((x) => x.name.trim().toLowerCase() === name.toLowerCase()) || await db.insert('suppliers', { name, crm_status: 'Active', created_via: 'planning' }).catch(() => db.insert('suppliers', { name }));
+    await db.update('order_imports', { id: imp.id }, { supplier_id: sup.id, matched_by: 'chosen' });
+    res.redirect(`${BASE}/import/inbox/${imp.id}`);
+  }));
+  router.post(`${BASE}/import/inbox/:id/discard`, G(async (req, res) => {
+    const imp = await getImp(req.params.id); await OI.close(db, imp, 'discarded', req.staff?.name || 'Owner');
+    flash(res, 'ok', 'Email import discarded'); res.redirect(`${BASE}/import`);
   }));
 
   router.post(`${BASE}/save`, G(async (req, res) => {
@@ -455,7 +509,17 @@ function planningRoutes(router, { db, config }) {
     }
     const valid = lines.filter((o) => o.po);
     if (!valid.length) { flash(res, 'warn', 'No lines were checked'); return res.redirect(`${BASE}/import?supplier=${supplier.id}`); }
-    const r = await PL.save(db, supplier.id, valid, { batch: `imp-${Date.now().toString(36)}`, sourceName: String(fields.source || '').slice(0, 200) });
+    const batch = `imp-${Date.now().toString(36)}`;
+    const r = await PL.save(db, supplier.id, valid, { batch, sourceName: String(fields.source || '').slice(0, 200) });
+    // an email import: keep its files with the supplier's documents (linked to the POs) and close it
+    const imp = fields.inbox_id ? await db.get('order_imports', String(fields.inbox_id)).catch(() => null) : null;
+    if (imp && imp.status === 'pending') {
+      const fs = await OI.filesOf(db, imp);
+      if (fs.length) await PL.storeFiles(db, supplier.id, fs.map((f) => ({ ...f, pos: f.pos?.length ? f.pos : valid.map((o) => o.po) })), { batch, by: req.staff?.name || 'Owner' }).catch(() => null);
+      await db.update('order_imports', { id: imp.id }, { supplier_id: supplier.id });
+      await OI.close(db, imp, 'saved', req.staff?.name || 'Owner');
+      await db.docs.remove((imp.files || []).map((f) => f.path)).catch(() => null);
+    }
     flash(res, 'ok', `${supplier.name}: ${r.added} new, ${r.updated} updated${r.same ? `, ${r.same} unchanged` : ''}`);
     res.redirect(`${BASE}?supplier=${supplier.id}`);
   }));

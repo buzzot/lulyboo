@@ -3781,3 +3781,48 @@ test('HTS hover card: official USITC text + AI one-liner, cached', async (t) => 
   assert.equal(ai, 1, 'second hover is cached');
   assert.equal((await req(base, 'GET', '/admin/logistics/customs/hts?code=12', { cookie })).status, 400);
 });
+
+test('orders@: a PO by email waits under Import orders; check & save stores lines and the file; discard', async (t) => {
+  process.env.MAILGUN_SIGNING_KEY = 'mg-key'; process.env.ANTHROPIC_API_KEY = 'test';
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.anthropic.com')) {
+      const b = JSON.parse(opts.body);
+      return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: { supplier_name: 'Huanger Baby Products Co., Ltd', orders: [{ po: '800031', sku: 'TBT 001', product: 'Teether Ball Toy', qty: 6000, unit_price: 1.05, ready_date: '2026-12-20' }] } }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.MAILGUN_SIGNING_KEY; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const crypto = require('node:crypto');
+  const s = await db.insert('suppliers', { name: 'Huanger Baby Products', email: 'sales5@huanger.com.cn' });
+  const send = (over, file = true) => { const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok' + Math.random(); const fd = new FormData();
+    for (const [k, v] of Object.entries({ timestamp: ts, token, signature: crypto.createHmac('sha256', 'mg-key').update(ts + token).digest('hex'), from: 'Marsel <marsel@lulyboo.com>', recipient: 'orders@in.lulyboo.space', subject: 'Fwd: PO 800031', 'body-plain': 'Please confirm the attached PO.', ...over })) fd.append(k, v);
+    if (file) { fd.append('attachment-1', new Blob([Buffer.from('%PDF-1.4 po')], { type: 'application/pdf' }), 'PO 800031.pdf'); fd.append('attachment-2', new Blob([Buffer.from('x')], { type: 'image/png' }), 'image001.png'); }
+    return fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: fd }).then((r) => r.json()); };
+  const r = await send({});
+  assert.ok(r.orders); assert.equal(r.lines, 1); assert.equal(r.supplier, s.id);
+  const imp = db.tables.order_imports[0];
+  assert.equal(imp.status, 'pending'); assert.equal(imp.files.length, 1, 'signature image skipped'); assert.equal(imp.matched_by, 'name on the PO');
+  assert.equal((db.tables.plan_orders || []).length, 0, 'nothing saved before checking');
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const pg = (await req(base, 'GET', '/admin/logistics/planning/import', { cookie })).text;
+  assert.match(pg, /orders@in\.lulyboo\.space/); assert.match(pg, /PO 800031/); assert.match(pg, /1 to check/);
+  const chk = (await req(base, 'GET', `/admin/logistics/planning/import/inbox/${imp.id}`, { cookie })).text;
+  assert.match(chk, /Check what AI read/); assert.match(chk, new RegExp(`name="inbox_id" value="${imp.id}"`));
+  const js = chk.match(/name="r0_json" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const sv = await req(base, 'POST', '/admin/logistics/planning/save', { cookie, form: { supplier_id: s.id, n: '1', inbox_id: imp.id, source: 'PO 800031.pdf', r0_on: '1', r0_json: js, r0_po: '800031', r0_sku: 'TBT 001', r0_product: 'Teether Ball Toy', r0_qty: '6000', r0_price: '1.05', r0_ready: '2026-12-20' } });
+  assert.equal(sv.status, 303);
+  assert.equal(db.tables.plan_orders.length, 1); assert.equal(db.tables.plan_orders[0].po, '800031');
+  assert.equal(db.tables.order_imports[0].status, 'saved');
+  assert.ok(db.tables.plan_files.some((f) => f.name === 'PO 800031.pdf' && (f.pos || []).includes('800031')));
+  // unknown supplier → choose first; discard
+  global.fetch = async (url, opts) => { if (String(url).startsWith('https://api.anthropic.com')) { const b = JSON.parse(opts.body); return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: { supplier_name: 'Brand New Factory', orders: [{ po: '900001', product: 'Bib', qty: 100 }] } }] }), { status: 200 }); } return realFetch(url, opts); };
+  const r2 = await send({ subject: 'PO 900001' });
+  assert.equal(r2.supplier, null);
+  const imp2 = db.tables.order_imports.find((x) => x.id === r2.id);
+  assert.match((await req(base, 'GET', `/admin/logistics/planning/import/inbox/${imp2.id}`, { cookie })).text, /Which supplier is this PO for\?/);
+  assert.equal((await req(base, 'POST', `/admin/logistics/planning/import/inbox/${imp2.id}/discard`, { cookie, form: {} })).status, 303);
+  assert.equal(db.tables.order_imports.find((x) => x.id === imp2.id).status, 'discarded');
+});

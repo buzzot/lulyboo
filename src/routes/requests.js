@@ -468,6 +468,11 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await SD.handleShipEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
       if (out.matched) return res.json({ ok: true, shipment: true, ...out });
     }
+    // New POs: forwarded / CC'd to orders@… → read by AI, wait under Import orders until checked
+    if (toList.some((x) => /^orders@/i.test(x.trim()))) {
+      try { const out = await require('../order-inbox').handleOrderEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() }); return res.json({ ok: true, orders: true, ...out }); }
+      catch (err) { const P = require('../projects'); await P.notifyOwner(config, `[Orders] Could not read an email from ${from}`, `${subject}\n${err.message}`).catch(() => null); return res.json({ ok: true, orders: false, error: err.message }); }
+    }
     // Customs entries (CBP 7501) from the broker: customs@…
     if (toList.some((x) => /^customs@/i.test(x.trim()))) {
       const CU = require('../customs');
