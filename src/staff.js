@@ -3,11 +3,12 @@
 //   admin    everything, including users, settings and deleting
 //   director everything except users, settings and deleting; can read the audit log
 //   manager  day-to-day work; pricing and logistics are view-only; cannot delete
+//   accountant only the Finance pages (payments to make, documents to check, mark paid, reports)
 // The ADMIN_PASSWORD "owner" login always works as an emergency Admin, even before the staff table exists.
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { sign, unsign } = require('./lib/http');
 
-const ROLES = { admin: 'Admin', director: 'Director', manager: 'Manager' };
+const ROLES = { admin: 'Admin', director: 'Director', manager: 'Manager', accountant: 'Accountant' };
 const SESSION_DAYS = 14;
 const als = new AsyncLocalStorage();
 const current = () => als.getStore()?.staff || null;
@@ -15,9 +16,10 @@ const runAs = (staff, fn) => als.run({ staff }, fn);
 
 /** What a role may do (used to hide buttons; the server enforces it in `deny`). */
 const CAN = {
-  admin: { users: true, settings: true, delete: true, audit: true, costs: true },
-  director: { users: false, settings: false, delete: false, audit: true, costs: true },
-  manager: { users: false, settings: false, delete: false, audit: false, costs: false },
+  admin: { users: true, settings: true, delete: true, audit: true, costs: true, bank: true },
+  director: { users: false, settings: false, delete: false, audit: true, costs: true, bank: true },
+  manager: { users: false, settings: false, delete: false, audit: false, costs: false, bank: false },
+  accountant: { users: false, settings: false, delete: false, audit: false, costs: false, bank: true },
 };
 const can = (role, what) => !!(CAN[role] && CAN[role][what]);
 
@@ -26,11 +28,33 @@ function deny(role, method, path) {
   if (role === 'admin') return null;
   if (!CAN[role]) return 'Unknown role';
   const get = method === 'GET' || method === 'HEAD';
+  if (role === 'accountant') {
+    if (/^\/admin\/(finance|profile|logout)(\/|\.|$)/.test(path)) return null;
+    // the documents and slips they verify (read only)
+    if (get && (/^\/admin\/logistics\/planning\/files\/[^/]+$/.test(path) || /^\/admin\/orders\/shipping\/fwd\/[^/]+\/files\/\d+$/.test(path))) return null;
+    return 'The accountant account can open the Finance pages only.';
+  }
+  if (/^\/admin\/suppliers\/[^/]+\/bank(\/|\.|$)/.test(path) && !can(role, 'bank')) return 'Only an Admin, Director or Accountant can see bank details.';
   if (/^\/admin\/(users|settings|api-log)(\/|$)/.test(path) || /^\/admin\/crm\/telegram\//.test(path)) return 'Only an Admin can open this page.';
   if (/^\/admin\/audit(\/|$)/.test(path)) return can(role, 'audit') ? null : 'Only an Admin or Director can view the audit log.';
   if (/^\/admin\/(suppliers|products|requests|documents|projects|samples)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
   if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) && !/^\/admin\/logistics\/(schedules|planning|forwarders)(\/|\.|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
   return null;
+}
+
+// ── "View as": an Admin sees the portal with another role's menu and limits (testing / troubleshooting).
+//    Actions still count as the Admin, recorded as "Name (as Role)". Only a real Admin can switch; it ends on sign-out.
+const VIEW_ROLES = ['director', 'manager', 'accountant'];
+function viewAs(config, req, staff) {
+  if (!staff || staff.role !== 'admin') return staff;
+  const v = unsign(req.cookies.lb_viewas, config.sessionSecret);
+  const m = /^viewas:([a-z]+):(.+)$/.exec(v || '');
+  if (!m || !VIEW_ROLES.includes(m[1]) || m[2] !== String(staff.id)) return staff;
+  return { ...staff, role: m[1], realRole: 'admin', realName: staff.name, viewing: m[1], name: `${staff.name} (as ${ROLES[m[1]]})` };
+}
+function setViewAs(res, config, staff, role) {
+  if (!role) return res.setCookie('lb_viewas', '', { maxAge: 0 });
+  res.setCookie('lb_viewas', sign(`viewas:${role}:${staff.id}`, config.sessionSecret), { maxAge: 12 * 3600 });
 }
 
 function startSession(res, config, user) {
@@ -71,13 +95,15 @@ const LABELS = [
   [/^\/admin\/suppliers\/([^/]+)\/users$/, 'Invited supplier user'], [/^\/admin\/supplier-users\//, 'Supplier user change'],
   [/^\/admin\/requests\/([^/]+)\/status$/, 'Changed request status'], [/^\/admin\/requests\/([^/]+)\/log$/, 'Added to request log'],
   [/^\/admin\/settings$/, 'Changed settings'], [/^\/admin\/pricing/, 'Changed pricing'], [/^\/admin\/logistics/, 'Changed logistics'],
+  [/^\/admin\/(finance|orders\/payments)\/[^/]+\/paid$/, 'Marked payment paid'], [/^\/admin\/finance\/[^/]+\/ask$/, 'Asked about a payment'],
+  [/^\/admin\/suppliers\/([^/]+)\/bank$/, 'Changed bank details'],
   [/^\/admin\/categories/, 'Changed categories'], [/^\/admin\/documents\/([^/]+)\/delete$/, 'Deleted document'],
 ];
-const NOISY = /\/import\/(image|source|ai-describe|cancel)$|\/ai-|^\/admin\/(login|logout|forgot)|^\/admin\/invite\/|^\/admin\/users|^\/admin\/profile|\/ai\//;
+const NOISY = /^\/admin\/view-as|\/import\/(image|source|ai-describe|cancel)$|\/ai-|^\/admin\/(login|logout|forgot)|^\/admin\/invite\/|^\/admin\/users|^\/admin\/profile|\/ai\//;
 function autoLabel(path) {
   if (NOISY.test(path)) return null;
   for (const [re, label] of LABELS) if (re.test(path)) return label;
   return 'POST ' + path;
 }
 
-module.exports = { ROLES, CAN, can, deny, current, runAs, currentStaff, startSession, startOwnerSession, audit, autoLabel, OWNER, SESSION_DAYS };
+module.exports = { VIEW_ROLES, viewAs, setViewAs, ROLES, CAN, can, deny, current, runAs, currentStaff, startSession, startOwnerSession, audit, autoLabel, OWNER, SESSION_DAYS };

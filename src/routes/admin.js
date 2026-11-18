@@ -175,10 +175,13 @@ function dutyPanel({ p, a, testDuty, aiOn, customs = [] }) {
 const ST = require('../staff');
 function guard(config, fn) {
   return async (req, res) => {
-    const staff = await ST.currentStaff(config, req);
-    if (!staff) return res.redirect(`/admin/login?next=${encodeURIComponent(req.url)}`);
+    const real = await ST.currentStaff(config, req);
+    if (!real) return res.redirect(`/admin/login?next=${encodeURIComponent(req.url)}`);
     const path = String(req.url).split('?')[0];
-    if (staff.must_change && !/^\/admin\/(profile|logout)/.test(path)) return res.redirect('/admin/profile?force=1');
+    if (real.must_change && !/^\/admin\/(profile|logout)/.test(path)) return res.redirect('/admin/profile?force=1');
+    // switching "View as" on / off always runs as the real account
+    const staff = /^\/admin\/view-as(\/|$)/.test(path) ? real : ST.viewAs(config, req, real);
+    if (staff.role === 'accountant' && path === '/admin') return res.redirect('/admin/finance');
     const why = ST.deny(staff.role, req.method, path);
     if (why) throw new HttpError(403, why);
     req.staff = staff;
@@ -386,7 +389,16 @@ module.exports = function adminRoutes(router, { db, config }) {
     await ST.audit(config, 'Signed in', '', user);
     return res.redirect(user.must_change ? '/admin/profile?force=1' : dest);
   });
-  router.get('/admin/logout', async (req, res) => { res.setCookie('lb_admin', '', { maxAge: 0 }); res.redirect('/admin/login'); });
+  router.get('/admin/logout', async (req, res) => { res.setCookie('lb_admin', '', { maxAge: 0 }); res.setCookie('lb_viewas', '', { maxAge: 0 }); res.redirect('/admin/login'); });
+  router.post('/admin/view-as', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    if (req.staff.role !== 'admin') throw new HttpError(403, 'Only an Admin can view the portal as another role.');
+    const role = String(fields.role || '');
+    if (!ST.VIEW_ROLES.includes(role)) { ST.setViewAs(res, config, req.staff, null); flash(res, 'ok', 'Back to your Admin view'); return res.redirect('/admin'); }
+    ST.setViewAs(res, config, req.staff, role);
+    await ST.audit(config, 'View as', ST.ROLES[role]);
+    res.redirect(role === 'accountant' ? '/admin/finance' : '/admin');
+  }));
 
   // ── Dashboard: what needs attention, pipeline, follow-ups, categories, latest submissions, sourcing activity
   router.get('/admin', G(async (req, res) => {
@@ -1111,6 +1123,13 @@ module.exports = function adminRoutes(router, { db, config }) {
             <label class="span2"><span class="lbl">Notes</span><textarea name="notes" rows="3">${s.notes || ''}</textarea></label>
             <div class="span2"><button class="btn small">Save</button></div></form></details>
         </section>
+        ${ST.can(ST.current()?.role, 'bank') ? (() => { const FN = require('../finance'); const has = FN.hasBank(s); return html`<section class="card sp-card" id="bank"><div class="head-row"><h2>Bank details</h2>${has ? '' : html`<span class="sub">for supplier payments</span>`}</div>
+          ${has ? html`<dl class="sp-dl">${FN.BANK.map(([k, l]) => (s[k] ? html`<dt>${l}</dt><dd>${k === 'bank_account' ? html`<span class="fn-mono" id="sp-acct">${FN.mask(s[k])}</span> <button type="button" class="link small" data-reveal="/admin/suppliers/${s.id}/bank" data-reveal-to="sp-acct">show</button>` : s[k]}</dd>` : ''))}</dl>` : ''}
+          <details class="sp-edit"><summary class="link small">${has ? 'Edit bank details' : '+ Add bank details'}</summary>
+          <form method="post" action="/admin/suppliers/${s.id}/bank" class="sp-ef">
+            ${FN.BANK.map(([k, l]) => html`<label class="span2"><span class="lbl">${l}</span>${k === 'bank_address' ? html`<textarea name="${k}" rows="2">${s[k] || ''}</textarea>` : k === 'bank_account' ? html`<input name="${k}" autocomplete="off" placeholder="${s[k] ? `${FN.mask(s[k])} — leave empty to keep` : 'Account number or IBAN'}">` : html`<input name="${k}" value="${s[k] || ''}">`}</label>`)}
+            <div class="span2"><button class="btn small">Save</button> <span class="sub">Seen by Admin, Director and Accountant only.</span></div></form></details>
+        </section>`; })() : ''}
         ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
         <section class="card sp-card" id="portal-access"><div class="head-row"><h2>Portal</h2><span class="sub">${lastLogin ? `last sign-in ${fmt.date(lastLogin)}` : 'never signed in'}</span></div>
           <form method="post" action="/admin/suppliers/${s.id}/pricing" class="sp-sw">

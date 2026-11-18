@@ -617,7 +617,7 @@ function planningRoutes(router, { db, config }) {
       }
       if (lines.length) { for (const o of lines) if (!o.port) o.port = null; read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
     }
-    const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' });
+    const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner', signed: fields.signed === '1' }).catch(async (e) => { if (!/signed/i.test(e.message)) throw e; return PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' }); });
     const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.products ? ` · added to ${supplier.name}'s products: ${read.productNames.join(', ')}` : ''}${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} product${read.catalog === 1 ? '' : 's'} in the product list` : ''}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
     back(r.errors.length || unread.length ? 'warn' : 'ok', `${r.saved.length ? `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}` : 'No new documents stored'}${r.skipped?.length ? ` · already stored: ${r.skipped.join(', ')}` : ''}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
   }));

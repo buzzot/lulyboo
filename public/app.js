@@ -2729,3 +2729,17 @@
     d.querySelector('[data-pm-what]').textContent = b.getAttribute('data-pm-what') || '';
   }, true);
 })();
+
+// Bank details: the full account number is fetched (and logged) only when "show" is pressed.
+(function () {
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-reveal]'); if (!b || !window.fetch) return;
+    var out = document.getElementById(b.getAttribute('data-reveal-to')); if (!out) return;
+    if (b.getAttribute('data-shown')) { out.textContent = b.getAttribute('data-masked'); b.removeAttribute('data-shown'); b.textContent = 'show'; return; }
+    b.disabled = true;
+    fetch(b.getAttribute('data-reveal'), { credentials: 'same-origin', headers: { Accept: 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
+      b.disabled = false; if (!j || !j.account) return;
+      b.setAttribute('data-masked', out.textContent); out.textContent = j.account; b.setAttribute('data-shown', '1'); b.textContent = 'hide';
+    }).catch(function () { b.disabled = false; });
+  });
+})();

@@ -4000,3 +4000,152 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   assert.match(ym.subject, /PO 500024/); assert.match(ym.text, /Commercial invoice for PO 500024/); assert.match(ym.text, /Packing list for PO 500024/);
   assert.ok(db.tables.ship_confirmations.some((s) => s.supplier_id === y.id && (s.log || []).some((l) => /Asked for CI 500024, PL 500024/.test(l.text))));
 });
+
+test('accountant: finance pages only, document checks, bank details, mark paid with slip, owner notified, reports', async (t) => {
+  const PM = require('../src/payments'); const PL = require('../src/planning'); const FN = require('../src/finance');
+  const db = seedDb();
+  const realFetch = global.fetch; const tgSent = []; const mails = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('https://api.telegram.org')) { tgSent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 }); }
+    if (u.startsWith('https://api.resend.com')) { mails.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'm1' }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  process.env.TELEGRAM_BOT_TOKEN = 'tg'; process.env.RESEND_API_KEY = 're';
+  const { server, base } = await startServer(db);
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.RESEND_API_KEY; });
+  const ck = (r) => r.cookies.map((c) => c.split(';')[0]).join('; ');
+  const flashOf = (r) => { const c = r.cookies.find((x) => x.startsWith('lb_flash=')); return c ? decodeURIComponent(c.split(';')[0].slice(9)) : ''; };
+  const owner = ck(await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } }));
+  const today = PL.today();
+  db.tables.settings = [{ id: 1, telegram_chat_id: '42' }];
+  const s = await db.insert('suppliers', { name: 'Huanger', bank_beneficiary: 'Huanger Baby Co', bank_name: 'Bank of China', bank_swift: 'BKCHCNBJ', bank_account: '6216 6100 0001 2345' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', fwd: { atd: PL.addDays(today, -40), ata: PL.addDays(today, -2), eta: PL.addDays(today, -2) } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether', qty: 8000, unit_price: 0.5, container_id: c.id, po_terms: 'Payment: 20% against BOL + 80% 5 days after arrival.', created_at: PL.addDays(today, -90) + 'T00:00:00Z' });
+  const poFile = await db.insert('plan_files', { supplier_id: s.id, name: 'PO 800018.pdf', kind: 'PO', path: 'x/po.pdf', content_type: 'application/pdf', pos: ['800018'] });
+  db.files.set('docs/x/po.pdf', Buffer.from('%PDF po'));
+
+  // owner adds the accountant
+  await req(base, 'POST', '/admin/users', { cookie: owner, form: { name: 'Anna', username: 'anna', email: 'anna@books.com', role: 'accountant', password: 'temp-pass-1234' } });
+  assert.equal(db.tables.staff_users.find((u) => u.username === 'anna').role, 'accountant');
+  const l1 = ck(await req(base, 'POST', '/admin/login', { form: { username: 'anna', password: 'temp-pass-1234' } }));
+  const anna = ck(await req(base, 'POST', '/admin/profile/password', { cookie: l1, form: { password: 'anna-pass-5678', confirm: 'anna-pass-5678' } }));
+  assert.equal((await req(base, 'GET', '/admin', { cookie: anna })).location, '/admin/finance');
+  for (const p of ['/admin/products', '/admin/suppliers', '/admin/orders/payments', `/admin/suppliers/${s.id}`, '/admin/logistics/planning', '/admin/quick?q=a']) assert.equal((await req(base, 'GET', p, { cookie: anna })).status, 403, p);
+  assert.equal((await req(base, 'POST', `/admin/suppliers/${s.id}/bank`, { cookie: anna, form: { bank_name: 'X' } })).status, 403);
+  assert.equal((await req(base, 'POST', '/admin/orders/payments/terms', { cookie: anna, form: { supplier: s.id, po: '800018', terms: '100% deposit' } })).status, 403);
+
+  // queue: B/L installment is overdue; its PO is on file but not signed, the B/L is missing
+  let pg = (await req(base, 'GET', '/admin/finance', { cookie: anna })).text;
+  assert.match(pg, /Supplier payments/); assert.match(pg, /Docs to check/); assert.doesNotMatch(pg, /Container planning/);
+  assert.match(pg, /fn-chip warn[^>]*>PO/); assert.match(pg, /fn-chip miss[^>]*>B\/L/);
+  assert.match(pg, /•••• 2345/); assert.doesNotMatch(pg, /6216 6100/); assert.match(pg, /BKCHCNBJ/);
+  const { rows } = await PM.list(db); const bl = rows.find((r) => r.trigger === 'bl'); const bal = rows.find((r) => r.trigger === 'arrival');
+  // arrival-based balance needs PO + B/L + arrival notice
+  await db.insert('fwd_updates', { container_id: c.id, status: 'accepted', facts: { doc_type: 'arrival_notice' }, files: [{ name: 'AN.pdf', path: 'x/an.pdf', type: 'application/pdf' }] });
+  await db.insert('fwd_updates', { container_id: c.id, status: 'accepted', facts: { doc_type: 'bill_of_lading' }, files: [{ name: 'HBL.pdf', path: 'x/bl.pdf', type: 'application/pdf' }] });
+  db.files.set('docs/x/an.pdf', Buffer.from('%PDF an'));
+  let d = FN.docsFor(await FN.preload(db), { ...bal, container: c });
+  assert.deepEqual(d.need, ['PO', 'BL', 'AN']); assert.deepEqual(d.missing, []); assert.ok(d.unsigned); assert.ok(!d.ok);
+  // owner ticks the PO as signed on the PO page
+  assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie: owner })).text, /signed\?/);
+  await req(base, 'POST', `/admin/logistics/planning/files/${poFile.id}/signed`, { cookie: owner, form: { back: '/admin/orders/view' } });
+  d = FN.docsFor(await FN.preload(db), { ...bal, container: c }); assert.ok(d.ok);
+  pg = (await req(base, 'GET', `/admin/finance?id=${bal.id}`, { cookie: anna })).text;
+  assert.match(pg, /AN\.pdf/); assert.match(pg, /HBL\.pdf/); assert.match(pg, />signed</);
+  // the accountant can open the documents to verify, but not delete them
+  assert.equal((await req(base, 'GET', `/admin/logistics/planning/files/${poFile.id}?inline=1`, { cookie: anna })).status, 200);
+  const an = db.tables.fwd_updates.find((u) => u.facts.doc_type === 'arrival_notice');
+  assert.equal((await req(base, 'GET', `/admin/orders/shipping/fwd/${an.id}/files/0`, { cookie: anna })).status, 200);
+  assert.equal((await req(base, 'POST', `/admin/logistics/planning/files/${poFile.id}/delete`, { cookie: anna })).status, 403);
+
+  // full account number on request, logged
+  const acct = await req(base, 'GET', `/admin/finance/bank/${s.id}`, { cookie: anna });
+  assert.equal(JSON.parse(acct.text).account, '6216 6100 0001 2345');
+  assert.ok(db.tables.staff_audit.some((a) => a.action === 'Viewed bank account' && a.staff_name === 'Anna'));
+
+  // mark paid: slip required for the accountant
+  let r = await req(base, 'POST', `/admin/finance/${bl.id}/paid`, { cookie: anna, form: { date: today, amount: '800', ref: 'TT88' } });
+  assert.match(flashOf(r), /Attach the bank slip/); assert.equal(db.tables.po_payments.find((x) => x.id === bl.id).status, 'open');
+  const fd = new FormData(); fd.append('date', today); fd.append('amount', '800'); fd.append('ref', 'TT88');
+  fd.append('file', new Blob([Buffer.from('%PDF slip')], { type: 'application/pdf' }), 'slip.pdf');
+  const res = await fetch(`${base}/admin/finance/${bl.id}/paid`, { method: 'POST', headers: { cookie: anna }, body: fd, redirect: 'manual' });
+  assert.equal(res.status, 303);
+  const paid = db.tables.po_payments.find((x) => x.id === bl.id);
+  assert.equal(paid.status, 'paid'); assert.equal(paid.paid_by, 'Anna'); assert.equal(paid.paid_files[0].name, 'slip.pdf'); assert.equal(paid.paid_files[0].by, 'Anna');
+  assert.ok(tgSent.some((x) => /Paid by Anna/.test(x.text) && /TT88/.test(x.text)));
+  assert.ok(mails.some((x) => /Anna paid \$800\.00/.test(x.subject)));
+  assert.ok(db.tables.staff_audit.some((a) => a.action === 'Marked payment paid'));
+  // shows as paid everywhere, with who and the slip
+  assert.match((await req(base, 'GET', '/admin/finance?tab=paid', { cookie: anna })).text, /by Anna/);
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie: owner })).text;
+  assert.match(po, /by Anna/); assert.match(po, new RegExp(`/admin/finance/slips/${bl.id}/0`));
+  assert.match((await req(base, 'GET', '/admin/orders/payments', { cookie: owner })).text, /by Anna/);
+  const slip = await req(base, 'GET', `/admin/finance/slips/${bl.id}/0`, { cookie: owner }); assert.equal(slip.text, '%PDF slip');
+
+  // question to Lulyboo
+  r = await req(base, 'POST', `/admin/finance/${bal.id}/ask`, { cookie: anna, form: { text: 'Pay in full or wait?' } });
+  assert.equal(r.status, 303);
+  assert.ok(tgSent.some((x) => /Anna asks about a payment/.test(x.text)));
+  assert.ok(mails.some((x) => /Question from Anna/.test(x.subject) && x.reply_to === 'anna@books.com' || /Question from Anna/.test(x.subject)));
+  assert.match(db.tables.po_payments.find((x) => x.id === bal.id).log.at(-1).text, /Question from Anna/);
+
+  // documents page, reports, CSV
+  assert.match((await req(base, 'GET', '/admin/finance/docs', { cookie: anna })).text, /PO 800018\.pdf/);
+  r = await req(base, 'POST', '/admin/finance/reports', { cookie: anna, form: { from: PM.weekOf(today) } });
+  assert.equal(r.status, 303); const rep = db.tables.payment_reports[0];
+  assert.match((await req(base, 'GET', '/admin/finance/reports', { cookie: anna })).text, /Weekly payment plan/);
+  assert.match((await req(base, 'GET', `/admin/finance/reports/${rep.id}`, { cookie: anna })).text, /^%PDF-/);
+  const paidCsv = (await req(base, 'GET', `/admin/finance/export.csv?kind=paid&month=${today.slice(0, 7)}`, { cookie: anna })).text;
+  assert.match(paidCsv, /Paid on,Supplier/); assert.match(paidCsv, /Huanger,800018,.*800\.00.*TT88,Anna,slip\.pdf/);
+  const openCsv = (await req(base, 'GET', '/admin/finance/export.csv?kind=open', { cookie: anna })).text;
+  assert.match(openCsv, /3200\.00/);
+
+  // bank details: admin edits; an empty account field keeps the number; managers can't see them
+  await req(base, 'POST', `/admin/suppliers/${s.id}/bank`, { cookie: owner, form: { bank_beneficiary: 'Huanger Baby Co Ltd', bank_name: 'Bank of China', bank_swift: 'BKCHCNBJ', bank_account: '' } });
+  assert.equal(db.tables.suppliers.find((x) => x.id === s.id).bank_account, '6216 6100 0001 2345');
+  assert.equal(db.tables.suppliers.find((x) => x.id === s.id).bank_beneficiary, 'Huanger Baby Co Ltd');
+  const sp = (await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: owner })).text;
+  assert.match(sp, /id="bank"/); assert.match(sp, /•••• 2345/); assert.doesNotMatch(sp, /6216 6100/);
+  await req(base, 'POST', '/admin/users', { cookie: owner, form: { name: 'Max', username: 'max', email: 'max@lulyboo.com', role: 'manager', password: 'manager-pass-1' } });
+  const m1 = ck(await req(base, 'POST', '/admin/login', { form: { username: 'max', password: 'manager-pass-1' } }));
+  const max = ck(await req(base, 'POST', '/admin/profile/password', { cookie: m1, form: { password: 'manager-pass-2x', confirm: 'manager-pass-2x' } }));
+  assert.doesNotMatch((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: max })).text, /id="bank"/);
+  assert.equal((await req(base, 'GET', `/admin/suppliers/${s.id}/bank`, { cookie: max })).status, 403);
+  assert.equal((await req(base, 'GET', `/admin/finance/bank/${s.id}`, { cookie: max })).status, 403);
+});
+
+test('view as: an Admin sees another role\'s menu and limits, actions recorded as them, back to Admin always works', async (t) => {
+  const db = seedDb();
+  db.tables.suppliers = [{ id: 'sup1', name: 'Acme', active: true }];
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const ck = (r) => r.cookies.map((c) => c.split(';')[0]).join('; ');
+  const owner = ck(await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } }));
+  assert.match((await req(base, 'GET', '/admin', { cookie: owner })).text, /View as/);
+  const sw = await req(base, 'POST', '/admin/view-as', { cookie: owner, form: { role: 'accountant' } });
+  assert.equal(sw.location, '/admin/finance');
+  const asAcc = `${owner}; ${ck(sw)}`;
+  assert.equal((await req(base, 'GET', '/admin', { cookie: asAcc })).location, '/admin/finance');
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: asAcc })).status, 403);
+  assert.equal((await req(base, 'GET', '/admin/users', { cookie: asAcc })).status, 403);
+  const fin = (await req(base, 'GET', '/admin/finance', { cookie: asAcc })).text;
+  assert.match(fin, /class="va-bar"/); assert.match(fin, /Viewing as <b>Accountant<\/b>/); assert.doesNotMatch(fin, /Container planning/);
+  assert.ok(db.tables.staff_audit.some((a) => a.action === 'View as' && a.detail === 'Accountant'));
+  // the way back works from the restricted view
+  const back = await req(base, 'POST', '/admin/view-as', { cookie: asAcc, form: { role: '' } });
+  assert.equal(back.location, '/admin');
+  const plain = `${owner}; ${ck(back)}`;
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: plain })).status, 200);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/products', { cookie: plain })).text, /class="va-bar"/);
+  // as Manager: deletes are blocked
+  const asMgr = `${owner}; ${ck(await req(base, 'POST', '/admin/view-as', { cookie: owner, form: { role: 'manager' } }))}`;
+  assert.equal((await req(base, 'POST', '/admin/suppliers/sup1/delete', { cookie: asMgr })).status, 403);
+  // a non-admin cannot switch, and a copied cookie does nothing for them
+  await req(base, 'POST', '/admin/users', { cookie: owner, form: { name: 'Anna', username: 'anna', email: 'anna@books.com', role: 'accountant', password: 'temp-pass-1234' } });
+  const l1 = ck(await req(base, 'POST', '/admin/login', { form: { username: 'anna', password: 'temp-pass-1234' } }));
+  const anna = ck(await req(base, 'POST', '/admin/profile/password', { cookie: l1, form: { password: 'anna-pass-5678', confirm: 'anna-pass-5678' } }));
+  assert.equal((await req(base, 'POST', '/admin/view-as', { cookie: anna, form: { role: 'manager' } })).status, 403);
+  assert.equal((await req(base, 'GET', '/admin/products', { cookie: `${anna}; ${ck(sw)}` })).status, 403);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/finance', { cookie: anna })).text, /View as/);
+});

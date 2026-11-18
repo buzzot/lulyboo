@@ -167,7 +167,9 @@ async function markPaid(db, row, { date, amount, ref, file, by }) {
   const paid = r2((Number(row.paid_amount) || 0) + Number(amount));
   const full = paid >= row.amount - 0.01;
   const log = [...(row.log || []), { at: now(), text: `Paid ${usd(amount)} on ${date}${ref ? ` · ${ref}` : ''}${by ? ` (${by})` : ''}` }].slice(-30);
-  await db.update('po_payments', { id: row.id }, { paid_amount: paid, paid_at: date, paid_ref: ref || row.paid_ref || null, ...(file ? { paid_files: [...(row.paid_files || []), file] } : {}), status: full ? 'paid' : 'open', log, updated_at: now() });
+  const patch = { paid_amount: paid, paid_at: date, paid_ref: ref || row.paid_ref || null, ...(file ? { paid_files: [...(row.paid_files || []), { ...file, by: by || null, at: now() }] } : {}), status: full ? 'paid' : 'open', log, updated_at: now() };
+  try { await db.update('po_payments', { id: row.id }, { ...patch, paid_by: by || null }); }
+  catch (e) { if (!/paid_by/i.test(e.message)) throw e; await db.update('po_payments', { id: row.id }, patch); } // before accountant.sql
   return { full, paid };
 }
 

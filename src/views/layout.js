@@ -69,11 +69,12 @@ function page({ title, body, nav = null, flash = null, wide = false, req = null,
 
   return html`<!doctype html>
 <html lang="${zh ? 'zh-CN' : 'en'}" class="${zh ? 'zh' : ''}"><head>${head}</head><body>
+${isAdmin && STAFF.current()?.viewing ? html`<div class="va-bar"><span>Viewing as <b>${STAFF.ROLES[STAFF.current().viewing]}</b> — you see their menu and limits; what you do is recorded as you.</span><form method="post" action="/admin/view-as"><button name="role" value="">Back to Admin</button></form></div>` : ''}
 <header class="top"><div class="top-in ${wide ? 'wide' : ''}">
   <a class="brand" href="${nav?.home || '/'}"><span class="sb-logo">L</span> Lulyboo ${nav?.admin ? '' : html`<span>${nav?.label || t('Supplier Portal', '供应商平台')}</span>`}</a>
   ${nav?.groups ? adminMainNav(nav) : nav ? html`<nav>${nav.items.map((i) => html`<a href="${i.href}" class="${i.active ? 'on' : ''}">${i.label}</a>`)}</nav>` : ''}
   ${sw}
-  ${isAdmin ? html`<div class="top-right">${nav?.groups ? html`<button type="button" class="qk-btn" data-qk-open aria-label="Quick jump (⌘K)">${icon('search', 15)}<span>Jump to…</span><kbd data-qk-key>⌘K</kbd></button>` : ''}${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
+  ${isAdmin ? html`<div class="top-right">${nav?.groups && !nav.finance ? html`<button type="button" class="qk-btn" data-qk-open aria-label="Quick jump (⌘K)">${icon('search', 15)}<span>Jump to…</span><kbd data-qk-key>⌘K</kbd></button>` : ''}${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
 </div>${isAdmin && nav?.groups ? subNav(nav, wide) : ''}</header>
 ${isAdmin && nav?.groups ? quickJump(nav) : ''}
 <main class="${wide ? 'wide' : ''}">
@@ -87,10 +88,11 @@ ${body}
 function userMenu() {
   const u = STAFF.current();
   if (!u) return '';
-  const initials = String(u.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  return html`<details class="user-menu"><summary aria-label="Account menu"><span class="um-av">${initials}</span><span class="um-who"><b>${u.name}</b><small>${STAFF.ROLES[u.role]}</small></span><span class="um-caret" aria-hidden="true"></span></summary>
-    <div class="um-pop"><div class="um-head"><b>${u.name}</b><small>${u.email || 'Owner login'}</small></div>
+  const initials = String(u.realName || u.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  return html`<details class="user-menu"><summary aria-label="Account menu"><span class="um-av">${initials}</span><span class="um-who"><b>${u.realName || u.name}</b><small>${u.viewing ? `Viewing as ${STAFF.ROLES[u.role]}` : STAFF.ROLES[u.role]}</small></span><span class="um-caret" aria-hidden="true"></span></summary>
+    <div class="um-pop"><div class="um-head"><b>${u.realName || u.name}</b><small>${u.email || 'Owner login'}</small></div>
       <a href="/admin/profile">My profile</a>
+      ${u.viewing || u.role === 'admin' ? html`<form method="post" action="/admin/view-as" class="um-va"><span>View as</span>${[['', 'Admin'], ...STAFF.VIEW_ROLES.map((r) => [r, STAFF.ROLES[r]])].map(([r, l]) => html`<button name="role" value="${r}" class="${(u.viewing || '') === r ? 'on' : ''}" ${(u.viewing || '') === r ? raw('aria-current="true"') : ''}>${l}</button>`)}</form>` : ''}
       ${STAFF.can(u.role, 'users') ? html`<a href="/admin/users">Users &amp; roles</a>` : ''}
       ${STAFF.can(u.role, 'audit') ? html`<a href="/admin/audit">Audit log</a>` : ''}
       <a class="um-out" href="/admin/logout">Sign out</a></div></details>`;
@@ -126,6 +128,10 @@ function quickJump(nav) {
 function adminNav(active) {
   const staff = STAFF.current();
   const on = (k) => k === active;
+  if (staff?.role === 'accountant') {
+    const groups = [['finance', '/admin/finance', 'Payments'], ['finance-paid', '/admin/finance?tab=paid', 'Paid'], ['finance-docs', '/admin/finance/docs', 'Documents'], ['finance-reports', '/admin/finance/reports', 'Reports']].map(([k, href, label]) => ({ label, href, active: on(k) }));
+    return { home: '/admin/finance', label: 'Finance', groups, settings: null, items: groups, admin: true, finance: true };
+  }
   const group = (label, items) => {
     const list = items.map(([k, href, l, d]) => ({ href, label: l, desc: d, active: on(k) }));
     const act = items.some(([k]) => on(k));
@@ -135,7 +141,7 @@ function adminNav(active) {
     { label: 'Dashboard', href: '/admin', active: on('dashboard') },
     group('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers', 'Factories, contacts, CRM status'], ['requests', '/admin/requests', 'RFQs & requests', 'Info requests to suppliers'], ['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
     group('Catalog', [['products', '/admin/products', 'Products', 'Supplier products'], ['pricing', '/admin/pricing', 'Pricing', 'Landed cost & margins'], ['categories', '/admin/categories', 'Categories', 'Category list'], ['archive', '/admin/archive', 'Archive', 'Archived products']]),
-    group('Orders', [['orders', '/admin/orders', 'Purchase orders', 'All POs'], ['planning', '/admin/logistics/planning', 'Container planning', 'Group POs by ready date'], ['load', '/admin/logistics/planning/load', 'Load containers', 'Fill 20GP / 40GP / 40HQ / LCL'], ['shipping', '/admin/orders/shipping', 'Shipping documents', 'Loading confirmations & docs'], ['shipments', '/admin/orders/shipments', 'Shipments', 'In transit & delivered'], ['payments', '/admin/orders/payments', 'Payments', 'Supplier payments & reminders'], ['orders-import', '/admin/logistics/planning/import', 'Import orders', 'PO / PL with AI']]),
+    group('Orders', [['orders', '/admin/orders', 'Purchase orders', 'All POs'], ['planning', '/admin/logistics/planning', 'Container planning', 'Group POs by ready date'], ['load', '/admin/logistics/planning/load', 'Load containers', 'Fill 20GP / 40GP / 40HQ / LCL'], ['shipping', '/admin/orders/shipping', 'Shipping documents', 'Loading confirmations & docs'], ['shipments', '/admin/orders/shipments', 'Shipments', 'In transit & delivered'], ['payments', '/admin/orders/payments', 'Payments', 'Supplier payments & reminders'], ['finance', '/admin/finance', 'Accountant view', 'Payments, documents, slips'], ['orders-import', '/admin/logistics/planning/import', 'Import orders', 'PO / PL with AI']]),
     group('Operations', [['logistics', '/admin/logistics', 'Logistics', 'Shipments & forwarders'], ['crm', '/admin/crm', 'Follow-ups', 'CRM tasks'], ['calendar', '/admin/crm/calendar', 'Calendar', 'Activities & supplier holidays']]),
     group('AI Tools', [['ai', '/admin/ai', 'AI Assistant', 'Ask about your data']]),
   ];

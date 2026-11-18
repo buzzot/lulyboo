@@ -44,9 +44,13 @@ async function poCard(db, supplier, po, back) {
     ${mine.map((r) => { const d = PM.effectiveDue(r); const late = r.status !== 'paid' && d && d < today; return html`<div class="pm-sch ${r.status === 'paid' ? 'paid' : late ? 'late' : ''}">
       <span class="pm-dot"></span>
       <div><b>${r.describe} — ${usd(r.amount)}</b>
-        <div class="sub">${r.status === 'paid' ? `paid ${PL.short(r.paid_at)}${r.paid_ref ? ` · ${r.paid_ref}` : ''}` : html`${d ? html`${late ? 'was due' : r.fixed ? 'due' : 'expected'} <b>${PL.short(d)}</b>` : 'date not known yet'} · ${r.why}${r.paid > 0 ? ` · ${usd(r.paid)} paid, ${usd(r.left)} left` : ''}`} · ${r.from}</div></div>
+        <div class="sub">${r.status === 'paid' ? html`paid ${PL.short(r.paid_at)}${r.paid_ref ? ` · ${r.paid_ref}` : ''}${r.paid_by ? ` · by ${r.paid_by}` : ''} ${slips(r)}` : html`${d ? html`${late ? 'was due' : r.fixed ? 'due' : 'expected'} <b>${PL.short(d)}</b>` : 'date not known yet'} · ${r.why}${r.paid > 0 ? ` · ${usd(r.paid)} paid, ${usd(r.left)} left` : ''}`} · ${r.from}</div></div>
       ${r.status === 'paid' ? html`<span class="cp-tag ok">Paid</span>` : paidBtn(r, back)}</div>`; })}
   </section>`;
+}
+/** Links to the bank slips of a payment. */
+function slips(r) {
+  return html`${(r.paid_files || []).map((f, i) => { const u = `/admin/finance/slips/${r.id}/${i}`; return html`<a class="pm-slip" href="${u}" title="${f.name}" ${/pdf|image/.test(f.type || '') ? raw(`data-preview="${u}?inline=1" data-type="${/image/.test(f.type) ? 'image' : 'doc'}" data-dl="${u}"`) : raw('download')}>📎 slip</a>`; })}`;
 }
 function paidBtn(r, back, cls = 'ghost') {
   return html`<button type="button" class="btn small ${cls}" data-open-dialog="pm-paid" data-pm-id="${r.id}" data-pm-amount="${r.left.toFixed(2)}" data-pm-what="${`${r.supplier} · PO ${r.po} · ${r.describe}`}" data-pm-back="${back}">Mark paid…</button>`;
@@ -130,7 +134,7 @@ module.exports = function paymentRoutes(router, { db, config }) {
           ${undated.length ? html`<div class="pm-wk">No date yet</div>${undated.map(row)}` : ''}
           ${!over.length && !groups.size && !undated.length ? html`<p class="sub">Nothing to pay ${q.range === 'all' ? '' : 'in this period'}. ${rows.length ? '' : 'Payment terms are read from each PO ("Payment: …"); set them on a PO page if a PO has none.'}</p>` : ''}
         </section>
-        ${recentPaid.length ? html`<section class="card"><div class="head-row"><h2>Recently paid</h2></div>${recentPaid.map((r) => html`<div class="pm-row paid"><div class="pm-d"><b>${PL.short(r.paid_at)}</b></div><div><b>${r.supplier}</b><div class="sub">PO ${r.po} · ${r.no} of ${r.of_n || r.no}</div></div><div>${r.describe}<div class="sub">${r.paid_ref || ''}</div></div><div class="pm-amt">${usd(r.paid)}</div><div></div><div class="pm-act"><form method="post" action="${BASE}/${r.id}/reopen" class="inline" data-confirm="Undo this payment?"><input type="hidden" name="back" value="${req.url}"><button class="link small">Undo</button></form></div></div>`)}</section>` : ''}
+        ${recentPaid.length ? html`<section class="card"><div class="head-row"><h2>Recently paid</h2></div>${recentPaid.map((r) => html`<div class="pm-row paid"><div class="pm-d"><b>${PL.short(r.paid_at)}</b></div><div><b>${r.supplier}</b><div class="sub">PO ${r.po} · ${r.no} of ${r.of_n || r.no}</div></div><div>${r.describe}<div class="sub">${[r.paid_ref, r.paid_by ? `by ${r.paid_by}` : ''].filter(Boolean).join(' · ')}</div></div><div class="pm-amt">${usd(r.paid)}</div><div>${slips(r)}</div><div class="pm-act"><form method="post" action="${BASE}/${r.id}/reopen" class="inline" data-confirm="Undo this payment?"><input type="hidden" name="back" value="${req.url}"><button class="link small">Undo</button></form></div></div>`)}</section>` : ''}
         </div><aside>
         <section class="card pm-side"><h2>Weekly report</h2>
           <p class="sub">A PDF of next week's payments (plus anything overdue), made every ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][st.report_weekday ?? PM.DEF.report_weekday]} at ${st.report_hour ?? PM.DEF.report_hour}:00${st.report_to_accountant && st.accountant_email ? html` and emailed to <b>${st.accountant_email}</b>` : ''}.</p>

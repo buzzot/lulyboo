@@ -410,7 +410,7 @@ create table if not exists public.staff_users (
   name            text not null,
   username        text not null,
   email           text not null,
-  role            text not null check (role in ('admin','director','manager')),
+  role            text not null check (role in ('admin','director','manager','accountant')),
   password_hash   text,
   status          text not null default 'invited' check (status in ('invited','active','disabled')),
   must_change     boolean not null default false,
@@ -1107,3 +1107,12 @@ alter table public.settings add column if not exists report_telegram  boolean no
 -- Per-PO documents alert
 alter table public.settings add column if not exists docs_telegram boolean not null default true;
 alter table public.settings add column if not exists docs_reminded_on date;
+
+-- Accountant (see accountant.sql)
+alter table public.suppliers add column if not exists bank_beneficiary text;
+alter table public.suppliers add column if not exists bank_name text;
+alter table public.suppliers add column if not exists bank_swift text;
+alter table public.suppliers add column if not exists bank_account text;
+alter table public.suppliers add column if not exists bank_address text;
+alter table public.plan_files add column if not exists signed boolean not null default false;
+alter table public.po_payments add column if not exists paid_by text;
