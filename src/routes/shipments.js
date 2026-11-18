@@ -12,6 +12,7 @@ const { guard } = require('./admin');
 const PL = require('../planning');
 const SC = require('../schedules');
 const FW = require('../forwarding');
+const SD = require('../shipdocs');
 
 const BASE = '/admin/orders/shipments';
 const now = () => new Date().toISOString();
@@ -209,16 +210,58 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     for (const e of r.entries) ev.push([day(e.entry_date || e.created_at), '🛃', `Customs entry ${e.entry_no || ''}`, `duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}${e.status === 'pending' ? ' · to review' : ''}`]);
     if (r.delivered) ev.push([r.delivered, '✅', `Delivered${(r.c || r.sc).delivered_to ? ` to ${(r.c || r.sc).delivered_to}` : ''}`, (r.c || r.sc).delivery_note || '']);
     ev.sort((a, b) => String(b[0]).localeCompare(String(a[0])));
-    // documents
+    // documents — each with its files (preview in a popup, download), customs linked to its record
     const files = r.scs.length ? await db.list('plan_files').catch(() => []) : [];
     const sFiles = files.filter((x) => r.scs.some((s) => s.id === x.shipment_id));
-    const has = (re) => sFiles.some((x) => re.test(x.kind || ''));
+    const ups = r.c ? (await db.list('fwd_updates', { filters: { container_id: r.c.id } }).catch(() => [])).filter((x) => ['accepted', 'logged'].includes(x.status)) : [];
+    const canSee = (t) => /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(t || '');
+    const fl = (name, url, type, dl) => ({ name, url, type: type || '', dl: dl || url });
+    const pf = (x) => fl(x.name, `/admin/logistics/planning/files/${x.id}`, x.content_type);
+    const of = (re) => sFiles.filter((x) => re.test(x.kind || '')).map(pf);
+    const fwdFiles = (re) => ups.filter((u) => re.test(u.facts?.doc_type || '')).flatMap((u) => (u.files || []).map((x, i) => fl(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type)));
     const fwdDocs = new Set((f.docs || []).map((d) => d.type));
+    const bl = [f.hbl_no ? `HBL ${f.hbl_no}` : '', f.mbl_no ? `MBL ${f.mbl_no}` : ''].filter(Boolean).join(' · ');
     const docs = [
-      ['Commercial invoice', has(/invoice/i)], ['Packing list', has(/packing/i)], [r.kind === 'courier' ? 'Courier waybill' : r.kind === 'lcl' ? 'House B/L' : 'Bill of lading', has(/bill of lading/i) || !!f.hbl_no || !!f.mbl_no],
-      ...(r.kind === 'courier' ? [] : [['Arrival notice', fwdDocs.has('arrival_notice') || !!r.arrivedOn], ['Customs entry (7501)', r.entries.some((e) => e.status === 'saved')]]),
-      ['Delivery receipt / POD', ((r.c || r.sc).delivery_files || []).length > 0],
+      { l: 'Commercial invoice', files: of(/invoice/i) },
+      { l: 'Packing list', files: of(/packing/i) },
+      ...(r.kind === 'lcl' ? [{ l: 'Warehouse receipt (FCR)', files: of(/warehouse/i) }] : []),
+      { l: r.kind === 'courier' ? 'Courier waybill' : r.kind === 'lcl' ? 'House B/L' : 'Bill of lading', files: [...of(/bill of lading|waybill/i), ...fwdFiles(/bill|bl/i)], note: bl, okIf: !!(f.hbl_no || f.mbl_no) },
+      ...(of(/loading photo/i).length ? [{ l: 'Loading photos', files: of(/loading photo/i), gallery: true }] : []),
+      ...(r.kind === 'courier' ? [] : [
+        { l: 'Booking / shipping advice', files: fwdFiles(/booking|shipping_advice|so\b/i), okIf: fwdDocs.has('booking') || fwdDocs.has('shipping_advice'), optional: true },
+        { l: 'Arrival notice', files: fwdFiles(/arrival/i), okIf: fwdDocs.has('arrival_notice') || !!r.arrivedOn },
+      ]),
+      ...(r.kind === 'courier' ? [] : [{ l: 'Customs entry (7501)', customs: true, files: r.entries.flatMap((e) => (e.files || []).map((x, i) => fl(x.name, `/admin/logistics/customs/${e.id}/file/${i}`, x.type))), okIf: r.entries.some((e) => e.status === 'saved') }]),
+      { l: 'Delivery receipt / POD', files: ((r.c || r.sc).delivery_files || []).map((x, i) => fl(x.name, `${BASE}/${r.id}/file/${i}`, x.type)) },
     ];
+    const fileA = (x, g) => (canSee(x.type) ? html`<a class="shp-fa" href="${x.url}?inline=1" data-preview="${x.url}?inline=1" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}" ${g ? raw(`data-gallery="${g}"`) : ''} title="Preview">${x.name}</a>` : html`<a class="shp-fa" href="${x.dl}" title="Download">${x.name}</a>`);
+    // container, voyage, delays
+    const sailing = r.c?.sailing_id ? await db.get('sailings', r.c.sailing_id).catch(() => null) : null;
+    const planEtd = sailing?.etd ? day(sailing.etd) : null;
+    const planEta = sailing?.eta ? day(sailing.eta) : planEtd && sailing?.transit_days ? PL.addDays(planEtd, Number(sailing.transit_days)) : null;
+    const lateBy = (planned, act) => (planned && act ? daysBetween(planned, act) : 0);
+    const dep = { plan: planEtd, now: day(f.atd) || day(f.etd), actual: !!f.atd };
+    const arr = { plan: planEta, now: day(f.ata) || day(f.eta), actual: !!f.ata };
+    const changes = [];
+    for (const u of ups) for (const x of u.applied || []) if (['etd', 'eta', 'atd', 'cy_cutoff', 'si_cutoff', 'vessel', 'loading_date'].includes(x.key) && x.from && x.to && String(x.from) !== String(x.to)) {
+      const d = /date|etd|eta|atd|cutoff/.test(x.key) && /^\d{4}-\d\d-\d\d/.test(String(x.from)) ? daysBetween(day(x.from), day(x.to)) : null;
+      changes.push({ at: day(u.decided_at || u.created_at), what: x.label, from: /^\d{4}-/.test(String(x.from)) ? sh(x.from) : x.from, to: /^\d{4}-/.test(String(x.to)) ? sh(x.to) : x.to, d, src: FW.DOC_TYPES[u.facts?.doc_type] || 'Forwarder update' });
+    }
+    if (f.eta_prev && f.eta && !changes.some((x) => x.what === 'ETA')) changes.push({ at: day(f.eta_changed_at), what: 'ETA', from: sh(f.eta_prev), to: sh(f.eta), d: daysBetween(day(f.eta_prev), day(f.eta)), src: 'Forwarder update' });
+    changes.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const scF = r.scs.map((s) => s.facts || {});
+    const cNo = fmtCont(f.container_no || r.c?.container_no || SD.cleanNo(scF.map((x) => x.container_no).find((v) => SD.cleanNo(v))) || '');
+    const seal = f.seal_no || r.c?.seal_no || scF.map((x) => x.seal_no).find((v) => SD.cleanNo(v)) || '';
+    const tot = (k) => r.lines.reduce((a, l) => a + (Number(l[k]) || 0), 0);
+    const int = (v) => Number(v || 0).toLocaleString('en-US');
+    const n2 = (v) => (Math.round(Number(v) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fact = (label, v, small = '', cls = '') => html`<div class="shp-fct ${cls}"><span>${label}</span><b>${v || raw('<i class="fw-none">—</i>')}</b>${small ? html`<small>${small}</small>` : ''}</div>`;
+    const leg = (label, port, x, est, act) => { const late = lateBy(x.plan, x.now);
+      return html`<div class="shp-leg"><span class="sub">${label}</span><b>${port || '—'}</b>
+        <div class="shp-leg-d">${x.now ? html`<b>${sh(x.now)}</b> <span class="sub">${x.actual ? act.toLowerCase() : est}</span>` : html`<span class="sub">${est} not known yet</span>`}</div>
+        ${x.plan ? html`<div class="sub">planned ${sh(x.plan)}${late ? html` <span class="shp-f ${late > 0 ? 'amb' : 'grn'}">${late > 0 ? `${late} day${late === 1 ? '' : 's'} late` : `${-late} day${late === -1 ? '' : 's'} early`}</span>` : x.now ? ' · on time' : ''}</div>` : ''}</div>`; };
+    const htsOf = (l) => { for (const e of r.entries) for (const cl of e.lines || []) for (const p of cl.products || []) if ((p.line_id && p.line_id === l.id) || (l.sku && p.code && p.code.replace(/\W/g, '').toUpperCase() === String(l.sku).replace(/\W/g, '').toUpperCase())) return { hts: cl.hts, rate: cl.rate, entry: e.id }; return null; };
+    const prodHts = (l) => { const pr = prods.find((p) => p.supplier_id === l.supplier_id && ((l.sku && p.sku === l.sku) || (l.product && p.name === l.product))); return pr?.hts_verified_code || pr?.hts_code || ''; };
     const rec = {}; for (const x of ((r.c || r.sc).received || [])) rec[x.line_id] = x;
     const cost = (r.freight || 0) + (r.duty || 0) + (r.drayage || 0);
     const editable = r.stage !== 'delivered';
@@ -237,11 +280,31 @@ module.exports = function shipmentRoutes(router, { db, config }) {
           ${r.flags.length ? html`<div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}</div>` : ''}
           <div class="shp-two">
             <div>
+              ${r.kind === 'courier' ? html`<h3>Parcel</h3><div class="shp-facts">${fact('Courier', r.forwarder)}${fact('Tracking no.', r.sub.split(' · ')[1] || '')}${fact('Picked up', sh(r.from))}${fact('Cartons · m³', [tot('cartons') ? `${int(tot('cartons'))} ctns` : '', tot('cbm') ? `${n2(tot('cbm'))} m³` : ''].filter(Boolean).join(' · '))}</div>`
+              : html`<h3>Voyage</h3>
+              <div class="shp-voy">
+                ${leg('Departure', f.pol || portName(r.c?.port), dep, 'ETD', 'Sailed')}
+                <div class="shp-voy-mid">${dep.now && arr.now ? (() => { const pct = arr.actual ? 100 : !dep.actual ? 0 : Math.max(4, Math.min(96, Math.round((daysBetween(dep.now, today) / Math.max(1, daysBetween(dep.now, arr.now))) * 100))); return html`<div class="shp-vbar"><i style="width:${pct}%"></i><em style="left:${pct}%">🚢</em></div><span class="sub">${daysBetween(dep.now, arr.now)} days at sea${dep.actual && !arr.actual ? ` · ${Math.max(0, daysBetween(today, arr.now))} to go` : ''}</span>`; })() : html`<span class="sub">no sailing dates yet — add a forwarder update</span>`}</div>
+                ${leg('Arrival', f.pod || 'Los Angeles / Long Beach', arr, 'ETA', 'Arrived')}
+              </div>
+              <h3>Container &amp; booking</h3>
+              <div class="shp-facts">
+                ${fact('Forwarder', f.forwarder || r.forwarder, f.booking_no ? `booking ${f.booking_no}` : '')}
+                ${fact('Carrier · vessel', [f.carrier, f.vessel].filter(Boolean).join(' · '), f.voyage ? `voyage ${f.voyage}` : '')}
+                ${fact(r.kind === 'lcl' ? 'Container (shared)' : 'Container', cNo, [r.kind === 'lcl' ? 'LCL' : BOXN[r.c?.box] || f.container_type, seal ? `seal ${seal}` : ''].filter(Boolean).join(' · '), 'mono')}
+                ${fact('House B/L', f.hbl_no || r.scs.map((s) => SD.cleanNo(s.bl_no)).find(Boolean) || '', '', 'mono')}
+                ${fact('Master B/L', f.mbl_no, '', 'mono')}
+                ${dep.actual ? fact('Free time', r.lfd ? `until ${sh(r.lfd)}` : '', r.lfd && !r.delivered ? (daysBetween(today, r.lfd) >= 0 ? `${daysBetween(today, r.lfd)} days left` : `${-daysBetween(today, r.lfd)} days over`) : '', r.lfd && !r.delivered && r.lfd < today ? 'bad' : '') : fact('Cut-off', f.cy_cutoff ? `CY ${sh(f.cy_cutoff)}` : f.cfs_cutoff ? `CFS ${sh(f.cfs_cutoff)}` : '', f.si_cutoff ? `SI ${sh(f.si_cutoff)}` : '')}
+                ${fact('Cargo', [tot('cartons') ? `${int(tot('cartons'))} ctns` : '', tot('cbm') ? `${n2(tot('cbm'))} m³` : ''].filter(Boolean).join(' · '), tot('gross_kg') ? `${int(Math.round(tot('gross_kg')))} kg` : '')}
+                ${fact('Price', f.ocean_usd ? usd(f.ocean_usd) : r.freight ? usd(r.freight) : '', f.rate_valid ? `valid to ${sh(f.rate_valid)}` : '')}
+              </div>
+              <h3>Changes &amp; delays ${changes.length ? html`<span class="sub">${changes.length}</span>` : ''}</h3>
+              ${changes.length ? html`<ul class="shp-chg">${changes.map((x) => html`<li><span class="sub">${sh(x.at)}</span><span><b>${x.what}</b> ${x.from} → <b>${x.to}</b>${x.d ? html` <span class="shp-f ${x.d > 0 ? 'amb' : 'grn'}">${x.d > 0 ? `+${x.d}` : x.d} day${Math.abs(x.d) === 1 ? '' : 's'}</span>` : ''}</span><span class="sub">${x.src}</span></li>`)}</ul>` : html`<p class="sub shp-none">No changes from the forwarder${dep.plan ? ' — on the planned sailing' : ''}.</p>`}`}
               <h3>What's in it</h3>
-              <div class="table-wrap"><table class="list shp-t"><thead><tr><th>PO</th><th>SKU</th><th>Product</th><th class="r">Ctns</th><th class="r">Pcs</th><th class="r">Landed / pc</th>${r.stage === 'delivered' ? html`<th class="r">Received</th>` : ''}</tr></thead><tbody>
-                ${r.lines.map((l) => { const up = Number(l.unit_price) || null; const dp = dutyPc(l); const fp = freightPc(l); const landed = up != null ? up + (dp || 0) + (fp || 0) : null; const rc = rec[l.id];
-                  return html`<tr><td><a href="/admin/orders/view?supplier=${l.supplier_id}&po=${encodeURIComponent(l.po)}">${l.po}</a></td><td class="cu-mono">${l.sku || '—'}</td><td>${l.product || '—'}${l.split_no ? html` <em class="lp-chip-pt">part ${l.split_no}</em>` : ''}</td><td class="r">${l.cartons != null ? Number(l.cartons).toLocaleString('en-US') : '—'}</td><td class="r">${l.qty != null ? Number(l.qty).toLocaleString('en-US') : '—'}</td>
-                    <td class="r">${landed != null ? html`<b>${usd(landed, 2)}</b><div class="sub">${[usd(up, 2), dp != null ? `duty ${usd(dp, 2)}` : '', fp != null ? `freight ${usd(fp, 2)}` : ''].filter(Boolean).join(' + ')}</div>` : html`<span class="sub">${[dp != null ? `duty ${usd(dp, 2)}` : '', fp != null ? `freight ${usd(fp, 2)}` : ''].filter(Boolean).join(' + ') || '—'}</span>`}</td>
+              <div class="table-wrap"><table class="list shp-t"><thead><tr><th>PO</th><th>SKU</th><th>Product</th><th class="r">Ctns</th><th class="r">Pcs</th><th class="r">m³</th><th>HTS</th>${r.stage === 'delivered' ? html`<th class="r">Received</th>` : ''}</tr></thead><tbody>
+                ${r.lines.map((l) => { const h = htsOf(l); const rc = rec[l.id];
+                  return html`<tr><td><a href="/admin/orders/view?supplier=${l.supplier_id}&po=${encodeURIComponent(l.po)}">${l.po}</a></td><td class="cu-mono">${l.sku || '—'}</td><td>${l.product || '—'}${l.split_no ? html` <em class="lp-chip-pt">part ${l.split_no}</em>` : ''}</td><td class="r">${l.cartons != null ? int(l.cartons) : '—'}</td><td class="r">${l.qty != null ? int(l.qty) : '—'}</td><td class="r">${l.cbm != null ? n2(l.cbm) : '—'}</td>
+                    <td>${h ? html`<a class="cu-mono" href="/admin/logistics/customs?review=${h.entry}" title="Open the customs entry">${h.hts}</a>${h.rate != null ? html` <span class="sub">${h.rate}%</span>` : ''}` : html`<span class="sub">${prodHts(l) || '—'}</span>`}</td>
                     ${r.stage === 'delivered' ? html`<td class="r">${rc ? html`${rc.received}${rc.received < rc.shipped ? html` <span class="shp-f red">−${rc.shipped - rc.received}</span>` : ''}` : '—'}</td>` : ''}</tr>`; })}
               </tbody></table></div>
               <h3>Timeline</h3>
@@ -249,15 +312,20 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             </div>
             <div>
               <h3>Documents</h3>
-              <div class="shp-docs">${docs.map(([l, ok]) => html`<div><span>📄 ${l}</span><span class="shp-f ${ok ? 'grn' : 'gry'}">${ok ? '✓' : 'waiting'}</span></div>`)}</div>
-              ${((r.c || r.sc).delivery_files || []).map((x, i) => html`<p class="sub"><a href="${BASE}/${r.id}/file/${i}?inline=1" target="_blank" rel="noopener">📄 ${x.name}</a></p>`)}
-              <h3>Cost</h3>
+              <div class="shp-docs2">${docs.map((d) => { const ok = d.files.length > 0 || !!d.okIf; return html`<div class="shp-doc ${ok ? 'ok' : ''}">
+                <div class="shp-doc-h"><b>${d.l}</b><span class="shp-f ${ok ? 'grn' : 'gry'}">${ok ? (d.files.length ? (d.files.length > 1 ? `${d.files.length} files` : '✓') : '✓ no file') : d.optional ? 'optional' : 'waiting'}</span></div>
+                ${d.files.length ? html`<div class="shp-doc-f">${d.files.map((x) => fileA(x, d.gallery ? `g-${r.id}` : null))}</div>` : ''}
+                ${d.note ? html`<div class="sub cu-mono">${d.note}</div>` : ''}
+                ${d.customs ? r.entries.map((e) => html`<a class="shp-cu" href="/admin/logistics/customs?review=${e.id}"><span><b class="cu-mono">${e.entry_no || 'Entry'}</b> · ${sh(e.entry_date || e.created_at)}${e.status === 'pending' ? html` <span class="shp-f amb">to review</span>` : ''}</span><span>duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}</span><span class="sub">${[...new Set((e.lines || []).map((x) => x.hts).filter(Boolean))].slice(0, 4).join(' · ')}</span><span class="shp-cu-go">Customs record →</span></a>`) : ''}
+              </div>`; })}</div>
+              <details class="shp-cost-d"><summary><b>Cost</b> <span class="sub">${cost ? usd(cost, 2) : 'nothing yet'}</span></summary>
               <table class="shp-ct"><tbody>
                 <tr><td>Freight${r.forwarder ? ` (${r.forwarder})` : ''}</td><td class="r">${r.freight ? usd(r.freight, 2) : html`<span class="sub">—</span>`}</td></tr>
                 <tr><td>Duty + MPF/HMF</td><td class="r">${r.duty ? usd(r.duty, 2) : html`<span class="sub">${r.kind === 'courier' ? '—' : 'when the 7501 is in'}</span>`}</td></tr>
                 <tr><td>Delivery / drayage</td><td class="r">${r.drayage ? usd(r.drayage, 2) : html`<span class="sub">add when invoiced</span>`}</td></tr>
                 <tr class="tot"><td>Total</td><td class="r">${usd(cost, 2)}</td></tr></tbody></table>
               ${r.c ? html`<form method="post" action="${BASE}/${r.id}/cost" class="shp-dray"><label>Delivery / drayage USD <input name="drayage" type="number" min="0" step="0.01" value="${r.drayage ?? ''}"></label><button class="btn ghost small">Save</button></form>` : ''}
+              </details>
             </div>
           </div>
         </section>

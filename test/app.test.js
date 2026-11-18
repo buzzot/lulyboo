@@ -3614,7 +3614,8 @@ test('shipments: shipped containers and courier parcels, stages and flags, detai
   // detail: landed cost per piece, timeline, cost
   const det = (await req(base, 'GET', `/admin/orders/shipments/${c2.id}`, { cookie })).text;
   assert.match(det, /Arrived · customs/); assert.match(det, /Customs entry 9T2-0090981-5/);
-  assert.match(det, /\$2\.09<\/b><div class="sub">\$1\.45 \+ duty \$0\.64/);
+  assert.match(det, /Voyage/); assert.match(det, /Container &amp; booking/); assert.match(det, /Customs record →/); assert.match(det, /SNAL2610035A/);
+  assert.doesNotMatch(det, /Landed \/ pc/);
   assert.match(det, /Mark delivered…/);
 
   // mark delivered with a 2-carton shortage
