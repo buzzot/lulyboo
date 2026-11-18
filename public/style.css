@@ -2784,3 +2784,9 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .oi-r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 12px;border-top:1px solid #f0ede8}.oi-r:first-child{border-top:0}
 .oi-r .r{display:flex;gap:10px;align-items:center;flex-shrink:0}.oi-nos{color:#9a5b00;font-weight:600}.oi-empty{margin:8px 0 0}
 .oi-acts{display:flex;gap:14px;align-items:center}
+/* Purchase orders list: PO and supplier get room, status stays narrow */
+.or-table th:nth-child(1),.or-table td:nth-child(1){white-space:nowrap;min-width:110px}
+.or-table th:nth-child(2),.or-table td:nth-child(2){min-width:230px}
+.or-table td:nth-child(6){white-space:nowrap}
+.or-table th:nth-child(8),.or-table td:nth-child(8){width:220px;max-width:220px}
+.or-needs{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}

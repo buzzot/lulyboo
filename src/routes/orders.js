@@ -104,7 +104,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td class="r">${p.cbm ? n2(p.cbm) : '—'}${p.cbmMissing && p.cbm ? html`<span class="sub"> +?</span>` : ''}</td>
             <td>${p.first ? (p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`) : '—'}</td>
             <td>${p.ports.map(portName).filter(Boolean).join(', ') || html`<span class="sub">To confirm</span>`}</td>
-            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? ctn(ci, p.lines).map((x) => html`<div><a class="or-ctn" href="${x.url}">📦 ${x.text}</a></div>`) : ''}</td>
+            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub or-needs" title="${`Needs: ${p.pending.join(', ')}`}">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? ctn(ci, p.lines).map((x) => html`<div><a class="or-ctn" href="${x.url}">📦 ${x.text}</a></div>`) : ''}</td>
             <td>${p.docs.length ? html`<a href="${poUrl(p.supplier_id, p.po)}#docs">📎 ${p.docs.length}</a>` : '—'}</td></tr>`)}</tbody></table></div>
           ${list.length ? '' : html`<p class="muted or-empty">${all.length ? 'No purchase orders match.' : 'No purchase orders yet. Import a supplier report or upload a PO to start.'}</p>`}</div>`,
     }));
