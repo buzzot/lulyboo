@@ -68,7 +68,8 @@ module.exports = function paymentRoutes(router, { db, config }) {
   const back = (f, def = BASE) => (String(f.back || '').startsWith('/admin/') ? f.back : def);
 
   router.get(BASE, G(async (req, res) => {
-    const { rows, missing } = await PM.list(db);
+    const { rows, missing, ctx } = await PM.list(db);
+    const ctxSups = ctx?.sups || {};
     const st = (await db.list('settings', { limit: 1 }).catch(() => []))[0] || {};
     const q = req.query; const today = PL.today();
     if (missing) return res.html(page({ title: 'Payments', nav: adminNav('payments'), req, flash: takeFlash(req, res), body: html`<h2 class="sl-title">Payments</h2><section class="card"><p>${SQL_MSG}</p></section>` }));
@@ -88,10 +89,21 @@ module.exports = function paymentRoutes(router, { db, config }) {
     const weeks = Array.from({ length: 8 }, (_, i) => { const a = PL.addDays(w0, i * 7); const b = PL.addDays(a, 6); return { a, v: sum(open.filter((r) => r.d && (i === 0 ? r.d <= b : r.d >= a && r.d <= b))) }; });
     const max = Math.max(1, ...weeks.map((w) => w.v));
     const groups = new Map(); for (const r of upcoming) { const w = PM.weekOf(r.d); const lbl = w === w0 ? `This week · ${PL.short(w)} – ${PL.short(PL.addDays(w, 6))}` : `${PL.short(w)} – ${PL.short(PL.addDays(w, 6))}`; if (!groups.has(lbl)) groups.set(lbl, []); groups.get(lbl).push(r); }
+    // hover card: the PO's whole payment schedule + the supplier's default terms
+    const termsCard = (r) => {
+      const sched = rows.filter((x) => x.supplier_id === r.supplier_id && PL.normPo(x.po) === PL.normPo(r.po)).sort((a, b) => a.no - b.no);
+      const base = sched.reduce((a, x) => a + x.amount, 0);
+      const def = (ctxSups[r.supplier_id] || {}).payment_terms;
+      return html`<span class="pmc-h"><b>${r.supplier}</b><span>PO ${r.po}</span></span>
+        <span class="pmc-t">“${r.terms || sched.map((x) => x.describe).join(' + ')}”</span>
+        <span class="pmc-s">${sched.map((x) => { const d = PM.effectiveDue(x); const st = x.status === 'paid' ? 'paid' : d && d < today ? 'late' : ''; return html`<span class="pmc-r ${x.id === r.id ? 'me' : ''} ${st}"><span>${x.no}. ${x.describe}</span><span>${usd(x.amount)}</span><span>${x.status === 'paid' ? `paid ${PL.short(x.paid_at)}` : d ? `${PL.short(d)}${x.fixed ? '' : ' est.'}` : 'date tbc'}</span></span>`; })}</span>
+        <span class="pmc-f">${usd(base)} total · from ${r.from}${def && def !== r.terms ? html`<br>Supplier default: ${def}` : ''}</span>
+        <a href="/admin/orders/view?supplier=${r.supplier_id}&po=${encodeURIComponent(r.po)}#payments">Edit terms on the PO →</a>`;
+    };
     const row = (r) => { const n = r.d ? PM.between(today, r.d) : null; return html`<div class="pm-row ${n != null && n < 0 ? 'over' : ''}">
       <div class="pm-d"><b>${r.d ? PL.short(r.d) : '—'}</b><small>${n == null ? 'no date yet' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} late` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`}</small></div>
       <div><b>${r.supplier}</b><div class="sub"><a href="/admin/orders/view?supplier=${r.supplier_id}&po=${encodeURIComponent(r.po)}#payments">PO ${r.po}</a> · ${r.no} of ${r.of_n || r.no}</div></div>
-      <div>${r.describe}<span class="${r.fixed ? 'pm-fix' : 'pm-est'}">${r.fixed ? 'fixed' : 'est.'}</span><div class="sub">${r.why}</div></div>
+      <div><span class="pmx-tip" tabindex="0" data-popcard>${r.describe}<span class="or-pc-card">${termsCard(r)}</span></span><span class="${r.fixed ? 'pm-fix' : 'pm-est'}">${r.fixed ? 'fixed' : 'est.'}</span><div class="sub">${r.why}</div></div>
       <div class="pm-amt">${usd(r.left)}${r.paid > 0 ? html`<div class="sub">of ${usd(r.amount)}</div>` : ''}</div>
       <div class="sub">${r.from}</div>
       <div class="pm-act">${paidBtn(r, req.url, n != null && n < 0 ? '' : 'ghost')}</div></div>`; };
@@ -128,17 +140,17 @@ module.exports = function paymentRoutes(router, { db, config }) {
         </section>
         <section class="card pm-side"><h2>Reminders</h2>
           <form method="post" action="${BASE}/settings" class="pm-set">
-            <label>Payments: remind <input type="number" name="payment_remind_days" min="1" max="30" value="${st.payment_remind_days ?? PM.DEF.remind_days}"> days before, on the day, and daily when overdue</label>
-            <label>Docs to the broker: <input type="number" name="broker_remind_days" min="1" max="30" value="${st.broker_remind_days ?? PM.DEF.broker_days}"> days before port arrival (ETA)</label>
-            <label>Broker email <input type="email" name="broker_email" value="${st.broker_email || ''}" placeholder="from your last customs entry if empty"></label>
-            <label>Accountant email <input type="email" name="accountant_email" value="${st.accountant_email || ''}" placeholder="accountant@…"></label>
-            <label class="cp-chk"><input type="checkbox" name="report_to_accountant" value="1" ${st.report_to_accountant ? raw('checked') : ''}> Email the weekly PDF to the accountant</label>
-            <label>Weekly report on <select name="report_weekday">${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => html`<option value="${i}" ${(st.report_weekday ?? PM.DEF.report_weekday) === i ? raw('selected') : ''}>${d}</option>`)}</select> at <input type="number" name="report_hour" min="6" max="22" value="${st.report_hour ?? PM.DEF.report_hour}">:00</label>
+            <div class="pm-g"><span title="Also on the due day, and daily while late">Payments</span><span><input type="number" name="payment_remind_days" min="1" max="30" value="${st.payment_remind_days ?? PM.DEF.remind_days}" aria-label="Days before"> days before</span>
+              <span>Docs to broker</span><span><input type="number" name="broker_remind_days" min="1" max="30" value="${st.broker_remind_days ?? PM.DEF.broker_days}" aria-label="Days before ETA"> days before ETA</span>
+              <span>Weekly report</span><span><select name="report_weekday" aria-label="Day">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => html`<option value="${i}" ${(st.report_weekday ?? PM.DEF.report_weekday) === i ? raw('selected') : ''}>${d}</option>`)}</select> at <input type="number" name="report_hour" min="6" max="22" value="${st.report_hour ?? PM.DEF.report_hour}" aria-label="Hour">:00</span>
+              <span>Broker email</span><input type="email" name="broker_email" value="${st.broker_email || ''}" placeholder="from the last customs entry">
+              <span>Accountant</span><input type="email" name="accountant_email" value="${st.accountant_email || ''}" placeholder="accountant@…">
+              <span></span><label class="cp-chk"><input type="checkbox" name="report_to_accountant" value="1" ${st.report_to_accountant ? raw('checked') : ''}> Email the weekly PDF</label></div>
             <fieldset class="pm-ch"><legend>Send to</legend>
               <div class="pm-ch-h"><span></span><b>Telegram</b><b>Email</b></div>
               <div><span>Payment reminders</span><input type="checkbox" name="payment_telegram" value="1" ${st.payment_telegram !== false ? raw('checked') : ''} aria-label="Payment reminders on Telegram"><input type="checkbox" name="payment_email" value="1" ${st.payment_email !== false ? raw('checked') : ''} aria-label="Payment reminders by email"></div>
               <div><span>Docs to the broker</span><input type="checkbox" name="broker_telegram" value="1" ${st.broker_telegram !== false ? raw('checked') : ''} aria-label="Broker reminders on Telegram"><span class="sub">—</span></div>
-              <div><span>Missing CI / PL after shipping</span><input type="checkbox" name="docs_telegram" value="1" ${st.docs_telegram !== false ? raw('checked') : ''} aria-label="Missing documents on Telegram"><span class="sub">—</span></div>
+              <div><span title="After the goods shipped">Missing CI / PL</span><input type="checkbox" name="docs_telegram" value="1" ${st.docs_telegram !== false ? raw('checked') : ''} aria-label="Missing documents on Telegram"><span class="sub">—</span></div>
               <div><span>Weekly report ready</span><input type="checkbox" name="report_telegram" value="1" ${st.report_telegram !== false ? raw('checked') : ''} aria-label="Weekly report on Telegram"><span class="sub">—</span></div>
             </fieldset>
             <p class="sub">${require('../telegram').enabled() && st.telegram_chat_id ? 'Telegram goes to the portal bot, with Mark paid / Snooze buttons.' : 'Telegram is not connected — connect the bot on the CRM page (Reminders).'} Email reminders go to you.</p>

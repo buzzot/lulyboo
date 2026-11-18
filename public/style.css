@@ -2883,3 +2883,28 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .pd-sup{border:1px solid var(--line);border-radius:10px;padding:9px 12px;display:flex;flex-direction:column;gap:4px;font-size:13px}.pd-sup-h{display:flex;justify-content:space-between;gap:8px}
 .pd-dlg .rp-acts{display:flex;justify-content:flex-end;gap:8px}
 .shp-brk-docs label.cp-chk{display:block;font-size:12.5px;line-height:1.5}.shp-brk-docs label.cp-chk input{vertical-align:-2px;margin-right:4px}
+/* alignment fixes: sidebar edit form one column, consistent labels */
+.sp-ef{grid-template-columns:1fr;gap:9px}
+.sp-ef label{display:flex;flex-direction:column;gap:3px;margin:0}
+.sp-ef .lbl{font-size:11.5px;font-weight:600;color:#6b665f;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-ef input,.sp-ef select,.sp-ef textarea{width:100%;margin:0}
+/* payments settings: number inputs inline, no wrapped ":00" */
+.pm-set label{display:block;line-height:1.9}.pm-set .pm-hr{white-space:nowrap}
+.pm-set input[type=email]{width:100%;display:block;margin-top:3px}
+.pm-g{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px 10px;align-items:center;font-size:13px}
+.pm-g>span:nth-child(odd){color:#6b665f;font-size:12px;font-weight:600}
+.pm-g input[type=number]{width:52px;display:inline-block;padding:4px 6px;margin:0}.pm-g select{width:auto;display:inline-block;padding:4px 6px;margin:0}
+.pm-g input[type=email]{width:100%;padding:5px 8px;font-size:13px;margin:0}.pm-g .cp-chk{display:flex;align-items:center;gap:6px;margin:0}
+/* PO payments: terms form on one baseline */
+.pm-tf{align-items:flex-end}.pm-tf label{margin:0}.pm-tf label.cp-chk{flex-direction:row;align-items:center;gap:6px;height:34px;white-space:nowrap}.pm-tf input{margin:0}.pm-tf .btn{height:34px}
+.pm-g>span:nth-child(even){white-space:nowrap}
+/* Payments: terms hover card */
+.pmx-tip{text-decoration:underline dotted #b9b2a8;text-underline-offset:4px;cursor:default;outline:none}.pmx-tip .or-pc-card{display:none!important}
+.pop-card .pmc-h{display:flex;justify-content:space-between;gap:8px}.pop-card .pmc-h span{color:#6b665f}
+.pop-card .pmc-t{font-style:italic;color:#4a463f;margin:2px 0 4px}
+.pop-card .pmc-s{display:flex;flex-direction:column;border-top:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:4px 0;margin-bottom:4px}
+.pop-card .pmc-r{display:grid;grid-template-columns:minmax(0,1fr) auto 78px;gap:8px;padding:3px 4px;border-radius:6px;font-size:12px}
+.pop-card .pmc-r span:nth-child(2),.pop-card .pmc-r span:nth-child(3){text-align:right;white-space:nowrap}
+.pop-card .pmc-r.me{background:#fbf3ef;font-weight:600}.pop-card .pmc-r.paid{color:#1d6b40}.pop-card .pmc-r.late span:nth-child(3){color:#b23a2a;font-weight:600}
+.pop-card .pmc-f{font-size:11.5px;color:#7a766f}
+.pop-card:has(.pmc-s){width:370px}
