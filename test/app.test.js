@@ -3927,6 +3927,18 @@ test('payments: terms → installments, dates follow the shipment, mark paid, re
   assert.ok(db.tables.plan_containers.find((x) => x.id === c.id).broker_docs_sent_at);
   assert.ok(mails.some((x) => x.to.includes('ops@broker.com') && x.attachments?.[0]?.filename === 'CI.pdf'));
   assert.equal(db.tables.settings[0].broker_email, 'ops@broker.com');
+  // long names are shortened (PO, document, date received), previews on hover, two-step delete
+  const longF = await db.insert('plan_files', { supplier_id: s.id, name: 'Invoice - PI_MTY-MG-0919_PO_TBD (1)_20261008222136.pdf', kind: 'Invoice', path: 'x/pi.pdf', content_type: 'application/pdf', pos: ['800018', 'PO800018'], created_at: '2026-11-18T10:00:00Z' });
+  db.files.set('docs/x/pi.pdf', Buffer.from('%PDF pi'));
+  const det2 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det2, />PO800018-PI-2026-11-18\.pdf</); assert.match(det2, /data-hoverprev=/); assert.match(det2, /data-arm/); assert.match(det2, /class="bd-po">PO 800018</);
+  const docs = await PM.brokerDocs(db, db.tables.plan_containers.find((x) => x.id === c.id));
+  const k = docs.findIndex((x) => x.id === longF.id);
+  r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/broker`, { cookie, form: { to: 'ops@broker.com', subject: 'Docs', body: 'Hi', doc: String(k), go: 'send' } });
+  assert.equal(mails.at(-1).attachments[0].filename, 'PO800018-PI-2026-11-18.pdf');
+  r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/doc/remove`, { cookie, form: { src: 'plan', ref: longF.id, i: '', back: 'broker' } });
+  assert.equal(r.status, 303); assert.match(r.location, /#broker$/);
+  assert.ok(!db.tables.plan_files.some((x) => x.id === longF.id));
 });
 
 test('payments: Telegram reminders can be turned off in settings', async (t) => {

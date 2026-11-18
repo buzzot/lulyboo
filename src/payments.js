@@ -346,12 +346,22 @@ async function brokerDocs(db, c) {
   const scs = (await db.list('ship_confirmations').catch(() => [])).filter((s) => s.container_id === c.id);
   const files = (await db.list('plan_files').catch(() => [])).filter((f) => scs.some((s) => s.id === f.shipment_id) || ((f.pos || []).some((p) => pos.has(`${f.supplier_id}|${PL.normPo(p)}`)) && /invoice|packing|bill of lading/i.test(f.kind || '')));
   const D = require('./podocs');
-  const inBox = (f) => (f.pos || []).filter((p) => pos.has(`${f.supplier_id}|${PL.normPo(p)}`));
-  const out = files.filter((f) => /invoice|packing|bill of lading|warehouse/i.test(f.kind || '')).map((f) => { const t = D.classify(f); return { src: 'plan', id: f.id, name: f.name, kind: t === 'PI' ? 'Proforma invoice' : t === 'PIPL' ? 'Packing list' : t === 'CIPL' ? 'Invoice & packing list' : f.kind, path: f.path, type: f.content_type, po: inBox(f).join(', '), pi: t === 'PI' }; })
+  const inBox = (f) => { const seen = new Set(); return (f.pos || []).filter((p) => pos.has(`${f.supplier_id}|${PL.normPo(p)}`)).map((p) => PL.normPo(p)).filter((p) => !seen.has(p) && seen.add(p)); };
+  const out = files.filter((f) => /invoice|packing|bill of lading|warehouse/i.test(f.kind || '')).map((f) => { const t = D.classify(f); return { src: 'plan', id: f.id, ref: f.id, name: f.name, kind: t === 'PI' ? 'Proforma invoice' : t === 'PIPL' ? 'Packing list' : t === 'CIPL' ? 'Invoice & packing list' : f.kind, path: f.path, type: f.content_type, po: inBox(f).join(', '), pi: t === 'PI', at: f.created_at, url: `/admin/logistics/planning/files/${f.id}` }; })
     .sort((a, b) => String(a.po || 'zz').localeCompare(String(b.po || 'zz')) || String(a.kind).localeCompare(String(b.kind)));
   const ups = (await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
-  for (const u of ups) (u.files || []).forEach((x, i) => { const t = u.facts?.doc_type || ''; if (/arrival|bill|bl|invoice|packing/i.test(t)) out.push({ src: 'fwd', id: `${u.id}:${i}`, name: x.name, kind: /arrival/i.test(t) ? 'Arrival notice' : /bill|bl/i.test(t) ? 'Bill of lading' : t, path: x.path, type: x.type }); });
-  const seen = new Set(); return out.filter((x) => { const k = `${x.name}|${x.kind}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  for (const u of ups) (u.files || []).forEach((x, i) => { const t = u.facts?.doc_type || ''; if (/arrival|bill|bl|invoice|packing/i.test(t)) out.push({ src: 'fwd', id: `${u.id}:${i}`, ref: u.id, i, name: x.name, kind: /arrival/i.test(t) ? 'Arrival notice' : /bill|bl/i.test(t) ? 'Bill of lading' : t, path: x.path, type: x.type, at: u.created_at, url: `/admin/orders/shipping/fwd/${u.id}/files/${i}` }); });
+  const seen = new Set();
+  return out.filter((x) => { const k = `${x.name}|${x.kind}`; if (seen.has(k)) return false; seen.add(k); return true; }).map((x) => ({ ...x, nice: niceName(x) }));
+}
+/** A long file name becomes "PO400001-CI-2026-11-18.pdf" (PO, document, date received); short names stay. */
+const KSHORT = { Invoice: 'CI', 'Invoice & packing list': 'CI-PL', 'Packing list': 'PL', 'Proforma invoice': 'PI', 'Bill of lading': 'BL', 'Warehouse receipt': 'WR', 'Arrival notice': 'AN' };
+function niceName(x) {
+  const name = String(x.name || 'file');
+  if (name.length <= 30) return name;
+  const ext = (/\.[a-z0-9]{2,5}$/i.exec(name) || [''])[0].toLowerCase();
+  const po = String(x.po || '').split(',')[0].trim();
+  return `${po ? `PO${po}-` : ''}${KSHORT[x.kind] || String(x.kind || 'Doc').replace(/\s+/g, '')}-${String(x.at || new Date().toISOString()).slice(0, 10)}${ext}`;
 }
 async function brokerEmail(db) {
   const st = (await db.list('settings', { limit: 1 }).catch(() => []))[0] || {};

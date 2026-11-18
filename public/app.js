@@ -2744,3 +2744,43 @@
     }).catch(function () { b.disabled = false; });
   });
 })();
+
+// Two-step delete: × arms the row ([data-armbox]) and shows the confirm button; a click elsewhere or Esc disarms.
+(function () {
+  var armed = null;
+  var off = function () { if (armed) { armed.classList.remove('arm'); armed = null; } };
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-arm]');
+    if (b) { e.preventDefault(); var box = b.closest('[data-armbox]'); if (armed && armed !== box) off(); if (box) { box.classList.add('arm'); armed = box; var y = box.querySelector('.bd-yes'); if (y) y.focus(); } return; }
+    if (armed && !(e.target.closest && e.target.closest('.bd-yes'))) off();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') off(); });
+})();
+
+// Hover preview of a document ([data-hoverprev] = inline URL): a small floating window after a short pause.
+(function () {
+  if (window.matchMedia && !window.matchMedia('(hover: hover)').matches) return;
+  var card = null, t = null, cur = null;
+  var hide = function () { clearTimeout(t); cur = null; if (card) { card.hidden = true; card.innerHTML = ''; } };
+  document.addEventListener('mouseover', function (e) {
+    var a = e.target.closest && e.target.closest('[data-hoverprev]');
+    if (!a || a === cur) return;
+    hide(); cur = a;
+    t = setTimeout(function () {
+      if (!card) { card = document.createElement('div'); card.className = 'hp-card'; card.hidden = true; document.body.appendChild(card); }
+      var url = a.getAttribute('data-hoverprev');
+      card.innerHTML = '';
+      if (a.getAttribute('data-type') === 'image') { var im = document.createElement('img'); im.src = url; im.alt = ''; card.appendChild(im); }
+      else { var fr = document.createElement('iframe'); fr.src = url + '#toolbar=0&navpanes=0&view=FitH'; fr.title = 'Preview'; fr.setAttribute('tabindex', '-1'); card.appendChild(fr); }
+      var r = (a.closest('[data-hp-host]') || a).getBoundingClientRect(), ra = a.getBoundingClientRect(), w = 340, h = 440;
+      var left = r.left - w - 12 >= 8 ? r.left - w - 12 : Math.min(window.innerWidth - w - 8, r.right + 12);
+      var top = Math.max(8, Math.min(window.innerHeight - h - 8, ra.top + ra.height / 2 - h / 2));
+      card.style.left = left + 'px'; card.style.top = top + 'px'; card.hidden = false;
+    }, 350);
+  });
+  document.addEventListener('mouseout', function (e) {
+    var a = e.target.closest && e.target.closest('[data-hoverprev]');
+    if (a && (!e.relatedTarget || !a.contains(e.relatedTarget))) hide();
+  });
+  document.addEventListener('click', hide); window.addEventListener('scroll', hide, true);
+})();

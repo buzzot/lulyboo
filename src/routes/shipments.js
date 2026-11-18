@@ -358,9 +358,13 @@ module.exports = function shipmentRoutes(router, { db, config }) {
                   <form method="post" action="${BASE}/${r.id}/broker" class="shp-brk-f">
                     <label>To <input type="email" name="to" value="${to}" required placeholder="broker@…"></label>
                     <label>Subject <input name="subject" value="${`Customs documents · ${name}${eta ? ` · ETA ${sh(eta)}` : ''}`}"></label>
-                    <div class="shp-brk-docs">${bd.length ? bd.map((x, i) => html`<label class="cp-chk"><input type="checkbox" name="doc" value="${i}" ${x.pi ? '' : raw('checked')}> ${x.po ? html`<b>PO ${x.po}</b> · ` : ''}${x.kind} · <span class="sub">${x.name}</span>${x.pi ? html` <span class="sub">(proforma — not sent by default)</span>` : ''}</label>`) : html`<span class="sub">No CI / PL / B/L files yet.</span>`}</div>
+                    <div class="shp-brk-docs" data-hp-host>${bd.length ? bd.map((x, i) => { const see = canSee(x.type); const u = `${x.url}?inline=1`;
+                      return html`<div class="bd-r ${x.pi ? 'pi' : ''}" data-armbox><label class="bd-l"><input type="checkbox" name="doc" value="${i}" ${x.pi ? '' : raw('checked')}><span class="bd-po">${x.po ? `PO ${x.po.split(', ').join(', ')}` : '—'}</span><span class="bd-k" title="${x.pi ? 'Proforma — not sent by default' : ''}">${x.kind}</span></label>
+                        ${see ? html`<a class="bd-f" href="${u}" data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.url}" data-gallery="${`bd-${r.id}`}" data-hoverprev="${u}" title="${x.nice !== x.name ? `${x.name} — click to preview` : 'Click to preview'}">${x.nice}</a>` : html`<a class="bd-f" href="${x.url}" title="${`${x.name} — download (no preview for this file type)`}">${x.nice}</a>`}
+                        <span class="bd-x"><button type="button" class="bd-del" data-arm aria-label="${`Delete ${x.name}`}" title="Delete this file">×</button><button class="bd-yes" form="${`bd-rm-${i}`}" title="${`Delete ${x.name} from the portal`}">✓ Delete</button></span></div>`; }) : html`<span class="sub">No CI / PL / B/L files yet.</span>`}</div>
                     <label>Message <textarea name="body" rows="7">${body}</textarea></label>
-                    <div class="shp-brk-a"><button class="btn small" name="go" value="send">Send email</button><button class="link small" name="go" value="mark">Already sent — mark it</button></div></form></details></div>`;
+                    <div class="shp-brk-a"><button class="btn small" name="go" value="send">Send email</button><button class="link small" name="go" value="mark">Already sent — mark it</button></div></form>
+                  ${bd.map((x, i) => html`<form id="${`bd-rm-${i}`}" method="post" action="${BASE}/${r.id}/doc/remove" hidden><input type="hidden" name="src" value="${x.src}"><input type="hidden" name="ref" value="${x.ref}"><input type="hidden" name="i" value="${x.i ?? ''}"><input type="hidden" name="back" value="broker"></form>`)}</details></div>`;
               })() : ''}
               <details class="shp-cost-d"><summary><b>Cost</b> <span class="sub">${cost ? usd(cost, 2) : 'nothing yet'}</span></summary>
               <table class="shp-ct"><tbody>
@@ -421,11 +425,14 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     if (x.src === 'plan') {
       const f = await db.get('plan_files', String(x.ref)).catch(() => null);
       const sc = f && r.scs.find((s) => s.id === f.shipment_id);
-      if (!sc) throw new HttpError(404, 'File not found');
+      const ofPo = f && r.lines.some((l) => l.supplier_id === f.supplier_id && (f.pos || []).some((p) => PL.normPo(p) === PL.normPo(l.po)));
+      if (!sc && !ofPo) throw new HttpError(404, 'File not found');
       await db.docs.remove([f.path]).catch(() => null); await db.remove('plan_files', { id: f.id }); name = f.name;
+      if (sc) {
       const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
       const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
       await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Removed ${f.name} (${by(req)})` }].slice(-60), updated_at: now() });
+      }
     } else if (x.src === 'fwd') {
       const u = await db.get('fwd_updates', String(x.ref)).catch(() => null);
       if (!u || !r.c || u.container_id !== r.c.id) throw new HttpError(404, 'File not found');
@@ -438,7 +445,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       await db.docs.remove([f.path]).catch(() => null);
       await db.update(table, { id }, { delivery_files: list.filter((_, k) => k !== i), updated_at: now() }); name = f.name;
     } else throw new HttpError(400, 'This file can\'t be deleted here');
-    flash(res, 'ok', `Deleted ${name}`); res.redirect(`${BASE}/${r.id}`);
+    flash(res, 'ok', `Deleted ${name}`); res.redirect(`${BASE}/${r.id}${x.back === 'broker' ? '#broker' : ''}`);
   }));
 
   router.post(`${BASE}/:id/delivered`, G(async (req, res) => {
@@ -487,7 +494,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const PM = require('../payments'); const docs = await PM.brokerDocs(db, r.c);
     const pick = [].concat(f.doc || []).map(Number).filter((i) => docs[i]);
     const attachments = [];
-    for (const i of pick) { try { const buf = await db.docs.download(docs[i].path); if (buf?.length) attachments.push({ filename: docs[i].name, content: buf }); } catch { /* skip */ } }
+    for (const i of pick) { try { const buf = await db.docs.download(docs[i].path); if (buf?.length) attachments.push({ filename: docs[i].nice || docs[i].name, content: buf }); } catch { /* skip */ } }
     const { sendEmail } = require('../email');
     await sendEmail(config, { to, subject: String(f.subject || 'Customs documents').slice(0, 200), text: String(f.body || '').slice(0, 10000), attachments });
     await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() });
