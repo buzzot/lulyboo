@@ -1103,3 +1103,7 @@ alter table public.settings add column if not exists payment_telegram boolean no
 alter table public.settings add column if not exists payment_email    boolean not null default true;
 alter table public.settings add column if not exists broker_telegram  boolean not null default true;
 alter table public.settings add column if not exists report_telegram  boolean not null default true;
+
+-- Per-PO documents alert
+alter table public.settings add column if not exists docs_telegram boolean not null default true;
+alter table public.settings add column if not exists docs_reminded_on date;

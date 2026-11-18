@@ -3966,3 +3966,37 @@ test('supplier profile: compact layout with orders (open by default, all on requ
   pg = (await req(base, 'GET', `/admin/suppliers/${s.id}?orders=all`, { cookie })).text;
   assert.match(pg, /<b>399999<\/b>/);
 });
+
+test('shipment: each PO needs its own CI and PL; alert after shipping; request from suppliers', async (t) => {
+  const D = require('../src/podocs');
+  assert.equal(D.classify({ name: 'Invoice - PI_MTY-MG-0919.pdf', kind: 'Invoice' }), 'PI');
+  assert.equal(D.classify({ name: 'PI&PL PO#400001.xlsx', kind: 'Packing list' }), 'PIPL');
+  assert.equal(D.classify({ name: 'CI-PO800018.pdf', kind: 'Invoice' }), 'CI');
+  const db = seedDb(); const realFetch = global.fetch; const mails = [];
+  global.fetch = async (url, opts) => { if (String(url).startsWith('https://api.resend.com')) { mails.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'm' }), { status: 200 }); } return realFetch(url, opts); };
+  process.env.RESEND_API_KEY = 're';
+  const { server, base } = await startServer(db);
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.RESEND_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const h = await db.insert('suppliers', { name: 'Huanger', email: 'h@huanger.cn' });
+  const m = await db.insert('suppliers', { name: 'MGTT', email: 'sales21@jinlf.com' });
+  const y = await db.insert('suppliers', { name: 'Yuanyi', email: 'y@yuanyi.cn' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '20GP', status: 'shipped', created_at: '2026-01-01T00:00:00Z', fwd: { atd: '2026-11-13', eta: '2026-12-01' } });
+  for (const [sid, po] of [[h.id, '800018'], [m.id, '400001'], [y.id, '500024']]) await db.insert('plan_orders', { supplier_id: sid, po, product: 'x', qty: 10, container_id: c.id, shipped: true });
+  await db.insert('plan_files', { supplier_id: h.id, name: 'CI-PO800018.pdf', kind: 'Invoice', pos: ['800018'], path: 'a' });
+  await db.insert('plan_files', { supplier_id: h.id, name: 'PL-PO800018.pdf', kind: 'Packing list', pos: ['800018'], path: 'b' });
+  await db.insert('plan_files', { supplier_id: m.id, name: 'Invoice - PI_MTY.pdf', kind: 'Invoice', pos: ['400001'], path: 'c' });
+  await db.insert('plan_files', { supplier_id: m.id, name: 'PI&PL PO#400001.xlsx', kind: 'Packing list', pos: ['400001'], path: 'd' });
+  const chk = await D.check(db, c);
+  assert.ok(chk.alert); assert.deepEqual(chk.open.map((p) => [p.po, p.missing.join('+')]), [['400001', 'CI'], ['500024', 'CI+PL']]);
+  const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det, /Shipping documents missing for 2 of 3 POs/); assert.match(det, /Documents by PO/); assert.match(det, /only a proforma invoice/); assert.match(det, /Request from 2 suppliers/);
+  const list = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
+  assert.match(list, /Docs: 2 POs missing CI \/ PL/);
+  const r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/request-docs`, { cookie, form: { it: [`${m.id}|400001|CI`, `${y.id}|500024|CI`, `${y.id}|500024|PL`] } });
+  assert.equal(r.status, 303);
+  assert.equal(mails.length, 2);
+  const ym = mails.find((x) => x.to.includes('y@yuanyi.cn'));
+  assert.match(ym.subject, /PO 500024/); assert.match(ym.text, /Commercial invoice for PO 500024/); assert.match(ym.text, /Packing list for PO 500024/);
+  assert.ok(db.tables.ship_confirmations.some((s) => s.supplier_id === y.id && (s.log || []).some((l) => /Asked for CI 500024, PL 500024/.test(l.text))));
+});

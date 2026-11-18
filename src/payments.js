@@ -290,6 +290,19 @@ async function runReminders({ db, config }) {
         [[{ text: '✉ Email broker', url: `${url}/admin/orders/shipments/${c.id}#broker` }, { text: '✓ Already sent', data: `bs:${c.id}` }]]);
     }
   }
+  // per-PO CI / PL still missing after the goods shipped — once a day while open
+  if (st.docs_reminded_on !== today && st.docs_telegram !== false) {
+    await db.update('settings', { id: st.id ?? 1 }, { docs_reminded_on: today }).catch(() => null);
+    const D = require('./podocs');
+    const pre = { lines: await db.list('plan_orders').catch(() => []), scs: await db.list('ship_confirmations').catch(() => []), files: await db.list('plan_files').catch(() => []) };
+    pre.sups = Object.fromEntries((await db.list('suppliers', { select: 'id,name,email' }).catch(() => [])).map((x) => [x.id, x]));
+    for (const c of await db.list('plan_containers').catch(() => [])) {
+      const chk = await D.check(db, c, pre); if (!chk.alert) continue;
+      const f = c.fwd || {};
+      await telegram(db, `📄 <b>Documents missing</b> — ${E(c.name || (c.box === 'LCL' ? 'LCL shipment' : 'Container'))}${f.atd ? ` (sailed ${E(PL.short(day(f.atd)))})` : ' (shipped)'}${f.eta ? ` · ETA ${E(PL.short(day(f.ata || f.eta)))}` : ''}\n${chk.open.map((p) => `${E(p.po)} ${E(p.supplier)}: ${p.missing.join(', ')}`).join('\n')}`,
+        [[{ text: '✉ Request from suppliers', data: `rd:${c.id}` }, { text: 'Open shipment ↗', url: `${url}/admin/orders/shipments/${c.id}` }]]);
+    }
+  }
   // weekly report: Friday 16:00 local (settings), for next Monday–Sunday
   const wd = st.report_weekday ?? DEF.report_weekday; const hr = st.report_hour ?? DEF.report_hour;
   const dow = new Date(today + 'T00:00:00Z').getUTCDay();
@@ -303,12 +316,21 @@ async function runReminders({ db, config }) {
 }
 
 /** Telegram buttons: pp = mark paid in full today, pz = snooze 1 day, bs = docs sent to the broker. */
-async function handleCallback(db, data) {
+async function handleCallback(db, data, config = null) {
   let m = /^(pp|pz):([0-9a-f-]{36})$/.exec(data || '');
   if (m) {
     const { rows } = await list(db); const r = rows.find((x) => x.id === m[2]); if (!r) return 'Payment not found';
     if (m[1] === 'pp') { if (r.status === 'paid') return 'Already paid'; await markPaid(db, r, { date: PL.today(), amount: r.left, ref: 'Telegram', by: 'Telegram' }); return `✅ Paid ${usd(r.left)}`; }
     const until = PL.addDays(PL.today(), 1); await db.update('po_payments', { id: r.id }, { snoozed_until: until }); return `💤 Reminder moved to ${PL.short(until)}`;
+  }
+  m = /^rd:([0-9a-f-]{36})$/.exec(data || '');
+  if (m) {
+    const c = await db.get('plan_containers', m[1]).catch(() => null); if (!c) return 'Shipment not found';
+    const D = require('./podocs'); const chk = await D.check(db, c);
+    const items = chk.open.flatMap((p) => p.missing.map((kind) => ({ sid: p.sid, po: p.po, kind })));
+    if (!items.length) return '✅ Nothing missing any more';
+    const out = await D.request(db, config || {}, c, items, { by: 'Telegram' });
+    return out.sent.length ? `✉ Requested from ${out.sent.join(', ')}${out.failed.length ? ` · not sent: ${out.failed.length}` : ''}` : `Not sent: ${out.failed.join(' · ')}`;
   }
   m = /^bs:([0-9a-f-]{36})$/.exec(data || '');
   if (m) { await db.update('plan_containers', { id: m[1] }, { broker_docs_sent_at: now() }); return '✅ Marked as sent to the broker'; }
@@ -321,7 +343,10 @@ async function brokerDocs(db, c) {
   const pos = new Set(lines.map((l) => `${l.supplier_id}|${PL.normPo(l.po)}`));
   const scs = (await db.list('ship_confirmations').catch(() => [])).filter((s) => s.container_id === c.id);
   const files = (await db.list('plan_files').catch(() => [])).filter((f) => scs.some((s) => s.id === f.shipment_id) || ((f.pos || []).some((p) => pos.has(`${f.supplier_id}|${PL.normPo(p)}`)) && /invoice|packing|bill of lading/i.test(f.kind || '')));
-  const out = files.filter((f) => /invoice|packing|bill of lading|warehouse/i.test(f.kind || '')).map((f) => ({ src: 'plan', id: f.id, name: f.name, kind: f.kind, path: f.path, type: f.content_type }));
+  const D = require('./podocs');
+  const inBox = (f) => (f.pos || []).filter((p) => pos.has(`${f.supplier_id}|${PL.normPo(p)}`));
+  const out = files.filter((f) => /invoice|packing|bill of lading|warehouse/i.test(f.kind || '')).map((f) => { const t = D.classify(f); return { src: 'plan', id: f.id, name: f.name, kind: t === 'PI' ? 'Proforma invoice' : t === 'PIPL' ? 'Packing list' : t === 'CIPL' ? 'Invoice & packing list' : f.kind, path: f.path, type: f.content_type, po: inBox(f).join(', '), pi: t === 'PI' }; })
+    .sort((a, b) => String(a.po || 'zz').localeCompare(String(b.po || 'zz')) || String(a.kind).localeCompare(String(b.kind)));
   const ups = (await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
   for (const u of ups) (u.files || []).forEach((x, i) => { const t = u.facts?.doc_type || ''; if (/arrival|bill|bl|invoice|packing/i.test(t)) out.push({ src: 'fwd', id: `${u.id}:${i}`, name: x.name, kind: /arrival/i.test(t) ? 'Arrival notice' : /bill|bl/i.test(t) ? 'Bill of lading' : t, path: x.path, type: x.type }); });
   const seen = new Set(); return out.filter((x) => { const k = `${x.name}|${x.kind}`; if (seen.has(k)) return false; seen.add(k); return true; });
