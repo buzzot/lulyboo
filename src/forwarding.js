@@ -389,15 +389,8 @@ async function settle(db, containers) {
   for (const c of containers) {
     if (!c.fwd) continue;
     const st = stageOf(c.fwd);
-    if (c.status === 'shipped') {
-      // marked shipped by an early shipping advice (before this fix) while the ETD is still ahead → back to booked
-      if (st === 'booked' && c.fwd.sailed && !c.fwd.atd) {
-        await db.update('plan_containers', { id: c.id }, { status: 'booked', updated_at: now() }).catch(() => null);
-        for (const l of await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => [])) if (l.shipped) await db.update('plan_orders', { id: l.id }, { shipped: false, updated_at: now() }).catch(() => null);
-        c.status = 'booked';
-      }
-      continue;
-    }
+    // a container marked shipped stays shipped — by you on Load containers or by the forwarder's sailing; never undone here
+    if (c.status === 'shipped') continue;
     if (st && st !== 'booked') { await db.update('plan_containers', { id: c.id }, { status: 'shipped', updated_at: now() }).catch(() => null); await shipLines(db, c.id); c.status = 'shipped'; }
   }
 }

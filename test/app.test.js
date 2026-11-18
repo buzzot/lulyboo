@@ -3356,7 +3356,8 @@ test('forwarder: a shipping advice before the ETD is not "sailed" yet; supplier 
   const box = String(await FR.fwdBox(db, c.id, '/x', { supplierBl: 'HKAL2611031A' }));
   assert.match(box, /HKAL2611031A[\s\S]*from the supplier&#39;s B\/L|HKAL2611031A[\s\S]*from the supplier's B\/L/);
   assert.match(box, /<span>ETD<\/span>/);
-  assert.equal(db.tables.plan_containers[0].status, 'booked'); assert.equal(db.tables.plan_orders[0].shipped, false);
+  // marked shipped (by you) stays shipped even though the ship hasn't sailed yet
+  assert.equal(db.tables.plan_containers[0].status, 'shipped'); assert.equal(db.tables.plan_orders[0].shipped, true);
 });
 function PL_add(n) { return new Date(Date.now() + n * 864e5).toISOString().slice(0, 10); }
 
