@@ -2624,3 +2624,19 @@
   dl.addEventListener('paste', function (e) { if (!dl.querySelector('[data-cu-drop]')) return; var fl = e.clipboardData && e.clipboardData.files; if (fl && fl.length) { e.preventDefault(); add(fl); } });
   if (C.review) load(C.review);
 })();
+
+// Custom dropdowns (<details data-dd>): close on outside click / Escape, one open at a time
+(function () {
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details[data-dd][open]').forEach(function (d) { if (!d.contains(e.target)) d.removeAttribute('open'); });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('details[data-dd][open]').forEach(function (d) { d.removeAttribute('open'); var s = d.querySelector('summary'); if (s) s.focus(); });
+  });
+  document.addEventListener('toggle', function (e) {
+    var d = e.target; if (!d.matches || !d.matches('details[data-dd]') || !d.open) return;
+    document.querySelectorAll('details[data-dd][open]').forEach(function (x) { if (x !== d) x.removeAttribute('open'); });
+    var b = d.querySelector('.dd-menu button:not([disabled])'); if (b) b.focus();
+  }, true);
+})();

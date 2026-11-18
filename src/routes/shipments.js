@@ -290,8 +290,10 @@ module.exports = function shipmentRoutes(router, { db, config }) {
               </div>
               <h3>Container &amp; booking</h3>
               <div class="shp-facts">
-                <div class="shp-fct"><span>Forwarder</span>${f.forwarder || r.forwarder ? html`<b>${f.forwarder || r.forwarder}</b>` : ''}
-                  <form method="post" action="${BASE}/${r.id}/forwarder" class="shp-fwsel ${f.forwarder || r.forwarder ? 'chg' : ''}"><select name="forwarder" data-autosubmit aria-label="Forwarder"><option value="">${f.forwarder || r.forwarder ? 'Change…' : 'Choose forwarder…'}</option>${fwdList.map((x) => html`<option value="${x.company}" ${!(f.forwarder || r.forwarder) || x.company !== (f.forwarder || r.forwarder) ? '' : raw('disabled')}>${x.company}</option>`)}</select></form>
+                <div class="shp-fct"><span>Forwarder</span>${f.forwarder || r.forwarder ? html`<b title="${f.forwarder || r.forwarder}">${f.forwarder || r.forwarder}</b>` : ''}
+                  ${fwdList.length ? html`<details class="dd shp-fwdd" data-dd><summary class="${f.forwarder || r.forwarder ? 'dd-link' : 'dd-btn'}">${f.forwarder || r.forwarder ? 'Change' : 'Choose forwarder'}<span class="dd-car" aria-hidden="true">▾</span></summary>
+                    <form method="post" action="${BASE}/${r.id}/forwarder" class="dd-menu" role="menu">${fwdList.map((x) => { const on = x.company === (f.forwarder || r.forwarder); return html`<button name="forwarder" value="${x.company}" role="menuitemradio" aria-checked="${on ? 'true' : 'false'}" class="${on ? 'on' : ''}" ${on ? raw('disabled') : ''}><span class="dd-ck">${on ? '✓' : ''}</span>${x.company}</button>`; })}
+                    <a class="dd-foot" href="/admin/logistics/forwarders">Manage forwarders →</a></form></details>` : html`<a class="sub" href="/admin/logistics/forwarders">Add forwarders</a>`}
                   ${f.booking_no ? html`<small>booking ${f.booking_no}</small>` : ''}</div>
                 ${fact('Carrier · vessel', [f.carrier, f.vessel].filter(Boolean).join(' · '), f.voyage ? `voyage ${f.voyage}` : '')}
                 ${fact(r.kind === 'lcl' ? 'Container (shared)' : 'Container', cNo, [r.kind === 'lcl' ? 'LCL' : BOXN[r.c?.box] || f.container_type, seal ? `seal ${seal}` : ''].filter(Boolean).join(' · '), 'mono')}

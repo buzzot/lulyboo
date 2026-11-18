@@ -2756,3 +2756,14 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .shp-fwsel.chg select:hover,.shp-fwsel.chg select:focus{border-color:var(--line);background-color:#fff}
 .ask-dlg{width:min(440px,92vw)}.ask-b{padding:20px 22px 18px}.ask-m{font-size:15px;font-weight:600;margin:0 0 6px;line-height:1.4}
 .ask-d{margin:0 0 4px;font-size:13px;line-height:1.45}.ask-a{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+/* custom dropdown (details/summary + menu of buttons) */
+.dd{position:relative;display:inline-block}.dd>summary{list-style:none;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px}.dd>summary::-webkit-details-marker{display:none}
+.dd-btn{font-size:12.5px;font-weight:600;border:1px dashed #cdbfe6;background:#faf8ff;color:#5b4a8a;border-radius:8px;padding:4px 9px;margin-top:2px}
+.dd-link{font-size:11.5px;color:#8a8680}.dd-link:hover{color:var(--accent,#c8553d)}
+.dd-car{font-size:9px;opacity:.7;transition:transform .15s}.dd[open] .dd-car{transform:rotate(180deg)}
+.dd-menu{position:absolute;z-index:40;top:calc(100% + 6px);left:0;min-width:230px;max-height:300px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:5px;display:flex;flex-direction:column;animation:dd-in .12s ease-out}
+@keyframes dd-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.dd-menu button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;font-size:13px;cursor:pointer;color:#2b2925}
+.dd-menu button:hover,.dd-menu button:focus-visible{background:#f4f1ec}.dd-menu button.on{color:#1d6b40;font-weight:600;cursor:default;background:#eef7f1}
+.dd-ck{width:14px;font-size:12px;color:#1d6b40}
+.dd-foot{border-top:1px solid #f0ede8;margin-top:4px;padding:7px 9px 3px;font-size:12px;color:#8a8680}.dd-foot:hover{color:var(--accent,#c8553d)}
