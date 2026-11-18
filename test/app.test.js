@@ -2418,7 +2418,7 @@ test('pricing visibility: hidden on products Lulyboo added unless switched on; s
 
   // admin: switch + tag; switching on shows prices, and it is logged
   const sp = (await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text;
-  assert.match(sp, /Portal access[\s\S]*<b>2<\/b> added by Lulyboo — pricing <b>hidden<\/b>[\s\S]*<b>2<\/b> added by the supplier/);
+  assert.match(sp, /Show pricing<\/b> <span class="sub">on 2 products Lulyboo added · <b>hidden<\/b>/);
   assert.match((await req(base, 'GET', `/admin/products/${ours.id}`, { cookie })).text, /🔒 Hidden from Luckibuy/);
   assert.match((await req(base, 'GET', `/admin/products/${theirs.id}`, { cookie })).text, /Supplier&#39;s own product|Supplier's own product/);
   assert.equal((await req(base, 'POST', `/admin/suppliers/${s.id}/pricing`, { cookie, form: { value: '1' } })).status, 303);
@@ -3948,4 +3948,21 @@ test('payments: Telegram reminders can be turned off in settings', async (t) => 
   const s = await db.insert('suppliers', { name: 'H' });
   await db.insert('plan_orders', { supplier_id: s.id, po: '1', qty: 10, unit_price: 1, po_terms: 'Payment: 100% before shipment.', ready_date: PL.addDays(PL.today(), -1) });
   if (C.localNow().hour >= 9) { await PM.runReminders({ db, config: { publicUrl: 'x' } }); assert.ok(!sent.some((x) => /Overdue/.test(x.text)), 'no payment Telegram when switched off'); }
+});
+
+test('supplier profile: compact layout with orders (open by default, all on request)', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const PL = require('../src/planning');
+  const s = await db.insert('suppliers', { name: 'MGTT', crm_status: 'Active', contact_name: 'Jenna', email: 'sales21@jinlf.com' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '400001', product: 'Night light', qty: 3000, unit_price: 3, ready_date: PL.addDays(PL.today(), 10) });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '399999', product: 'Old lamp', qty: 100, unit_price: 2, shipped: true });
+  let pg = (await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie })).text;
+  assert.match(pg, /class="sp-kpi"/); assert.match(pg, /id="orders"/);
+  assert.match(pg, /<b>400001<\/b>/); assert.doesNotMatch(pg, /<b>399999<\/b>/);
+  assert.match(pg, /\$9,000/); assert.match(pg, /mailto:sales21@jinlf\.com/);
+  pg = (await req(base, 'GET', `/admin/suppliers/${s.id}?orders=all`, { cookie })).text;
+  assert.match(pg, /<b>399999<\/b>/);
 });

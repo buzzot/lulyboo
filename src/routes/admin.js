@@ -244,7 +244,7 @@ function licenseCard(s) {
         ${lic.legibility_notes ? html`<dt>Image notes</dt><dd>${lic.legibility_notes}</dd>` : ''}
         ${reg?.found && reg.sources?.length ? html`<dt>Sources</dt><dd>${reg.sources.map((x, i) => html`${i ? ' · ' : ''}<a href="${x.url}" target="_blank" rel="noopener noreferrer">${x.title || x.url}</a>`)}</dd>` : ''}
       </dl></details>` : ''}
-    <details class="lic-edit" ${code || s.business_license_path ? '' : raw('open')}><summary>${code || s.business_license_path ? 'Edit number or replace file' : 'Add license'}</summary>${form}</details>
+    <details class="lic-edit"><summary>${code || s.business_license_path ? 'Edit number or replace file' : 'Add license'}</summary>${form}</details>
     ${info ? html`<p class="sub lic-foot">Checked ${fmt.date(info.checked_at)} by AI · can be wrong, confirm on the official register.${info.errors?.length ? html` <span class="neg">${info.errors.map((e) => short(e, 120)).join(' · ')}</span>` : ''}</p>` : ''}
   </section>`;
 }
@@ -1012,88 +1012,125 @@ module.exports = function adminRoutes(router, { db, config }) {
       body: html`
       ${fl?.type === 'link' ? html`<div class="flash invite"><strong>${fl.msg.split('|||')[0]}</strong> The link is shown only once.<input class="copy" readonly value="${fl.msg.split('|||')[1] || ''}" data-copy><button class="btn small" type="button" data-copybtn>Copy</button></div>` : ''}
       ${s.needs_review ? html`<div class="flash warn"><b>Created automatically</b> from an RFQ logged by Hermes. Check the details, then <form method="post" action="/admin/suppliers/${s.id}/approve" class="inline"><button class="link">mark as reviewed</button></form>.</div>` : ''}
-      <div class="head-row"><div><h1>${s.name}</h1><p class="muted">${s.crm_status}${s.country ? ` · ${s.country}` : ''}${s.rating ? ` · ${'★'.repeat(s.rating)}` : ''}${s.registered_at ? ` · registered ${fmt.date(s.registered_at)}` : ' · not registered yet'}</p></div>
-        <div class="actions">
-          <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button class="btn small ghost">${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>
-        </div></div>
-      ${s.active ? '' : html`<div class="flash warn">Portal access is blocked for this supplier.</div>`}
-      ${(() => {
-        const PV = require('../pricing-visibility');
+      ${await (async () => {
+        // ── data for the compact profile ──
+        const PL = require('../planning'); const OR = require('./orders'); const PV = require('../pricing-visibility');
+        const today0 = PL.today();
+        const lines = await db.list('plan_orders', { filters: { supplier_id: s.id } }).catch(() => []);
+        const pfiles = await db.list('plan_files', { filters: { supplier_id: s.id } }).catch(() => []);
+        const pos = OR.groupPos(lines, { [s.id]: s }, pfiles, today0).sort((x, y) => String(x.first || '9999').localeCompare(String(y.first || '9999')));
+        const openPos = pos.filter((p) => p.st !== 'shipped');
+        const showAll = req.query.orders === 'all';
+        const shown = showAll ? [...openPos, ...pos.filter((p) => p.st === 'shipped').sort((x, y) => String(y.updated || '').localeCompare(String(x.updated || '')))] : openPos;
+        const val = (p) => p.lines.reduce((a, l) => a + (Number(l.unit_price) || 0) * (Number(l.qty) || 0), 0);
+        const pay = await require('../payments').list(db).catch(() => ({ rows: [] }));
+        const myPay = (pay.rows || []).filter((r) => r.supplier_id === s.id && r.status !== 'paid' && r.left > 0).map((r) => ({ ...r, d: require('../payments').effectiveDue(r) })).sort((x, y) => String(x.d || '9999').localeCompare(String(y.d || '9999')));
+        const toPay = myPay.reduce((a, r) => a + r.left, 0);
+        const nextPay = myPay[0];
         const mine = items.filter(({ product: p }) => !PV.addedBySupplier(p)).length;
-        const theirs = items.length - mine;
-        const last = acts.find((a) => /^Pricing (shown|hidden)/.test(a.summary || ''));
-        return html`<section class="card pa-card" id="portal-access"><h2>Portal access</h2>
-          <form method="post" action="/admin/suppliers/${s.id}/pricing" class="pa-row">
-            <div><b>Show pricing on products Lulyboo added</b>
-              <p class="muted small">Unit price, currency, incoterm, payment terms, MOQ, lead times and quote validity on products you created for this supplier (PO import, packing list, your imports). Products the supplier added themselves always show their own prices.</p>
-              <div class="pa-stat"><span><b>${mine}</b> added by Lulyboo — pricing <b>${s.show_pricing ? 'visible' : 'hidden'}</b></span><span><b>${theirs}</b> added by the supplier — always visible to them</span></div>
-              <div class="sub">${last ? `Last changed: ${last.summary.replace(/^Pricing (shown|hidden) to the supplier/, '').replace(/^ by /, 'by ')} · ${fmt.date(last.activity_date || last.created_at)}` : 'Last changed: never'}</div></div>
-            <input type="hidden" name="value" value="${s.show_pricing ? '0' : '1'}">
-            <button class="pa-sw ${s.show_pricing ? 'on' : ''}" role="switch" aria-checked="${s.show_pricing ? 'true' : 'false'}" aria-label="Show pricing on products Lulyboo added" title="${s.show_pricing ? 'Visible — click to hide' : 'Hidden — click to show'}"><span></span></button>
-          </form></section>`;
-      })()}
-      <section class="card"><h2>Portal users</h2>
-        <div class="table-wrap"><table class="list compact"><thead><tr><th>Email (login)</th><th>Name</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
-        <tbody>${users.map((u) => html`<tr><td>${u.email}</td><td>${u.name || '—'}</td>
-          <td>${u.status === 'invited' ? html`Invited <span class="sub">${u.invite_expires_at && new Date(u.invite_expires_at) < new Date() ? '(expired)' : `until ${fmt.date(u.invite_expires_at)}`}</span>` : u.status === 'active' ? 'Active' : html`<span class="neg">Disabled</span>`}</td>
-          <td>${fmt.date(u.last_login_at)}</td>
-          <td class="actions">
-            ${u.status === 'invited' ? html`<form method="post" action="/admin/supplier-users/${u.id}/invite"><button class="btn small ghost">Resend invitation</button></form>` : ''}
-            ${u.status !== 'invited' ? html`<form method="post" action="/admin/supplier-users/${u.id}/toggle" data-confirm="${u.status === 'active' ? 'Disable this login? They will be signed out.' : 'Enable this login?'}"><button class="link ${u.status === 'active' ? 'danger' : ''}">${u.status === 'active' ? 'Disable' : 'Enable'}</button></form>` : ''}
-          </td></tr>`)}</tbody></table></div>
-        <form method="post" action="/admin/suppliers/${s.id}/users" class="inline-form mt">
-          <input type="email" name="invite_email" placeholder="colleague@factory.com" required style="max-width:280px">
-          <label class="chk"><input type="checkbox" name="send_email" value="1" checked> Email it</label>
-          <button class="btn small">Invite another user</button></form>
-      </section>
-      <div class="cols">
-        <section class="card"><h2>Details</h2>
-          <form method="post" action="/admin/suppliers/${s.id}" class="grid">
+        const lastAct = acts[0];
+        const lastLogin = users.map((u) => u.last_login_at).filter(Boolean).sort().pop();
+        const money0 = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
+        const kpi = [
+          ['Open POs', openPos.length ? `${openPos.length}` : '—', openPos.length ? `${money0(openPos.reduce((a, p) => a + val(p), 0))} · ${openPos.reduce((a, p) => a + p.cbm, 0).toFixed(1)} m³` : 'none open', '#orders'],
+          ['Next ready', openPos.find((p) => p.first) ? PL.short(openPos.find((p) => p.first).first) : '—', openPos.find((p) => p.first) ? `PO ${openPos.find((p) => p.first).po}` : '', '#orders'],
+          ['To pay', toPay ? money0(toPay) : '—', nextPay ? `next ${nextPay.d ? PL.short(nextPay.d) : 'date tbc'} · ${money0(nextPay.left)}` : 'nothing open', '/admin/orders/payments?supplier=' + s.id],
+          ['Products', `${items.length}`, `${items.filter(({ product: p }) => p.status === 'Selected').length} selected${archivedCount ? ` · ${archivedCount} archived` : ''}`, '#products'],
+          ['Last contact', lastAct ? fmt.date(lastAct.activity_date || lastAct.created_at) : '—', lastAct ? `${lastAct.type}` : 'no activity yet', '#activity'],
+        ];
+        const web = s.website ? (/^https?:/.test(s.website) ? s.website : `https://${s.website}`) : null;
+        return html`
+      <div class="sp-head">
+        <div class="sp-id"><h1>${s.name}</h1>
+          <div class="sp-meta"><span class="cp-tag ${s.crm_status === 'Active' ? 'ok' : 'plan'}">${s.crm_status}</span>${s.country ? html`<span>${s.country}</span>` : ''}${s.rating ? html`<span class="sp-star">${'★'.repeat(s.rating)}</span>` : ''}<span class="sub">${s.registered_at ? `registered ${fmt.date(s.registered_at)}` : 'not registered on the portal yet'}</span>${s.active ? '' : html`<span class="cp-tag late">Portal blocked</span>`}</div></div>
+        <div class="sp-acts">${s.email ? html`<a class="btn small ghost" href="mailto:${s.email}">✉ Email</a>` : ''}<a class="btn small ghost" href="#next-actions">+ Follow-up</a><a class="btn small ghost" href="#activity">Log activity</a>
+          <details class="dd sp-more" data-dd><summary class="btn small ghost" aria-label="More actions">⋯</summary><div class="dd-menu sp-menu">
+            <form method="post" action="/admin/suppliers/${s.id}/toggle" data-confirm="${s.active ? 'Block portal access for all users of this supplier?' : 'Allow portal access again?'}"><button>${s.active ? 'Block portal access' : 'Allow portal access'}</button></form>
+            <a href="/admin/products?supplier=${s.id}">Open in product list</a><a href="/admin/archive?supplier=${s.id}">Archived products${archivedCount ? ` (${archivedCount})` : ''}</a>
+            ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone."><button class="danger">Delete supplier</button></form>` : ''}</div></details></div>
+      </div>
+      <div class="sp-kpi">${kpi.map(([k, v, sub, href]) => html`<a href="${href}"><span>${k}</span><b>${v}</b><small>${sub}</small></a>`)}</div>
+      <div class="sp-lay"><div class="sp-main">
+        <section class="card sp-card" id="orders"><div class="head-row"><h2>Orders <span class="sub">${openPos.length} open${pos.length > openPos.length ? ` · ${pos.length - openPos.length} shipped` : ''}</span></h2>
+          <span class="rh-seg"><a href="/admin/suppliers/${s.id}#orders" class="${showAll ? '' : 'on'}">Open</a><a href="/admin/suppliers/${s.id}?orders=all#orders" class="${showAll ? 'on' : ''}">All ${pos.length}</a></span></div>
+          ${shown.length ? html`<div class="table-wrap"><table class="list compact sp-ord"><thead><tr><th>PO</th><th>Products</th><th class="r">Qty</th><th class="r">Value</th><th class="r">m³</th><th>Ready</th><th>Status</th><th>Next payment</th></tr></thead><tbody>
+            ${shown.map((p) => { const np = myPay.find((r) => PL.normPo(r.po) === PL.normPo(p.po)); return html`<tr class="${p.st === 'shipped' ? 'done' : ''}"><td><a href="/admin/orders/view?supplier=${s.id}&po=${encodeURIComponent(p.po)}"><b>${p.po}</b></a></td>
+              <td>${p.products[0] || html`<span class="sub">${p.lines.length} lines</span>`}${p.products.length > 1 ? html` <span class="sub">+${p.products.length - 1}</span>` : ''}</td>
+              <td class="r">${p.qty ? p.qty.toLocaleString('en-US') : '—'}</td><td class="r">${val(p) ? money0(val(p)) : '—'}</td><td class="r">${p.cbm ? p.cbm.toFixed(2) : '—'}</td>
+              <td>${p.first ? PL.short(p.first) : '—'}</td><td>${OR.tag(p.st)}</td>
+              <td>${np ? html`<span class="${np.d && np.d < today0 ? 'neg' : ''}">${money0(np.left)} · ${np.d ? PL.short(np.d) : 'tbc'}</span>` : html`<span class="sub">—</span>`}</td></tr>`; })}
+          </tbody></table></div>` : html`<p class="sub">${pos.length ? 'No open orders.' : 'No orders yet.'} <a href="/admin/logistics/planning/import?supplier=${s.id}">Import a PO</a></p>`}
+        </section>
+        <section class="card sp-card" id="products"><div class="head-row"><h2>Products <span class="sub">${items.length}</span></h2>
+          <div class="actions"><details class="sp-imp"><summary class="btn small ghost">⬆ Import products</summary>
+            <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form sp-imp-f">
+              ${fileDrop({ accept: '.xlsx,.csv,.pdf,.png,.jpg,.jpeg,.webp', main: raw('Drop a price list, PI or quotation, or <u>choose a file</u>'), hint: 'Our template or any layout (.xlsx, .csv, PDF, photo) · read by AI when needed · max 15 MB' })}
+              <div class="import-actions"><button class="btn small">Import</button><label class="chk small"><input type="checkbox" name="ai" value="1"> Always read with AI</label>
+                <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form></details></div></div>
+          ${dupAlert(dup)}
+          ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
+          ${items.length ? html`<form method="post" action="/admin/suppliers/${s.id}/request">
+          <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
+          <div class="bulkbar sp-bulk" data-sp-bulk><span data-selcount>0 selected</span>
+            <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
+            <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
+            <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
+            ${archiveButtons('/admin/products/bulk')}</div>
+          <table class="list compact sp-prod"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th>${hasSku ? html`<th>SKU</th>` : ''}<th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
+          <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td>${hasSku ? html`<td class="sku-cell">${p.supplier_sku || '—'}</td>` : ''}<td><a href="/admin/products/${p.id}">${skuless(p)}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>` : html`<p class="sub">No products yet — import a price list or quotation.</p>`}
+        </section>
+        <section class="card sp-card" id="activity"><div class="head-row"><h2>Activity <span class="sub">${acts.length}</span></h2></div>
+          <form method="post" action="/admin/suppliers/${s.id}/activities" class="sp-log">
+            <input type="date" name="activity_date" value="${today()}" aria-label="Date">
+            <select name="type" aria-label="Type">${ACTIVITY_TYPES.map((t) => html`<option>${t}</option>`)}</select>
+            <input name="summary" required placeholder="What happened? e.g. Called Jenna about the Owl sample" aria-label="Summary">
+            <label class="sp-fu" title="Follow up on">↻ <input type="date" name="follow_up_date" aria-label="Follow up on"></label>
+            <button class="btn small">Log</button></form>
+          ${acts.length ? html`<ul class="feed sp-feed">${acts.slice(0, req.query.acts === 'all' ? 500 : 8).map((a) => html`<li class="${a.done ? 'done' : ''}"><span class="date">${fmt.date(a.activity_date)}</span> <b>${a.type}</b>: ${a.summary}
+            ${a.follow_up_date ? html`<span class="sub ${!a.done && a.follow_up_date <= today() ? 'neg' : ''}">follow up ${fmt.date(a.follow_up_date)}</span>` : ''}
+            ${a.follow_up_date && !a.done ? html`<form method="post" action="/admin/activities/${a.id}/done" class="inline"><button class="link">Mark done</button></form>` : ''}</li>`)}</ul>${acts.length > 8 && req.query.acts !== 'all' ? html`<a class="sub" href="/admin/suppliers/${s.id}?acts=all#activity">Show all ${acts.length}</a>` : ''}` : html`<p class="sub">No activity logged yet.</p>`}
+        </section>
+      </div>
+      <aside class="sp-side">
+        <section class="card sp-card sp-contact"><div class="head-row"><h2>Contact</h2></div>
+          <dl class="sp-dl">
+            ${s.contact_name ? html`<dt>Contact</dt><dd>${s.contact_name}</dd>` : ''}
+            ${s.email ? html`<dt>Email</dt><dd><a href="mailto:${s.email}">${s.email}</a></dd>` : ''}
+            ${s.phone ? html`<dt>Phone</dt><dd>${s.phone}</dd>` : ''}
+            ${web ? html`<dt>Website</dt><dd><a href="${web}" target="_blank" rel="noopener">${s.website.replace(/^https?:\/\//, '')}</a></dd>` : ''}
+            ${s.address ? html`<dt>Address</dt><dd>${s.address}</dd>` : ''}
+            ${s.categories_supplied ? html`<dt>Categories</dt><dd>${s.categories_supplied}</dd>` : ''}
+            ${s.notes ? html`<dt>Notes</dt><dd class="sp-notes">${s.notes}</dd>` : ''}
+          </dl>
+          <details class="sp-edit" ${!s.contact_name && !s.email && !s.phone ? raw('open') : ''}><summary class="link small">Edit details</summary>
+          <form method="post" action="/admin/suppliers/${s.id}" class="sp-ef">
             ${F.SUPPLIER_FIELDS.map((f) => html`<label class="${f.type === 'textarea' ? 'span2' : ''}"><span class="lbl">${f.en}</span>${f.type === 'textarea' ? html`<textarea name="${f.key}" rows="2">${s[f.key] || ''}</textarea>` : html`<input name="${f.key}" value="${s[f.key] || ''}" ${f.required ? 'required' : ''}>`}</label>`)}
             <label><span class="lbl">CRM status</span><select name="crm_status">${CRM_STATUSES.map((c) => html`<option ${c === s.crm_status ? raw('selected') : ''}>${c}</option>`)}</select></label>
             <label><span class="lbl">Rating</span><select name="rating"><option value="">—</option>${[1, 2, 3, 4, 5].map((n) => html`<option value="${n}" ${s.rating === n ? raw('selected') : ''}>${'★'.repeat(n)}</option>`)}</select></label>
-            <label><span class="lbl">Categories supplied</span><input name="categories_supplied" value="${s.categories_supplied || ''}"></label>
+            <label class="span2"><span class="lbl">Categories supplied</span><input name="categories_supplied" value="${s.categories_supplied || ''}"></label>
             <label class="span2"><span class="lbl">Notes</span><textarea name="notes" rows="3">${s.notes || ''}</textarea></label>
-            <div class="span2"><button class="btn">Save</button></div>
-          </form></section>
-        ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
-        <section class="card"><h2>Activity</h2>
-          <form method="post" action="/admin/suppliers/${s.id}/activities" class="grid">
-            <label><span class="lbl">Date</span><input type="date" name="activity_date" value="${today()}"></label>
-            <label><span class="lbl">Type</span><select name="type">${ACTIVITY_TYPES.map((t) => html`<option>${t}</option>`)}</select></label>
-            <label class="span2"><span class="lbl">Summary</span><textarea name="summary" rows="2" required></textarea></label>
-            <label><span class="lbl">Follow up on</span><input type="date" name="follow_up_date"></label>
-            <div><button class="btn small">Log activity</button></div>
-          </form>
-          <ul class="feed">${acts.map((a) => html`<li class="${a.done ? 'done' : ''}"><span class="date">${fmt.date(a.activity_date)}</span> <b>${a.type}</b>: ${a.summary}
-            ${a.follow_up_date ? html`<span class="sub ${!a.done && a.follow_up_date <= today() ? 'neg' : ''}">follow up ${fmt.date(a.follow_up_date)}</span>` : ''}
-            ${a.follow_up_date && !a.done ? html`<form method="post" action="/admin/activities/${a.id}/done" class="inline"><button class="link">Mark done</button></form>` : ''}</li>`)}</ul>
+            <div class="span2"><button class="btn small">Save</button></div></form></details>
         </section>
-      </div>
-      ${licenseCard(s)}
-      <section class="card"><div class="head-row"><h2>Products (${items.length})</h2>
-        <div class="actions"><a class="btn small ghost" href="/admin/archive?supplier=${s.id}">Archive${archivedCount ? ` (${archivedCount})` : ''}</a><a class="btn small ghost" href="/admin/products?supplier=${s.id}">Open in product list</a></div></div>
-        ${dupAlert(dup)}
-        ${reqs.length ? html`<p class="sub">Requests: ${reqs.map((r) => html`<a href="/admin/requests/${r.id}">${r.ref}</a> (${r.status}) `)}</p>` : ''}
-        <form method="post" action="/admin/suppliers/${s.id}/request">
-        <input type="hidden" name="back" value="/admin/suppliers/${s.id}">
-        <div class="bulkbar"><span data-selcount>0 selected</span>
-          <select name="status" aria-label="Set status"><option value="">Set status…</option>${F.STATUSES.map((st) => html`<option>${st}</option>`)}</select>
-          <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
-          <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
-          ${archiveButtons('/admin/products/bulk')}</div>
-        <table class="list compact"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th>${hasSku ? html`<th>SKU</th>` : ''}<th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
-        <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td>${hasSku ? html`<td class="sku-cell">${p.supplier_sku || '—'}</td>` : ''}<td><a href="/admin/products/${p.id}">${skuless(p)}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>
-        <h3>Import products for this supplier</h3>
-        <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form">
-          ${fileDrop({ accept: '.xlsx,.csv,.pdf,.png,.jpg,.jpeg,.webp', main: raw('Drag &amp; drop a product list here, or <u>choose a file</u>'), hint: 'Our template, or any supplier layout: price list, proforma invoice, quotation (.xlsx, .csv, PDF or a photo). Non-standard files are read by AI · max 15 MB' })}
-          <div class="import-actions"><button class="btn small">Import</button><label class="chk small"><input type="checkbox" name="ai" value="1"> Always read with AI</label>
-            <a href="/static/Lulyboo_Supplier_Product_Template.xlsx">Template</a> · <a href="/static/Lulyboo_Factory_Quotation_Request_2026.xlsx">Quotation form</a></div></form>
-      </section>
-      ${docs.length ? html`<section class="card"><h2>Documents</h2>
-        <ul class="doc-list">${docs.map((d) => html`<li><span class="doc-ic">▤</span><a href="/admin/documents/${d.id}" download>${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${fmtBytes(d.bytes)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
-          ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger">Delete</button></form>` : ''}</li>`)}</ul></section>` : ''}
-      ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/suppliers/${s.id}/delete" data-confirm="Delete this supplier, ALL its products, photos and activity? This cannot be undone." class="danger-zone"><button class="link danger">Delete supplier</button></form>` : ''}`,
+        ${await router.crmWidget?.(s.id, `/admin/suppliers/${s.id}`)}
+        <section class="card sp-card" id="portal-access"><div class="head-row"><h2>Portal</h2><span class="sub">${lastLogin ? `last sign-in ${fmt.date(lastLogin)}` : 'never signed in'}</span></div>
+          <form method="post" action="/admin/suppliers/${s.id}/pricing" class="sp-sw">
+            <input type="hidden" name="value" value="${s.show_pricing ? '0' : '1'}">
+            <span><b>Show pricing</b> <span class="sub">on ${mine} product${mine === 1 ? '' : 's'} Lulyboo added · <b>${s.show_pricing ? 'visible' : 'hidden'}</b></span><span class="dc-i" tabindex="0" title="Unit price, currency, incoterm, payment terms, MOQ, lead times and quote validity on products you created for this supplier. Products the supplier added themselves always show their own prices.">i</span></span>
+            <button class="pa-sw ${s.show_pricing ? 'on' : ''}" role="switch" aria-checked="${s.show_pricing ? 'true' : 'false'}" aria-label="Show pricing on products Lulyboo added"><span></span></button></form>
+          <ul class="sp-users">${users.map((u) => html`<li><span class="sp-u">${u.email}${u.name ? html` <span class="sub">${u.name}</span>` : ''}</span>
+            <span class="sub">${u.status === 'invited' ? (u.invite_expires_at && new Date(u.invite_expires_at) < new Date() ? 'invite expired' : `invited · until ${fmt.date(u.invite_expires_at)}`) : u.status === 'active' ? (u.last_login_at ? `active · ${fmt.date(u.last_login_at)}` : 'active') : 'disabled'}</span>
+            ${u.status === 'invited' ? html`<form method="post" action="/admin/supplier-users/${u.id}/invite" class="inline"><button class="link small">Resend</button></form>` : html`<form method="post" action="/admin/supplier-users/${u.id}/toggle" class="inline" data-confirm="${u.status === 'active' ? 'Disable this login? They will be signed out.' : 'Enable this login?'}"><button class="link small ${u.status === 'active' ? 'danger' : ''}">${u.status === 'active' ? 'Disable' : 'Enable'}</button></form>`}</li>`)}</ul>
+          <details class="sp-inv"><summary class="link small">+ Invite a user</summary>
+            <form method="post" action="/admin/suppliers/${s.id}/users" class="sp-inv-f"><input type="email" name="invite_email" placeholder="colleague@factory.com" required aria-label="Email">
+              <label class="chk small"><input type="checkbox" name="send_email" value="1" checked> Email it</label><button class="btn small">Invite</button></form></details>
+        </section>
+        ${licenseCard(s)}
+        ${docs.length ? html`<section class="card sp-card"><h2>Documents <span class="sub">${docs.length}</span></h2>
+          <ul class="doc-list sp-docs">${docs.map((d) => html`<li><a href="/admin/documents/${d.id}" download title="${d.name}">${d.name}</a><span class="sub">${fmt.date(d.created_at)} · ${items.filter(({ product: p }) => p.source_document_id === d.id).length} products</span>
+            ${ST.can(ST.current()?.role, 'delete') ? html`<form method="post" action="/admin/documents/${d.id}/delete" data-confirm="Delete this file? The products imported from it are kept." class="inline"><button class="link danger small" aria-label="Delete">×</button></form>` : ''}</li>`)}</ul></section>` : ''}
+      </aside></div>`;
+      })()}
+`,
     }));
   }));
 

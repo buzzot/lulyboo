@@ -257,3 +257,4 @@ module.exports = function orderRoutes(router, { db, config }) {
     res.redirect(poUrl(f.supplier, f.po));
   }));
 };
+module.exports.groupPos = groupPos; module.exports.tag = tag;
