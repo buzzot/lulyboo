@@ -3718,3 +3718,27 @@ test('forwarder update button on Shipments (list + detail) and the PO page', asy
   const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie })).text;
   assert.ok(/＋ Forwarder update/.test(po) || !/id="forwarder"/.test(po));
 });
+
+test('shipment detail: pick the forwarder from the list, delete a wrong file', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  await db.insert('forwarders', { company: 'Affinity', active: true });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', created_at: '2026-01-01T00:00:00Z', fwd: { booking_no: 'YN0013' } });
+  const l = await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether ball', qty: 8028, container_id: c.id, shipped: true });
+  const sc = await db.insert('ship_confirmations', { code: 'LBS-X', supplier_id: s.id, pos: ['800018'], order_ids: [l.id], container_id: c.id, mode: 'LCL', status: 'complete', missing: [], log: [] });
+  const logo = await db.insert('plan_files', { supplier_id: s.id, name: 'huanger logo.jpg', content_type: 'image/jpeg', kind: 'Loading photos', pos: ['800018'], shipment_id: sc.id, path: 'x' });
+  let pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(pg, /Choose forwarder…/); assert.match(pg, /<option value="Affinity"/);
+  assert.match(pg, /shp-dr ok/); assert.match(pg, /doc\/remove/);
+  let r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/forwarder`, { cookie, form: { forwarder: 'Affinity' } });
+  assert.equal(r.status, 303); assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.forwarder, 'Affinity');
+  assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.booking_no, 'YN0013');
+  assert.equal((await req(base, 'POST', `/admin/orders/shipments/${c.id}/forwarder`, { cookie, form: { forwarder: 'Nobody' } })).status, 400);
+  r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/doc/remove`, { cookie, form: { src: 'plan', ref: logo.id } });
+  assert.equal(r.status, 303); assert.ok(!db.tables.plan_files.some((x) => x.id === logo.id));
+  pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.doesNotMatch(pg, /huanger logo/); assert.match(pg, /<b>Affinity<\/b>/);
+});

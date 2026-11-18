@@ -215,10 +215,10 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const sFiles = files.filter((x) => r.scs.some((s) => s.id === x.shipment_id));
     const ups = r.c ? (await db.list('fwd_updates', { filters: { container_id: r.c.id } }).catch(() => [])).filter((x) => ['accepted', 'logged'].includes(x.status)) : [];
     const canSee = (t) => /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(t || '');
-    const fl = (name, url, type, dl) => ({ name, url, type: type || '', dl: dl || url });
-    const pf = (x) => fl(x.name, `/admin/logistics/planning/files/${x.id}`, x.content_type);
+    const fl = (name, url, type, dl, rm = null) => ({ name, url, type: type || '', dl: dl || url, rm });
+    const pf = (x) => fl(x.name, `/admin/logistics/planning/files/${x.id}`, x.content_type, null, { src: 'plan', ref: x.id });
     const of = (re) => sFiles.filter((x) => re.test(x.kind || '')).map(pf);
-    const fwdFiles = (re) => ups.filter((u) => re.test(u.facts?.doc_type || '')).flatMap((u) => (u.files || []).map((x, i) => fl(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type)));
+    const fwdFiles = (re) => ups.filter((u) => re.test(u.facts?.doc_type || '')).flatMap((u) => (u.files || []).map((x, i) => fl(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type, null, { src: 'fwd', ref: u.id, i })));
     const fwdDocs = new Set((f.docs || []).map((d) => d.type));
     const bl = [f.hbl_no ? `HBL ${f.hbl_no}` : '', f.mbl_no ? `MBL ${f.mbl_no}` : ''].filter(Boolean).join(' · ');
     const docs = [
@@ -232,7 +232,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         { l: 'Arrival notice', files: fwdFiles(/arrival/i), okIf: fwdDocs.has('arrival_notice') || !!r.arrivedOn },
       ]),
       ...(r.kind === 'courier' ? [] : [{ l: 'Customs entry (7501)', customs: true, files: r.entries.flatMap((e) => (e.files || []).map((x, i) => fl(x.name, `/admin/logistics/customs/${e.id}/file/${i}`, x.type))), okIf: r.entries.some((e) => e.status === 'saved') }]),
-      { l: 'Delivery receipt / POD', files: ((r.c || r.sc).delivery_files || []).map((x, i) => fl(x.name, `${BASE}/${r.id}/file/${i}`, x.type)) },
+      { l: 'Delivery receipt / POD', files: ((r.c || r.sc).delivery_files || []).map((x, i) => fl(x.name, `${BASE}/${r.id}/file/${i}`, x.type, null, { src: 'delivery', ref: '', i })) },
     ];
     const fileA = (x, g) => (canSee(x.type) ? html`<a class="shp-fa" href="${x.url}?inline=1" data-preview="${x.url}?inline=1" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}" ${g ? raw(`data-gallery="${g}"`) : ''} title="Preview">${x.name}</a>` : html`<a class="shp-fa" href="${x.dl}" title="Download">${x.name}</a>`);
     // container, voyage, delays
@@ -252,6 +252,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const scF = r.scs.map((s) => s.facts || {});
     const cNo = fmtCont(f.container_no || r.c?.container_no || SD.cleanNo(scF.map((x) => x.container_no).find((v) => SD.cleanNo(v))) || '');
     const seal = f.seal_no || r.c?.seal_no || scF.map((x) => x.seal_no).find((v) => SD.cleanNo(v)) || '';
+    const fwdList = r.c ? (await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((x) => x.active !== false && x.company) : [];
     const tot = (k) => r.lines.reduce((a, l) => a + (Number(l[k]) || 0), 0);
     const int = (v) => Number(v || 0).toLocaleString('en-US');
     const n2 = (v) => (Math.round(Number(v) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -289,7 +290,9 @@ module.exports = function shipmentRoutes(router, { db, config }) {
               </div>
               <h3>Container &amp; booking</h3>
               <div class="shp-facts">
-                ${fact('Forwarder', f.forwarder || r.forwarder, f.booking_no ? `booking ${f.booking_no}` : '')}
+                <div class="shp-fct"><span>Forwarder</span>${f.forwarder || r.forwarder ? html`<b>${f.forwarder || r.forwarder}</b>` : ''}
+                  <form method="post" action="${BASE}/${r.id}/forwarder" class="shp-fwsel ${f.forwarder || r.forwarder ? 'chg' : ''}"><select name="forwarder" data-autosubmit aria-label="Forwarder"><option value="">${f.forwarder || r.forwarder ? 'Change…' : 'Choose forwarder…'}</option>${fwdList.map((x) => html`<option value="${x.company}" ${!(f.forwarder || r.forwarder) || x.company !== (f.forwarder || r.forwarder) ? '' : raw('disabled')}>${x.company}</option>`)}</select></form>
+                  ${f.booking_no ? html`<small>booking ${f.booking_no}</small>` : ''}</div>
                 ${fact('Carrier · vessel', [f.carrier, f.vessel].filter(Boolean).join(' · '), f.voyage ? `voyage ${f.voyage}` : '')}
                 ${fact(r.kind === 'lcl' ? 'Container (shared)' : 'Container', cNo, [r.kind === 'lcl' ? 'LCL' : BOXN[r.c?.box] || f.container_type, seal ? `seal ${seal}` : ''].filter(Boolean).join(' · '), 'mono')}
                 ${fact('House B/L', f.hbl_no || r.scs.map((s) => SD.cleanNo(s.bl_no)).find(Boolean) || '', '', 'mono')}
@@ -312,12 +315,10 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             </div>
             <div>
               <h3>Documents</h3>
-              <div class="shp-docs2">${docs.map((d) => { const ok = d.files.length > 0 || !!d.okIf; return html`<div class="shp-doc ${ok ? 'ok' : ''}">
-                <div class="shp-doc-h"><b>${d.l}</b><span class="shp-f ${ok ? 'grn' : 'gry'}">${ok ? (d.files.length ? (d.files.length > 1 ? `${d.files.length} files` : '✓') : '✓ no file') : d.optional ? 'optional' : 'waiting'}</span></div>
-                ${d.files.length ? html`<div class="shp-doc-f">${d.files.map((x) => fileA(x, d.gallery ? `g-${r.id}` : null))}</div>` : ''}
-                ${d.note ? html`<div class="sub cu-mono">${d.note}</div>` : ''}
-                ${d.customs ? r.entries.map((e) => html`<a class="shp-cu" href="/admin/logistics/customs?review=${e.id}"><span><b class="cu-mono">${e.entry_no || 'Entry'}</b> · ${sh(e.entry_date || e.created_at)}${e.status === 'pending' ? html` <span class="shp-f amb">to review</span>` : ''}</span><span>duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}</span><span class="sub">${[...new Set((e.lines || []).map((x) => x.hts).filter(Boolean))].slice(0, 4).join(' · ')}</span><span class="shp-cu-go">Customs record →</span></a>`) : ''}
-              </div>`; })}</div>
+              <div class="shp-docs3">${docs.map((d) => { const ok = d.files.length > 0 || !!d.okIf; return html`<div class="shp-dr ${ok ? 'ok' : ''}">
+                <span class="shp-dr-i">${ok ? '✓' : ''}</span><span class="shp-dr-l">${d.l}</span>
+                <span class="shp-dr-f">${d.files.length ? d.files.map((x) => html`<span class="shp-dr-x">${fileA(x, d.gallery ? `g-${r.id}` : null)}${x.rm ? html`<form method="post" action="${BASE}/${r.id}/doc/remove" class="inline" data-confirm="${`Delete ${x.name}? It's removed from the portal.`}"><input type="hidden" name="src" value="${x.rm.src}"><input type="hidden" name="ref" value="${x.rm.ref}"><input type="hidden" name="i" value="${x.rm.i ?? ''}"><button class="shp-dr-rm" title="Delete this file" aria-label="${`Delete ${x.name}`}">×</button></form>` : ''}</span>`) : html`<span class="sub">${ok ? (d.note || 'no file') : d.optional ? 'optional' : 'waiting'}</span>`}${d.files.length && d.note ? html`<span class="sub cu-mono">${d.note}</span>` : ''}</span>
+              </div>${d.customs ? r.entries.map((e) => html`<a class="shp-cu" href="/admin/logistics/customs?review=${e.id}"><span><b class="cu-mono">${e.entry_no || 'Entry'}</b> · ${sh(e.entry_date || e.created_at)}${e.status === 'pending' ? html` <span class="shp-f amb">to review</span>` : ''} · duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}</span><span class="shp-cu-go">Customs record →</span></a>`) : ''}`; })}</div>
               <details class="shp-cost-d"><summary><b>Cost</b> <span class="sub">${cost ? usd(cost, 2) : 'nothing yet'}</span></summary>
               <table class="shp-ct"><tbody>
                 <tr><td>Freight${r.forwarder ? ` (${r.forwarder})` : ''}</td><td class="r">${r.freight ? usd(r.freight, 2) : html`<span class="sub">—</span>`}</td></tr>
@@ -353,6 +354,43 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     return out;
   }
   const target = (r) => (r.c ? ['plan_containers', r.c.id] : ['ship_confirmations', r.sc.id]);
+
+  router.post(`${BASE}/:id/forwarder`, G(async (req, res) => {
+    const { r } = await one(req.params.id); const { fields } = await parseForm(req);
+    if (!r.c) throw new HttpError(400, 'Only for containers and LCL shipments');
+    const name = String(fields.forwarder || '').trim().slice(0, 120);
+    const known = (await db.list('forwarders').catch(() => [])).find((x) => x.company === name);
+    if (!known) throw new HttpError(400, 'Choose a forwarder from the list');
+    await db.update('plan_containers', { id: r.c.id }, { fwd: { ...(r.c.fwd || {}), forwarder: known.company, forwarder_id: known.id, updated_at: now() }, updated_at: now() });
+    flash(res, 'ok', `Forwarder: ${known.company}`); res.redirect(`${BASE}/${r.id}`);
+  }));
+
+  // delete a wrong file (supplier document, forwarder attachment or delivery receipt); customs entries are kept
+  router.post(`${BASE}/:id/doc/remove`, G(async (req, res) => {
+    const { r } = await one(req.params.id); const { fields: x } = await parseForm(req);
+    let name = '';
+    if (x.src === 'plan') {
+      const f = await db.get('plan_files', String(x.ref)).catch(() => null);
+      const sc = f && r.scs.find((s) => s.id === f.shipment_id);
+      if (!sc) throw new HttpError(404, 'File not found');
+      await db.docs.remove([f.path]).catch(() => null); await db.remove('plan_files', { id: f.id }); name = f.name;
+      const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
+      const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
+      await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Removed ${f.name} (${by(req)})` }].slice(-60), updated_at: now() });
+    } else if (x.src === 'fwd') {
+      const u = await db.get('fwd_updates', String(x.ref)).catch(() => null);
+      if (!u || !r.c || u.container_id !== r.c.id) throw new HttpError(404, 'File not found');
+      const i = Number(x.i); const f = (u.files || [])[i]; if (!f) throw new HttpError(404, 'File not found');
+      await db.docs.remove([f.path]).catch(() => null);
+      await db.update('fwd_updates', { id: u.id }, { files: u.files.filter((_, k) => k !== i) }); name = f.name;
+    } else if (x.src === 'delivery') {
+      const [table, id] = target(r); const list = (r.c || r.sc).delivery_files || []; const i = Number(x.i); const f = list[i];
+      if (!f) throw new HttpError(404, 'File not found');
+      await db.docs.remove([f.path]).catch(() => null);
+      await db.update(table, { id }, { delivery_files: list.filter((_, k) => k !== i), updated_at: now() }); name = f.name;
+    } else throw new HttpError(400, 'This file can\'t be deleted here');
+    flash(res, 'ok', `Deleted ${name}`); res.redirect(`${BASE}/${r.id}`);
+  }));
 
   router.post(`${BASE}/:id/delivered`, G(async (req, res) => {
     const { r } = await one(req.params.id);

@@ -1,3 +1,27 @@
+// In-page confirm (replaces window.confirm, which a browser can silently switch off after "don't allow more dialogs").
+// window.ask(message, { ok, cancel, danger, detail }) → Promise<boolean>
+(function () {
+  var dlg = null, done = null;
+  function build() {
+    dlg = document.createElement('dialog'); dlg.className = 'rp-modal ask-dlg'; dlg.setAttribute('aria-labelledby', 'ask-t');
+    dlg.innerHTML = '<div class="ask-b"><p id="ask-t" class="ask-m"></p><p class="ask-d sub"></p><div class="ask-a"><button type="button" class="btn ghost" data-ask="0"></button><button type="button" class="btn" data-ask="1"></button></div></div>';
+    document.body.appendChild(dlg);
+    dlg.addEventListener('click', function (e) { var b = e.target.closest('[data-ask]'); if (b) { finish(b.getAttribute('data-ask') === '1'); } else if (e.target === dlg) finish(false); });
+    dlg.addEventListener('cancel', function (e) { e.preventDefault(); finish(false); });
+  }
+  function finish(v) { if (dlg.open) dlg.close(); var d = done; done = null; if (d) d(v); }
+  window.ask = function (msg, o) {
+    o = o || {}; if (!dlg) build();
+    if (done) finish(false);
+    var zh = document.documentElement.classList.contains('zh');
+    dlg.querySelector('.ask-m').textContent = msg;
+    var d = dlg.querySelector('.ask-d'); d.textContent = o.detail || ''; d.hidden = !o.detail;
+    var ok = dlg.querySelector('[data-ask="1"]'); ok.textContent = o.ok || (zh ? '确定' : 'OK'); ok.classList.toggle('danger-btn', !!o.danger);
+    dlg.querySelector('[data-ask="0"]').textContent = o.cancel || (zh ? '取消' : 'Cancel');
+    return new Promise(function (res) { done = res; if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); ok.focus(); });
+  };
+})();
+
 // Small progressive enhancements. Everything works without JS.
 (function () {
   var root = document.documentElement;
@@ -36,7 +60,14 @@
       if (!n) { e.preventDefault(); window.alert('Select at least one product first.'); return; }
       msg = msg.replace('{n}', n);
     }
-    if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
+    if (msg && f.dataset.asked !== '1') {
+      e.preventDefault(); var sb = e.submitter;
+      window.ask(msg, { danger: /delete|remove|stop|cancel|删除/i.test(msg), ok: /^delete/i.test(msg) ? 'Delete' : /^remove/i.test(msg) ? 'Remove' : null }).then(function (yes) {
+        if (!yes) return; f.dataset.asked = '1';
+        try { if (f.requestSubmit) f.requestSubmit(sb && sb.form === f ? sb : undefined); else f.submit(); } finally { delete f.dataset.asked; }
+      });
+      return;
+    }
     var btn = e.submitter;
     if (btn && btn.hasAttribute('data-busy')) {
       btn.dataset.label = btn.textContent;
@@ -828,7 +859,7 @@
       (lab || desc).insertAdjacentElement(lab ? 'beforeend' : 'beforebegin', dBtn); dBtn.hidden = false; dBtn.classList.add('ai-inline');
       dBtn.addEventListener('click', function () {
         aiCall('describe', dBtn).then(function (d) {
-          if (d && d.ok && d.description) { if (!desc.value || confirm(PL('Replace the current description?', '替换当前描述？'))) desc.value = d.description; }
+          if (d && d.ok && d.description) { if (!desc.value) desc.value = d.description; else window.ask(PL('Replace the current description?', '替换当前描述？')).then(function (y) { if (y) desc.value = d.description; }); }
           else alert(msgOf(d));
         });
       });
@@ -1634,15 +1665,19 @@
       return;
     }
     if ((id = b.getAttribute('data-lp-del'))) {
-      var c = cById(id); if (itemsOf(c).length && !confirm('Remove this container? Its POs go back to "Not loaded yet".')) return;
-      itemsOf(c).forEach(function (o) { o.container = null; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render();
-      post(D.base + '/containers/' + id + '/delete').then(function (j) { if (j.merged) location.reload(); }).catch(fail); return;
+      var c = cById(id);
+      var rmC = function () { itemsOf(c).forEach(function (o) { o.container = null; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); post(D.base + '/containers/' + id + '/delete').then(function (j) { if (j.merged) location.reload(); }).catch(fail); };
+      if (!itemsOf(c).length) rmC(); else window.ask('Remove ' + cName(c) + '?', { detail: 'Its POs go back to "Not loaded yet".', ok: 'Remove', danger: true }).then(function (y) { if (y) rmC(); });
+      return;
     }
     if ((id = b.getAttribute('data-lp-ship'))) {
-      var c2 = cById(id), n = itemsOf(c2).length;
-      if (!confirm('Mark all ' + n + ' line' + (n > 1 ? 's' : '') + ' in this container as shipped?')) return;
-      b.disabled = true;
-      post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast('Container shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' closed'); }).catch(fail);
+      var c2 = cById(id), n = itemsOf(c2).length, cap = D.box[c2.box] && D.box[c2.box].cap, used = usedOf(c2), shipBtn = b;
+      var over = !D.box[c2.box].lcl && cap && used > cap;
+      window.ask('Mark ' + cName(c2) + ' shipped? All ' + n + ' line' + (n > 1 ? 's' : '') + ' close and move to Shipments.', { ok: 'Mark shipped',
+        detail: over ? 'The plan is ' + n2(used - cap) + ' m³ over the ' + n2(cap) + ' m³ practical load. That\'s fine if the forwarder confirmed everything was loaded — the real volume comes from the suppliers\' packing lists.' : '' }).then(function (y) {
+        if (!y) return; shipBtn.disabled = true;
+        post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast(cName(c2) + ' shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' moved to Shipments'); }).catch(fail);
+      });
     }
   });
   // Split by quantity: "Split to fit…" on an over-full container (with suggestions), or "Split…" on one line.
@@ -1909,9 +1944,10 @@
     var ch = e.target.closest('[data-lp-choose]');
     if (ch) {
       var q = findQuote(ch.getAttribute('data-c'), ch.getAttribute('data-lp-choose'));
-      if (!confirm('Choose ' + q.company + (q.total != null ? ' at ' + money(q.total) : '') + ' for this container?')) return;
-      ch.disabled = true;
-      post(D.base + '/quotes/' + q.id + '/choose').then(function () { location.reload(); }).catch(fail);
+      window.ask('Choose ' + q.company + (q.total != null ? ' at ' + money(q.total) : '') + ' for this container?', { ok: 'Choose' }).then(function (y) {
+        if (!y) return; ch.disabled = true;
+        post(D.base + '/quotes/' + q.id + '/choose').then(function () { location.reload(); }).catch(fail);
+      });
       return;
     }
     var ed = e.target.closest('[data-lp-qedit]'); if (!ed || !qd) return;
@@ -2168,10 +2204,10 @@
     if (e.target.closest('[data-hol-attx]')) { attach(null); return; }
     if (e.target.closest('[data-hol-delete]')) {
       var id = field('id').value; if (!id) return;
-      if (!confirm(document.documentElement.lang === 'zh-CN' ? '删除此假期？' : 'Delete this holiday?')) return;
+      window.ask(document.documentElement.lang === 'zh-CN' ? '删除此假期？' : 'Delete this holiday?', { danger: true }).then(function (y) { if (!y) return;
       var f = document.createElement('form'); f.method = 'post'; f.action = dlg.getAttribute('data-delete-base') + '/' + encodeURIComponent(id) + '/delete';
       var b = form.querySelector('[name="back"]'); if (b && b.value) { var i = document.createElement('input'); i.type = 'hidden'; i.name = 'back'; i.value = b.value; f.appendChild(i); }
-      document.body.appendChild(f); f.submit();
+      document.body.appendChild(f); f.submit(); });
     }
   });
   function send() {
@@ -2311,7 +2347,9 @@
   skip.addEventListener('change', retick); q.addEventListener('input', show); extra.addEventListener('input', tally);
   dlg.addEventListener('change', function (e) { if (e.target.matches('[data-rem-cb]')) tally(); });
   dlg.querySelector('[data-rem-form]').addEventListener('submit', function (e) {
-    if (!confirm(count.textContent.replace('Will email', 'Send the reminder to') + '?')) e.preventDefault();
+    var fm = e.target; if (fm.dataset.asked === '1') { delete fm.dataset.asked; return; }
+    e.preventDefault();
+    window.ask(count.textContent.replace('Will email', 'Send the reminder to') + '?', { ok: 'Send' }).then(function (y) { if (y) { fm.dataset.asked = '1'; if (fm.requestSubmit) fm.requestSubmit(); else fm.submit(); } });
   });
   document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-rem-open]')) { q.value = ''; retick(); dlg.showModal(); } });
   dlg.addEventListener('click', function (e) { if (e.target === dlg || e.target.closest('[data-rem-close]')) dlg.close(); });
