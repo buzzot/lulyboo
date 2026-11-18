@@ -2767,3 +2767,14 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .dd-menu button:hover,.dd-menu button:focus-visible{background:#f4f1ec}.dd-menu button.on{color:#1d6b40;font-weight:600;cursor:default;background:#eef7f1}
 .dd-ck{width:14px;font-size:12px;color:#1d6b40}
 .dd-foot{border-top:1px solid #f0ede8;margin-top:4px;padding:7px 9px 3px;font-size:12px;color:#8a8680}.dd-foot:hover{color:var(--accent,#c8553d)}
+.cu-ask{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-4px 0 12px;font-size:12.5px;color:#7a766f}
+.cu-mail-n{margin:0 0 12px;background:#fff7e8;border:1px solid #f1dcb0;color:#7a4b00;border-radius:8px;padding:8px 10px}
+.cu-mail-f{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:#6b665f;margin-bottom:10px}
+.cu-mail-f input,.cu-mail-f textarea{font:inherit;font-size:13.5px;font-weight:400;color:#2b2925}.cu-mail-f textarea{font-family:inherit;line-height:1.5}
+/* HTS hover card */
+.hts-tip{cursor:help;text-decoration:underline dotted #b9b2a8;text-underline-offset:3px}
+.hts-card{position:fixed;z-index:1000;width:min(360px,92vw);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 36px rgba(0,0,0,.16);padding:11px 13px;font-size:12.5px;line-height:1.45;color:#2b2925}
+.hts-c-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:3px}.hts-c-r{font-size:11.5px;font-weight:600;color:#1d6b40;background:#eef7f1;border-radius:6px;padding:1px 6px}
+.hts-c-t{font-weight:700;font-size:13.5px}.hts-c-s{margin-top:3px;color:#4a463f}
+.hts-c-o{margin-top:8px;border-top:1px solid #f0ede8;padding-top:6px;color:#7a766f;font-size:11.5px;display:flex;flex-direction:column;gap:2px}
+.hts-c-f{margin-top:7px;font-size:10.5px;color:#a19b92}

@@ -2577,9 +2577,9 @@
       }).join('');
     var rows = v.lines.map(function (l) {
       var prods = (l.products || []).map(function (p) { return '<span class="cu-pt' + (p.product_id ? '' : ' no') + '">' + (p.product_id ? '🔗 ' : '? ') + esc(p.code) + (p.name && p.name !== p.code ? ' · ' + esc(p.name) : '') + '</span>'; }).join('') + (l.pos || []).map(function (po) { return '<span class="cu-pt po">' + (/^PO/i.test(po) ? '' : 'PO ') + esc(po) + '</span>'; }).join('');
-      var stack = '<span>' + esc(l.hts) + '<b>' + (l.rate == null ? esc(l.rate_text) : l.rate === 0 ? 'Free' : l.rate + '%') + '</b></span>' + l.extras.map(function (x) { return '<span>' + esc(x.code) + (x.label ? ' · ' + esc(x.label.toLowerCase()) : '') + '<b>' + (x.rate == null ? esc(x.rate_text) : x.rate + '%') + '</b></span>'; }).join('');
+      var stack = '<span>' + '<span class="hts-tip" data-hts="' + esc(l.hts) + '" tabindex="0">' + esc(l.hts) + '</span>' + '<b>' + (l.rate == null ? esc(l.rate_text) : l.rate === 0 ? 'Free' : l.rate + '%') + '</b></span>' + l.extras.map(function (x) { return '<span>' + '<span class="hts-tip" data-hts="' + esc(x.code) + '" tabindex="0">' + esc(x.code) + '</span>' + (x.label ? ' · ' + esc(x.label.toLowerCase()) : '') + '<b>' + (x.rate == null ? esc(x.rate_text) : x.rate + '%') + '</b></span>'; }).join('');
       var per = (l.products || []).filter(function (p) { return p.per_pc != null; });
-      return '<tr><td>' + esc(l.no) + '</td><td><b>' + esc(l.description) + '</b><div class="cu-mono">' + esc(l.hts) + (l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts && l.suggestion.status === 'open' ? ' <span class="cu-sug">✦ ' + esc(l.suggestion.hts.slice(-4)) + '?</span>' : '') + '</div><div class="cu-pts">' + prods + '</div></td>' +
+      return '<tr><td>' + esc(l.no) + '</td><td><b>' + esc(l.description) + '</b><div class="cu-mono">' + '<span class="hts-tip" data-hts="' + esc(l.hts) + '" tabindex="0">' + esc(l.hts) + '</span>' + (l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts && l.suggestion.status === 'open' ? ' <span class="cu-sug">✦ ' + esc(l.suggestion.hts.slice(-4)) + '?</span>' : '') + '</div><div class="cu-pts">' + prods + '</div></td>' +
         '<td class="r">' + (l.qty != null ? int(l.qty) + ' ' + (l.unit === 'NO' ? 'pcs' : esc(l.unit.toLowerCase())) : '—') + (l.kg ? '<div class="sub">' + int(l.kg) + ' kg</div>' : '') + '</td>' +
         '<td class="r">' + usd(l.value, 0) + (l.value_pc ? '<div class="sub">' + usd(l.value_pc) + '/pc</div>' : '') + '</td><td><div class="cu-stack">' + stack + '</div></td>' +
         '<td class="r"><b>' + usd(l.duty) + '</b><div class="sub">' + l.rate_total + '%</div></td>' +
@@ -2590,10 +2590,22 @@
       '<div class="cu-links">' + (v.container ? '<span class="cu-ok">✓ ' + esc(v.container.name) + (v.container.reason ? ' — by ' + esc(v.container.reason) : '') + '</span>' : '<span class="cu-no">No container matched' + (v.hbls.length ? ' (house B/L ' + esc(v.hbls.join(', ')) + ')' : '') + '</span>') + (v.pos.length ? '<span class="cu-ok">✓ POs ' + esc(v.pos.join(', ')) + '</span>' : '') + '</div>' +
       '<div class="cu-kp"><div><span>Entered value</span><b>' + usd(v.value, 0) + '</b></div><div><span>Duty</span><b>' + usd(v.duty) + '</b><small>' + (v.rate != null ? v.rate + '% of value' : '') + '</small></div><div><span>MPF + HMF</span><b>' + usd(v.fees) + '</b><small>' + (v.mpf != null ? 'MPF ' + usd(v.mpf) + ' · HMF ' + usd(v.hmf) : '') + '</small></div><div><span>Total</span><b>' + usd(v.total) + '</b><small>' + (v.totalRate != null ? v.totalRate + '% of value' : '') + '</small></div></div>' +
       (alerts ? '<div class="lp-fd-al">' + alerts + '</div>' : '') +
+      (v.broker ? '<div class="cu-ask"><span>Something here doesn\'t match? Ask the broker.</span><button type="button" class="btn ghost small" data-cu-mail>✉ Draft email to broker</button></div>' : '') +
       '<div class="table-wrap"><table class="cu-lt"><thead><tr><th>Line</th><th>Goods · HTS</th><th class="r">Qty</th><th class="r">Value</th><th>Rates</th><th class="r">Duty</th><th class="r">Per pc</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="lp-fd-acts"><span class="sub">' + v.files.map(function (f) { return '<a href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join(' ') + (v.status === 'saved' ? '' : ' · kept with the container, POs and products when saved') + '</span><span class="r">' +
         (v.status === 'saved' ? '<button type="button" class="btn" data-cu-close>Close</button>' : '<button type="button" class="link small" data-cu-discard>Discard</button><button type="button" class="btn" data-cu-save>Save entry</button>') + '</span></div></div>';
   }
+  function mailView() {
+    var m = S.view.broker;
+    dl.innerHTML = '<div class="lp-fd">' + top('Email to the broker · entry ' + esc(S.view.entry_no || '')) +
+      '<p class="sub cu-mail-n">Check the figures against the PDF first — a value the AI read wrong shows up as a mismatch too. Edit anything below, then open it in your email.</p>' +
+      '<label class="cu-mail-f">To<input type="email" data-cu-m="to" value="' + esc(m.to) + '" placeholder="broker@example.com"></label>' +
+      '<label class="cu-mail-f">Subject<input data-cu-m="subject" value="' + esc(m.subject) + '"></label>' +
+      '<label class="cu-mail-f">Message<textarea rows="14" data-cu-m="body">' + esc(m.body) + '</textarea></label>' +
+      (S.view.files.length ? '<p class="sub">Attach the 7501 in your email: ' + S.view.files.map(function (f) { return '<a href="' + f.url + '">⬇ ' + esc(f.name) + '</a>'; }).join(' ') + '</p>' : '') +
+      '<div class="lp-fd-acts"><button type="button" class="link small" data-cu-back>← Back to the entry</button><span class="r"><button type="button" class="btn ghost" data-cu-copy>Copy text</button><button type="button" class="btn" data-cu-mailto>Open in email</button></span></div></div>';
+  }
+  function mailVals() { var o = {}; dl.querySelectorAll('[data-cu-m]').forEach(function (x) { o[x.getAttribute('data-cu-m')] = x.value; }); S.view.broker = o; return o; }
   function load(id) { busy('Opening…'); open(); fetch(C.base + '/' + encodeURIComponent(id) + '/view', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error); S.view = j.view; view(); }).catch(function (x) { dl.innerHTML = '<div class="lp-fd">' + top('Customs entry') + '<p class="lp-warn">' + esc(x.message) + '</p></div>'; }); }
   function post(url, data) { var b = new URLSearchParams(); Object.keys(data || {}).forEach(function (k) { b.append(k, data[k]); }); return fetch(url, { method: 'POST', body: b, credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }).then(function (r) { return r.json(); }).then(function (j) { if (!j.ok) throw new Error(j.error || 'Could not save'); return j; }); }
   function add(list) { for (var i = 0; i < list.length; i++) S.files.push(list[i]); input(); }
@@ -2613,6 +2625,10 @@
       return;
     }
     if ((b = e.target.closest('[data-cu-hts]'))) { b.disabled = true; post(C.base + '/' + S.view.id + '/hts', { line: b.getAttribute('data-cu-hts'), use: b.getAttribute('data-use') }).then(function (j) { S.view = j.view; S.changed = true; view(); }).catch(function (x) { b.disabled = false; alertMsg(x.message); }); return; }
+    if (e.target.closest('[data-cu-mail]')) { mailView(); return; }
+    if (e.target.closest('[data-cu-back]')) { mailVals(); view(); return; }
+    if (e.target.closest('[data-cu-copy]')) { var mv = mailVals(); var txt = 'To: ' + mv.to + '\nSubject: ' + mv.subject + '\n\n' + mv.body; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () { var b = e.target.closest('[data-cu-copy]'); b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = 'Copy text'; }, 1600); }, function () { window.prompt('Copy this email:', txt); }); return; }
+    if (e.target.closest('[data-cu-mailto]')) { var mm = mailVals(); location.href = 'mailto:' + encodeURIComponent(mm.to).replace(/%40/g, '@').replace(/%2C/g, ',') + '?subject=' + encodeURIComponent(mm.subject) + '&body=' + encodeURIComponent(mm.body); return; }
     if (e.target.closest('[data-cu-save]')) { busy('Saving…'); post(C.base + '/' + S.view.id + '/save', {}).then(function () { location.href = C.base; }).catch(function (x) { view(); alertMsg(x.message); }); return; }
     if (e.target.closest('[data-cu-discard]')) { post(C.base + '/' + S.view.id + '/discard', {}).then(function () { location.href = C.base; }).catch(function (x) { alertMsg(x.message); }); }
   });
@@ -2639,4 +2655,43 @@
     document.querySelectorAll('details[data-dd][open]').forEach(function (x) { if (x !== d) x.removeAttribute('open'); });
     var b = d.querySelector('.dd-menu button:not([disabled])'); if (b) b.focus();
   }, true);
+})();
+
+// HTS hover card: any element with data-hts="code" — official USITC text + a short AI explanation (cached)
+(function () {
+  var card = null, timer = null, cur = null, cache = {};
+  var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  function el() { if (!card) { card = document.createElement('div'); card.className = 'hts-card'; card.setAttribute('role', 'tooltip'); card.hidden = true; document.body.appendChild(card); card.addEventListener('mouseenter', function () { clearTimeout(timer); }); card.addEventListener('mouseleave', hide); } return card; }
+  function place(t) {
+    var c = el(), r = t.getBoundingClientRect(), w = c.offsetWidth, h = c.offsetHeight;
+    var left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
+    var top = r.bottom + 6; if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    c.style.left = left + 'px'; c.style.top = top + 'px';
+  }
+  function render(t, v) {
+    var c = el();
+    c.innerHTML = v === 'load' ? '<div class="hts-c-h"><b class="cu-mono">' + esc(t.getAttribute('data-hts')) + '</b></div><div class="sub">Looking up…</div>'
+      : v.error ? '<div class="hts-c-h"><b class="cu-mono">' + esc(t.getAttribute('data-hts')) + '</b></div><div class="sub">' + esc(v.error) + '</div>'
+      : '<div class="hts-c-h"><b class="cu-mono">' + esc(v.code) + '</b>' + (v.general ? '<span class="hts-c-r">' + esc(v.general) + '</span>' : '') + '</div>' +
+        '<div class="hts-c-t">' + esc(v.title) + '</div>' + (v.summary ? '<div class="hts-c-s">' + esc(v.summary) + '</div>' : '') +
+        (v.chain && v.chain.length ? '<div class="hts-c-o">' + v.chain.map(function (x) { return '<div><span class="cu-mono">' + esc(x.code) + '</span> ' + esc(x.text) + '</div>'; }).join('') + '</div>' : '') +
+        '<div class="hts-c-f">' + (v.ai ? '✦ AI summary · ' : '') + 'official text: USITC</div>';
+    c.hidden = false; place(t);
+  }
+  function show(t) {
+    var code = t.getAttribute('data-hts'); if (!code) return; cur = t;
+    var host = (t.closest && t.closest('dialog[open]')) || document.body; if (el().parentNode !== host) host.appendChild(card); // a modal dialog sits in the top layer
+    if (cache[code]) { render(t, cache[code]); return; }
+    render(t, 'load');
+    fetch('/admin/logistics/customs/hts?code=' + encodeURIComponent(code), { credentials: 'same-origin' }).then(function (r) { return r.json(); })
+      .then(function (j) { cache[code] = j.ok ? j.hts : { error: j.error || 'Not found' }; if (cur === t) render(t, cache[code]); })
+      .catch(function () { if (cur === t) render(t, { error: 'Could not look it up' }); });
+  }
+  function hide() { clearTimeout(timer); timer = setTimeout(function () { if (card) card.hidden = true; cur = null; }, 150); }
+  document.addEventListener('mouseover', function (e) { var t = e.target.closest && e.target.closest('[data-hts]'); if (!t) return; clearTimeout(timer); if (cur === t) return; timer = setTimeout(function () { show(t); }, 300); });
+  document.addEventListener('mouseout', function (e) { var t = e.target.closest && e.target.closest('[data-hts]'); if (t && !t.contains(e.relatedTarget)) hide(); });
+  document.addEventListener('focusin', function (e) { var t = e.target.closest && e.target.closest('[data-hts]'); if (t) show(t); });
+  document.addEventListener('focusout', function (e) { if (e.target.closest && e.target.closest('[data-hts]')) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && card && !card.hidden) { card.hidden = true; cur = null; } });
+  window.addEventListener('scroll', function () { if (card && !card.hidden) { card.hidden = true; cur = null; } }, true);
 })();

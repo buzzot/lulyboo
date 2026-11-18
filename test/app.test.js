@@ -3743,3 +3743,41 @@ test('shipment detail: pick the forwarder from the list, delete a wrong file', a
   pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
   assert.doesNotMatch(pg, /huanger logo/); assert.match(pg, /<b title="Affinity">Affinity<\/b>/);
 });
+
+test('customs: misread entered value is spotted; email draft to the broker lists what does not match', async () => {
+  const db = seedDb();
+  const CU = require('../src/customs');
+  const e = { entry_no: '9T2-0090973-2', entry_date: '2026-11-12', facts: { broker: 'Expeditors', broker_file: '3301' }, hbls: ['HKAL2611031A'], duty: 2354.75, total: null, lines: [
+    { no: '003', hts: '9603.21.0000', description: 'TOOTH BRUSHES', value: 1000, rate: 0, base_duty: 0, extras: [{ code: '9903.88.15', rate: 7.5, amount: 345 }, { code: '9903.05.31', rate: 12.5, amount: 575 }], duty: 920, products: [] },
+    { no: '005', hts: '9603.21.0000', description: 'TOOTH BRUSHES', value: 7130, rate: 0, base_duty: 0, extras: [{ code: '9903.88.15', rate: 7.5, amount: 534.75 }, { code: '9903.05.31', rate: 12.5, amount: 900 }], duty: 1434.75, products: [] },
+  ] };
+  e.checks = await CU.checks(db, e);
+  const m = e.checks.find((c) => c.kind === 'math');
+  assert.match(m.text, /line 003: the duty amounts fit an entered value of \$4,600\.00, not \$1,000\.00/);
+  assert.match(m.text, /line 005: 9903\.05\.31 12\.5% of \$7,130\.00 is \$891\.25, entry says \$900\.00/);
+  const d = CU.brokerDraft(e, { to: 'ops@broker.com' });
+  assert.equal(d.to, 'ops@broker.com'); assert.match(d.subject, /9T2-0090973-2 — please check 2 items/);
+  assert.match(d.body, /Hello Expeditors team/); assert.match(d.body, /your file 3301/); assert.match(d.body, /- Line 003 \(HTS 9603\.21\.0000, tooth brushes\): the duty amounts/);
+  assert.match(d.body, /corrected 7501/);
+  assert.equal(CU.brokerDraft({ ...e, checks: [{ level: 'ok', text: 'fine' }], lines: [] }), null);
+});
+
+test('HTS hover card: official USITC text + AI one-liner, cached', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  const realFetch = global.fetch; let usitc = 0; let ai = 0;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('https://hts.usitc.gov')) { usitc++; return new Response(JSON.stringify([{ htsno: '9603', description: 'Brooms, brushes...' }, { htsno: '9603.21.00', description: 'Tooth brushes, including dental-plate brushes', general: 'Free' }, { htsno: '9603.21.00.00', description: '' }]), { status: 200 }); }
+    if (u.startsWith('https://api.anthropic.com')) { ai++; const b = JSON.parse(opts.body); return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: { title: 'Toothbrushes', summary: 'Manual toothbrushes and dental-plate brushes.' } }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  process.env.ANTHROPIC_API_KEY = 'test';
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  let j = JSON.parse((await req(base, 'GET', '/admin/logistics/customs/hts?code=9603.21.0000', { cookie })).text);
+  assert.ok(j.ok); assert.equal(j.hts.title, 'Toothbrushes'); assert.equal(j.hts.general, 'Free'); assert.equal(j.hts.chain[0].code, '9603');
+  j = JSON.parse((await req(base, 'GET', '/admin/logistics/customs/hts?code=9603210000', { cookie })).text);
+  assert.equal(ai, 1, 'second hover is cached');
+  assert.equal((await req(base, 'GET', '/admin/logistics/customs/hts?code=12', { cookie })).status, 400);
+});

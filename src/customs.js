@@ -210,20 +210,50 @@ async function link(db, e, { containerId = null, poHint = [] } = {}) {
   return { container_id: container?.id || null, match_reason: reason, pos: allPos };
 }
 
+/** Email to the customs broker about what doesn't match (English). Returns null when nothing needs asking. */
+function brokerDraft(e, { to = '', from = 'Lulyboo' } = {}) {
+  const f = e.facts || {};
+  const asks = [];
+  for (const c of e.checks || []) {
+    if (c.level === 'ok') continue;
+    if (c.kind === 'math') for (const it of c.items || []) asks.push(it.line ? `Line ${it.line}${it.hts ? ` (HTS ${it.hts}${it.description ? `, ${String(it.description).toLowerCase()}` : ''})` : ''}: ${it.text}.` : `${it.text[0].toUpperCase()}${it.text.slice(1)}.`);
+    else if (/HTS on file|HTS changed/.test(c.text)) asks.push(`Line ${c.line}: ${c.text.replace(/\.$/, '')} — could you confirm the classification?`);
+    else if (/differs from the PO price/.test(c.text)) asks.push(`Line ${c.line}: ${c.text.replace(/\.$/, '')} — please confirm the entered value.`);
+  }
+  for (const l of e.lines || []) if (l.suggestion?.verdict === 'suggest' && l.suggestion.hts && l.suggestion.status !== 'rejected') asks.push(`Line ${l.no}: declared ${l.hts}; we think ${fmtHts(l.suggestion.hts)} may fit better${l.suggestion.reason ? ` (${String(l.suggestion.reason).replace(/\.$/, '')})` : ''}. Could you check?`);
+  if (!asks.length) return null;
+  const ref = [e.entry_no ? `entry ${e.entry_no}` : 'this entry', f.broker_file ? `your file ${f.broker_file}` : '', e.entry_date ? `entry date ${String(e.entry_date).slice(0, 10)}` : ''].filter(Boolean).join(', ');
+  const subject = `Entry ${e.entry_no || ''} — please check ${asks.length === 1 ? 'one item' : `${asks.length} items`}`.replace(/\s+/g, ' ');
+  const body = [`Hello${f.broker ? ` ${f.broker} team` : ''},`, '', `We are reviewing the entry summary for ${ref}${(e.hbls || []).length ? ` (HBL ${e.hbls.join(', ')})` : ''} and some figures don't match on our side:`, '', ...asks.map((a) => `- ${a}`), '', 'Could you please check these and confirm the correct figures, or send a corrected 7501 if anything needs to be amended?', '', 'Thank you,', from].join('\n');
+  return { to, subject, body };
+}
+
 /** Checks: math, vs past entries, vs HTS on file, PO price. Returns [{ level, text, line? }]. */
 async function checks(db, e, { selfId = null } = {}) {
   const out = []; const money = (v) => `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  // duty math
-  const bad = [];
+  // duty math. When every duty amount on a line points to the same entered value, the value was most likely
+  // misread (or the entry has a different value) — said that way instead of listing each amount as wrong.
+  const bad = []; const items = [];
   for (const l of e.lines) {
-    if (l.value != null && l.rate != null && l.base_duty != null && Math.abs(l.value * l.rate / 100 - l.base_duty) > 1) bad.push(`line ${l.no}: ${l.hts} ${l.rate}% of ${money(l.value)} is ${money(l.value * l.rate / 100)}, entry says ${money(l.base_duty)}`);
-    for (const x of l.extras) if (l.value != null && x.rate != null && x.amount != null && Math.abs(l.value * x.rate / 100 - x.amount) > 1) bad.push(`line ${l.no}: ${x.code} ${x.rate}% is ${money(l.value * x.rate / 100)}, entry says ${money(x.amount)}`);
+    const pairs = [...(l.rate && l.base_duty != null ? [[l.hts, l.rate, l.base_duty]] : []), ...l.extras.filter((x) => x.rate && x.amount != null).map((x) => [x.code, x.rate, x.amount])];
+    const off = pairs.filter(([, rate, amt]) => l.value != null && Math.abs(l.value * rate / 100 - amt) > 1);
+    if (!off.length) continue;
+    const implied = pairs.map(([, rate, amt]) => (amt * 100) / rate);
+    const same = implied.every((v) => Math.abs(v - implied[0]) <= Math.max(1, implied[0] * 0.005));
+    if (same) {
+      const v = Math.round(implied[0] * 100) / 100;
+      bad.push(`line ${l.no}: the duty amounts fit an entered value of ${money(v)}, not ${money(l.value)}`);
+      items.push({ line: l.no, hts: l.hts, description: l.description, text: `the duty amounts (${pairs.map(([c, rate, amt]) => `${c} ${rate}% = ${money(amt)}`).join(', ')}) correspond to an entered value of ${money(v)}, but the line shows ${money(l.value)}`, implied: v, value: l.value });
+    } else for (const [c, rate, amt] of off) {
+      bad.push(`line ${l.no}: ${c} ${rate}% of ${money(l.value)} is ${money(l.value * rate / 100)}, entry says ${money(amt)}`);
+      items.push({ line: l.no, hts: l.hts, description: l.description, text: `${c} at ${rate}% of the ${money(l.value)} entered value is ${money(l.value * rate / 100)}, but the entry shows ${money(amt)}` });
+    }
   }
   const lineDuty = r2(e.lines.reduce((a, l) => a + l.duty, 0));
-  if (e.duty != null && Math.abs(lineDuty - e.duty) > 1) bad.push(`lines add up to ${money(lineDuty)} duty, the total says ${money(e.duty)}`);
+  if (e.duty != null && Math.abs(lineDuty - e.duty) > 1) { bad.push(`lines add up to ${money(lineDuty)} duty, the total says ${money(e.duty)}`); items.push({ text: `the line duties add up to ${money(lineDuty)}, but the total duty shows ${money(e.duty)}` }); }
   const fees = (e.mpf || 0) + (e.hmf || 0);
-  if (e.total != null && e.duty != null && Math.abs(e.duty + (e.tax || 0) + (e.other ?? fees) - e.total) > 1) bad.push(`duty + fees ≠ total ${money(e.total)}`);
-  if (bad.length) out.push({ level: 'bad', text: `Duty math doesn't add up — ${bad.join('; ')}.` });
+  if (e.total != null && e.duty != null && Math.abs(e.duty + (e.tax || 0) + (e.other ?? fees) - e.total) > 1) { bad.push(`duty + fees ≠ total ${money(e.total)}`); items.push({ text: `duty + fees do not add up to the ${money(e.total)} total` }); }
+  if (bad.length) out.push({ level: 'bad', kind: 'math', items, text: `Duty math doesn't add up — ${bad.join('; ')}. Check the PDF first: a value read wrong shows up here too.` });
   else if (e.lines.length) out.push({ level: 'ok', text: `Duty math checks out: every rate × entered value matches, and the total is ${money(e.total ?? (e.duty || 0) + fees)}.` });
   // same entry saved before
   if (e.entry_no) {
@@ -342,4 +372,4 @@ async function confirmHts(db, entry, lineNo, which, by = null) {
 /** Effective rate of a line (base + chapter 99), %. */
 const lineRate = (l) => Math.round(((l.rate || 0) + (l.extras || []).reduce((a, x) => a + (x.rate || 0), 0)) * 10) / 10;
 
-module.exports = { TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };
+module.exports = { brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };

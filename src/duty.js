@@ -137,6 +137,44 @@ const SUGGEST_TOOL = {
   input_schema: { type: 'object', properties: { codes: { type: 'array', items: { type: 'string' }, description: 'Up to 3 plausible 6-8 digit HTS codes, best first' } }, required: ['codes'] },
 };
 
+// ── Short explanation of one HTS / Chapter 99 code, for hover cards. Official USITC text + an AI one-liner. ──
+const EXPLAIN = new Map(); // digits → { at, v }
+const EXPLAIN_TOOL = {
+  name: 'explain_hts',
+  description: 'Explain an HTS code in plain English for an importer.',
+  input_schema: { type: 'object', properties: {
+    title: { type: 'string', description: 'What the code covers, 2-6 words (e.g. "Toothbrushes", "Toys for children under 3", "Section 301 tariff, List 4A")' },
+    summary: { type: 'string', description: 'One sentence, max 25 words: what goods fall here, or for 9903 codes which extra duty it is and on what' },
+  }, required: ['title', 'summary'] },
+};
+async function explainHts(code, { fetchImpl = fetch } = {}) {
+  const d = digits(code).slice(0, 10);
+  if (d.length < 4) throw Object.assign(new Error('Not an HTS code'), { status: 400 });
+  const hit = EXPLAIN.get(d);
+  if (hit && Date.now() - hit.at < 7 * CACHE_MS) return hit.v;
+  let chain = []; let general = '';
+  try {
+    const rows = await usitcSearch(formatHts(d), fetchImpl);
+    // the code's own line and its parent headings (4, 6, 8 digits) from the official schedule
+    const mine = rows.filter((r) => { const x = digits(r.htsno); return x.length >= 4 && d.startsWith(x); }).sort((a, b) => digits(a.htsno).length - digits(b.htsno).length);
+    chain = mine.map((r) => ({ code: r.htsno, text: String(r.description || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 300) })).filter((x) => x.text);
+    const exact = mine.filter((r) => String(r.general || '').trim()).pop();
+    general = exact ? String(exact.general).trim() : '';
+    const plus = general.match(/applicable subheading\s*\+\s*(\d+(?:\.\d+)?)\s*%/i); if (plus) general = `+${plus[1]}% extra`;
+  } catch { /* offline: AI alone */ }
+  let title = ''; let summary = '';
+  if (ai.enabled()) {
+    try {
+      const { result } = await ai.callTool({ tool: EXPLAIN_TOOL, maxTokens: 300, content: [{ type: 'text', text: `HTS code ${formatHts(d)}${d.startsWith('9903') ? ' (Chapter 99: an additional duty heading)' : ''}.\nOfficial USITC text (parent headings first):\n${chain.map((x) => `${x.code}: ${x.text}`).join('\n') || '(not available — use your knowledge of the HTSUS, and say if unsure)'}\n${general ? `General rate: ${general}` : ''}\nExplain it briefly for a US importer of baby, toddler and pet products.` }] });
+      title = String(result.title || '').slice(0, 80); summary = String(result.summary || '').slice(0, 300);
+    } catch { /* fall back to official text */ }
+  }
+  if (!title && !chain.length) throw Object.assign(new Error('No description found for this code'), { status: 404 });
+  const v = { code: formatHts(d), title: title || chain[chain.length - 1]?.text.slice(0, 80) || '', summary, chain: chain.slice(-3), general, ai: !!title };
+  EXPLAIN.set(d, { at: Date.now(), v });
+  return v;
+}
+
 /** Optional: let Claude check current additional US tariffs on the web (Anthropic web search server tool). */
 async function webResearch({ origin, codes }, fetchImpl = fetch) {
   if (process.env.DUTY_WEB_SEARCH !== 'true' || !ai.enabled()) return null;
@@ -255,4 +293,4 @@ function productPatch(r) {
   return { hts_verified_code: r.hts_code, duty_ai_pct: r.total_pct, duty_ai_detail: r, duty_ai_checked_at: r.checked_at };
 }
 
-module.exports = { researchDuty, productPatch, parseGeneralRate, formatHts, pickCandidates, usitcSearch, _cache: CACHE };
+module.exports = { explainHts, researchDuty, productPatch, parseGeneralRate, formatHts, pickCandidates, usitcSearch, _cache: CACHE };

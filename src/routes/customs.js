@@ -23,6 +23,13 @@ async function entries(db) {
 }
 
 /** JSON for the dialog. */
+/** The broker's address: from this entry's email, else from an earlier entry by the same broker. */
+async function brokerEmail(db, e) {
+  const b = String(e.facts?.broker || '').toLowerCase(); if (!b) return '';
+  const prev = (await db.list('customs_entries').catch(() => [])).find((x) => x.id !== e.id && x.from_email && !/lulyboo/i.test(x.from_email) && String(x.facts?.broker || '').toLowerCase() === b);
+  return prev ? String(prev.from_email).replace(/^.*<([^>]+)>.*$/, '$1').trim() : '';
+}
+
 async function viewOf(db, e) {
   const c = e.container_id ? await db.get('plan_containers', e.container_id).catch(() => null) : null;
   let cname = null;
@@ -37,6 +44,7 @@ async function viewOf(db, e) {
     pos: e.pos || [], hbls: e.hbls || [], mbl: e.mbl || '',
     value: e.entered_value, duty: e.duty, fees: e.fees, total: e.total, mpf: f.mpf, hmf: f.hmf, rate: pct(e.duty || 0, e.entered_value), totalRate: pct(e.total || 0, e.entered_value),
     lines, checks: e.checks || [], suggestions,
+    broker: CU.brokerDraft(e, { to: e.from_email && !/lulyboo/i.test(e.from_email) ? String(e.from_email).replace(/^.*<([^>]+)>.*$/, '$1').trim() : (await brokerEmail(db, e)) || '' }),
     files: (e.files || []).map((x, i) => ({ name: x.name, url: `${BASE}/${e.id}/file/${i}`, inline: /pdf|image/.test(x.type || '') })),
   };
 }
@@ -106,7 +114,7 @@ module.exports = function customsRoutes(router, { db, config }) {
             <div class="cu-bars">${s.months.map((m, i) => html`<div class="cu-bar"><span>${m.rate == null ? '—' : `${m.rate}%`}</span><i class="${i === s.months.length - 1 ? 'now' : ''}" style="height:${Math.max(4, Math.round(((m.rate || 0) / maxRate) * 110))}px" title="${m.n} entr${m.n === 1 ? 'y' : 'ies'}"></i><em>${m.label}</em></div>`)}</div></section>
           <section class="card"><div class="rh-head"><h2 class="sec">By HTS code</h2></div>
             <div class="table-wrap"><table class="list cu-t"><thead><tr><th>HTS</th><th class="r">Value</th><th class="r">Duty</th><th class="r">Rate now</th></tr></thead><tbody>
-            ${s.hts.slice(0, 12).map((h) => html`<tr><td><span class="cu-mono">${h.hts}</span><div class="sub">${h.description || ''}</div></td><td class="r">${usd(h.value)}</td><td class="r">${usd(h.duty)}</td><td class="r">${h.rate}%</td></tr>`)}</tbody></table></div></section>
+            ${s.hts.slice(0, 12).map((h) => html`<tr><td><span class="cu-mono hts-tip" data-hts="${h.hts}" tabindex="0">${h.hts}</span><div class="sub">${h.description || ''}</div></td><td class="r">${usd(h.value)}</td><td class="r">${usd(h.duty)}</td><td class="r">${h.rate}%</td></tr>`)}</tbody></table></div></section>
         </div>
         <section class="card flush"><div class="rh-head pad"><h2 class="sec">Entries <span class="sub">${saved.length}</span></h2></div>
           <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Entry</th><th>Date</th><th>Shipment</th><th>POs</th><th class="r">Value</th><th class="r">Duty</th><th class="r">Rate</th><th class="r">Fees</th><th></th></tr></thead><tbody>
@@ -123,6 +131,8 @@ module.exports = function customsRoutes(router, { db, config }) {
     const e = await CU.createEntry(db, config, { files: list, text, source: 'upload', containerId: fields.container || null, poHint: String(fields.pos || '').split(/[,;\s]+/).filter(Boolean), by: by(req) });
     return { view: await viewOf(db, e) };
   }));
+  // hover card for an HTS code anywhere in the portal: GET /admin/logistics/customs/hts?code=9603.21.0000
+  router.get(`${BASE}/hts`, J(async (req) => ({ hts: await require('../duty').explainHts(String(req.query.code || '')) })));
   router.get(`${BASE}/:id/view`, J(async (req) => ({ view: await viewOf(db, await getE(req.params.id)) })));
   router.post(`${BASE}/:id/save`, J(async (req) => { const e = await getE(req.params.id); await CU.save(db, e, { by: by(req) }); return { view: await viewOf(db, await getE(e.id)) }; }));
   router.post(`${BASE}/:id/discard`, J(async (req) => { const e = await getE(req.params.id); if (e.status === 'saved') throw new HttpError(400, 'A saved entry stays in the statistics'); await db.update('customs_entries', { id: e.id }, { status: 'discarded' }); return {}; }));
