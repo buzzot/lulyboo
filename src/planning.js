@@ -76,7 +76,7 @@ const TOOL = {
         items: {
           type: 'object',
           properties: {
-            po: { type: 'string', description: 'PO number exactly as written, e.g. PO200013' },
+            po: { type: 'string', description: 'PO number as written on the document, e.g. 200013 or PO200013' },
             product: { type: 'string', description: 'Product name without the item number (put that in sku); empty when the document lists only PO numbers' },
             sku: { type: 'string', description: 'SKU / item no. / model / article number of the product, if shown (e.g. "TBT 001"). A line with a SKU is a product line even without a description.' },
             qty: { type: 'number', description: 'Order quantity in pieces' },
@@ -145,7 +145,7 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
     const insp = isoDay(o.inspection_date);
     const port = txt(o.port, 60);
     return {
-      po: txt(o.po, 60), product: txt(o.product, 300), sku: txt(o.sku, 80), qty: num(o.qty), cartons: num(o.cartons), cbm: num(o.cbm), gross_kg: num(o.gross_kg),
+      po: txt(cleanPo(o.po), 60), product: txt(o.product, 300), sku: txt(o.sku, 80), qty: num(o.qty), cartons: num(o.cartons), cbm: num(o.cbm), gross_kg: num(o.gross_kg),
       ready_date: isoDay(o.ready_date), inspection_date: insp, inspection_note: insp ? null : txt(o.inspection_date, 80),
       production_status: txt(o.production_status, 120), pending_from_us: txt(o.pending_from_lulyboo, 200), order_type: txt(o.order_type, 60), approved_by: txt(o.approved_by, 60),
       port_text: port, port: SC.portCode(port), ...splitTerms(txt(o.notes, 500), txt(o.po_terms, 500)),
@@ -158,6 +158,8 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
 
 // ── match against what is already saved ─────────────────────────────────────
 /** PO numbers compared without punctuation and without a leading "PO": "PO 900018" = "PO900018" = "900018". */
+/** A new PO number is written as the number only: "PO200013", "P.O. #200013", "PO No: 200013" → "200013". */
+const cleanPo = (s) => { const t = String(s || '').trim(); const m = t.match(/^P\.?\s*O\.?\s*(?:#|no\.?|num(?:ber)?\.?)?\s*[:#\-–]?\s*(?=\d)(.+)$/i); return (m ? m[1] : t).trim(); };
 const normPo = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^PO(?=\d)/, '');
 const normSku = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const normProd = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -223,7 +225,7 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
     for (const k of FIELDS) if (o[k] !== null && o[k] !== undefined && o[k] !== '') vals[k] = o[k];
     if (o.change === 'new') {
       const twin = existing.find((e) => normPo(e.po) === normPo(o.po));   // keep the PO number as we already write it ("PO900018", not "900018")
-      await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: twin ? twin.po : o.po, ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
+      await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: twin ? twin.po : cleanPo(o.po), ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
     }
     else if (o.change === 'updated') {
       const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE].includes(k)));
@@ -551,4 +553,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { splitTerms, DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { cleanPo, splitTerms, DOC_KINDS, storeFiles, guessKind, BOXES, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

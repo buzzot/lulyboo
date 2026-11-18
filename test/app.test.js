@@ -2164,7 +2164,7 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   const page = await rv.text();
   assert.equal(rv.status, 200, page.slice(0, 300));
   assert.match(lastPrompt, /PO200013/); assert.match(lastPrompt, /Goods Volume/);          // the sheet was sent as a table
-  assert.match(page, /3 new/); assert.match(page, /value="PO200014"/);
+  assert.match(page, /3 new/); assert.match(page, /value="200014"/);
   assert.match(page, /<option value="CNNGB" selected>/);                                  // port from the supplier's products
   // save all three (form as the page posts it)
   const form = new FormData();
@@ -2173,7 +2173,7 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   const sv = await fetch(`${base}/admin/logistics/planning/save`, { method: 'POST', body: form, headers: { cookie }, redirect: 'manual' });
   assert.equal(sv.status, 303);
   assert.equal(db.tables.plan_orders.length, 3);
-  const o14 = db.tables.plan_orders.find((o) => o.po === 'PO200014');
+  const o14 = db.tables.plan_orders.find((o) => o.po === '200014');
   assert.equal(o14.inspection_note, 'will be apply later'); assert.equal(o14.port, 'CNNGB'); assert.equal(Number(o14.cbm), 20.47);
 
   // 2) Status table for another supplier (new supplier, PO numbers only)
@@ -2201,7 +2201,7 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   form3.set('r0_on', '1'); form3.set('r0_port', 'CNNGB');
   await fetch(`${base}/admin/logistics/planning/save`, { method: 'POST', body: form3, headers: { cookie }, redirect: 'manual' });
   assert.equal(db.tables.plan_orders.length, 5);
-  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO200014').ready_date, d(31));
+  assert.equal(db.tables.plan_orders.find((o) => o.po === '200014').ready_date, d(31));
 
   // views
   const byPort = await req(base, 'GET', '/admin/logistics/planning', { cookie });
@@ -2213,21 +2213,21 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   const tb = await req(base, 'GET', '/admin/logistics/planning?view=table', { cookie });
   assert.match(tb.text, /will be apply later/);
   const csv = await fetch(`${base}/admin/logistics/planning.csv`, { headers: { cookie } });
-  assert.equal(csv.status, 200); assert.match(await csv.text(), /PO200013/);
+  assert.equal(csv.status, 200); assert.match(await csv.text(), /,200013,/);
   // edit popup: set the port (and for the supplier's other lines) and move a date
-  assert.match(byPort.text, /data-edit-order="[^"]*PO900018/); assert.match(byPort.text, /data-edit-dlg/);
-  const st = db.tables.plan_orders.find((o) => o.po === 'PO900018');
+  assert.match(byPort.text, /data-edit-order="[^"]*900018/); assert.match(byPort.text, /data-edit-dlg/);
+  const st = db.tables.plan_orders.find((o) => o.po === '900018');
   const ef = new FormData(); for (const [k, v] of Object.entries({ port: 'CNYTN', ready_date: d(3), cbm: '8.5', production_status: 'Ready for shipping', all_po: '1', all_port: '1', back: '/admin/logistics/planning?view=table' })) ef.append(k, v);
   const er = await fetch(`${base}/admin/logistics/planning/${st.id}/edit`, { method: 'POST', body: ef, headers: { cookie }, redirect: 'manual' });
   assert.equal(er.status, 303); assert.equal(er.headers.get('location'), '/admin/logistics/planning?view=table');
-  const st2 = db.tables.plan_orders.find((o) => o.po === 'PO900018');
+  const st2 = db.tables.plan_orders.find((o) => o.po === '900018');
   assert.equal(st2.port, 'CNYTN'); assert.equal(st2.ready_date, d(3)); assert.equal(Number(st2.cbm), 8.5);
-  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO900021').port, 'CNYTN');      // same supplier, had no port
-  assert.equal(db.tables.plan_orders.find((o) => o.po === 'PO200013').port, 'CNNGB');      // other supplier untouched
+  assert.equal(db.tables.plan_orders.find((o) => o.po === '900021').port, 'CNYTN');      // same supplier, had no port
+  assert.equal(db.tables.plan_orders.find((o) => o.po === '200013').port, 'CNNGB');      // other supplier untouched
   // the imported Benno sheet was stored and linked to its POs
   const doc = db.tables.plan_files.find((f) => f.name === 'POs-Ningbo_Benno_20261110.xlsx');
-  assert.ok(doc); assert.deepEqual(doc.pos, ['PO200013', 'PO200014', 'PO200016']); assert.ok(db.files.has('docs/' + doc.path));
-  assert.match(byPort.text, /title="Documents for PO200013">📎1/);
+  assert.ok(doc); assert.deepEqual(doc.pos, ['200013', '200014', '200016']); assert.ok(db.files.has('docs/' + doc.path));
+  assert.match(byPort.text, /title="Documents for 200013">📎1/);
   // upload a PO by hand, linked to a typed PO number
   const up = new FormData(); up.append('supplier_id', benno.id); up.append('pos', 'PO200016'); up.append('kind', 'PO');
   up.append('file', new Blob(['%PDF-1.4 PO']), 'PO200016.pdf');
@@ -2721,7 +2721,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   await upload('PL PO900018 rev2.pdf', 'Packing list');
   const c2 = db.tables.products.find((p) => p.id === cat.id);
   assert.equal(c2.carton_l_cm, 54); assert.equal(c2.units_per_carton, 50); assert.equal(c2.carton_nw_kg, 10.2);
-  assert.match(c2.factory_notes, /packing updated from the packing list of PO900018 \(was 52×40×30 cm, 48 pcs\/ctn, GW 11\.5 kg\)/);
+  assert.match(c2.factory_notes, /packing updated from the packing list of 900018 \(was 52×40×30 cm, 48 pcs\/ctn, GW 11\.5 kg\)/);
   const plate2 = db.tables.plan_orders.find((o) => o.po === 'PO900018' && o.sku === 'KS-200');
   assert.equal(plate2.cartons, 72); assert.equal(plate2.cbm, 4.67);                              // 3600 / 50 × 0.0648 m³
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
@@ -2737,7 +2737,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('pos', 'PO900030'); fd.append('kind', 'PO'); fd.append('read', '1');
   fd.append('file', new Blob([Buffer.from('%PDF-1.4 x')], { type: 'application/pdf' }), 'PO900030.pdf');
   await fetch(`${base}/admin/logistics/planning/files`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' });
-  const next = db.tables.plan_orders.find((o) => o.po === 'PO900030');
+  const next = db.tables.plan_orders.find((o) => o.po === '900030');
   assert.equal(next.cartons, 20); assert.equal(next.cbm, 1.3);
   // 4. editing the quantity recalculates the volume
   const ef = new FormData(); for (const [kk, v] of Object.entries({ product: 'Silicone Suction Plate', qty: '1920', cbm: '1.3', units_per_carton: '48', carton_size: '52 x 40 x 30', carton_gw_kg: '11.5', back: '/admin/logistics/planning' })) ef.append(kk, v);
