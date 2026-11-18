@@ -2992,3 +2992,6 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .um-va span{width:100%;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a8680;font-weight:600}
 .um-va button{font:inherit;font-size:12px;border:1px solid var(--line);background:#fff;border-radius:99px;padding:2px 9px;cursor:pointer;color:var(--ink-soft)}
 .um-va button:hover{background:var(--soft)}.um-va button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.sd-fwd{display:block;margin-top:3px;font-size:12px;color:var(--muted)}
+.sd-cp{font:inherit;font-size:12px;font-weight:600;color:var(--ink);background:#f4f3f1;border:1px solid var(--line);border-radius:5px;padding:0 5px;cursor:pointer}
+.sd-cp:hover{background:#ece9e5}

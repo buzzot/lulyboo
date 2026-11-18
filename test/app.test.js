@@ -2565,9 +2565,9 @@ test('shipping documents: request on the loading date, reply by email read by AI
   process.env.ANTHROPIC_API_KEY = 'sk-test';
   aiAnswer = { loaded: true, loaded_on: '2026-12-01', container_no: 'CSNU 6184207', seal_no: 'cn4471902', lines: [{ po: '800018', product: 'Teether Ball Toy', qty: 8028, cartons: 335, gross_kg: 3912, cbm: 11.02, carton_l_cm: 50, carton_w_cm: 38, carton_h_cm: 35, units_per_carton: 24 }], summary: 'Container loaded; CI and PL attached.' };
   const before = sent.length;
-  const out = await SD.handleShipEmail({ db, config, from: 'Lin Wei <sales@huanger.cn>', subject: `RE: Shipment confirmation [${sc.code}]`, text: 'Container loaded today.', files: [{ name: 'PL 800018.pdf', buffer: Buffer.from('%PDF-1.4 x'), type: 'application/pdf' }, { name: 'CI-HG-1107.pdf', buffer: Buffer.from('%PDF-1.4 y'), type: 'application/pdf' }] });
+  const out = await SD.handleShipEmail({ db, config, from: 'Lin Wei <sales@huanger.cn>', subject: `RE: Shipment confirmation [${sc.code}]`, text: 'Container loaded today.', files: [{ name: 'PL 800018.pdf', buffer: Buffer.from('%PDF-1.4 x'), type: 'application/pdf' }, { name: 'CI-HG-1107.pdf', buffer: Buffer.from('%PDF-1.4 y'), type: 'application/pdf' }, { name: 'Warehouse receipt 800018.pdf', buffer: Buffer.from('%PDF-1.4 w'), type: 'application/pdf' }] });
   assert.ok(out.matched); assert.equal(sc.status, 'received'); assert.equal(sc.container_no, 'CSNU6184207'); assert.equal(sc.seal_no, 'CN4471902');
-  assert.deepEqual(db.tables.plan_files.filter((f) => f.shipment_id === sc.id).map((f) => f.kind).sort(), ['Invoice', 'Packing list']);
+  assert.deepEqual(db.tables.plan_files.filter((f) => f.shipment_id === sc.id).map((f) => f.kind).sort(), ['Invoice', 'Packing list', 'Warehouse receipt']);
   assert.deepEqual(sc.missing, ['Bill of lading']);
   assert.ok(db.tables.plan_orders.find((x) => x.id === o.id).shipped);
   assert.ok(sent.slice(before).some((m) => /\[Shipping documents\] Huanger/.test(m.subject)));
@@ -2581,7 +2581,7 @@ test('shipping documents: request on the loading date, reply by email read by AI
   assert.equal(sent.length, n0 + 1);
   const fu = sent[sent.length - 1];
   assert.match(fu.subject, /^Missing shipping documents – PO 800018/);
-  assert.match(fu.text, /Still missing:\n  1\. Bill of lading \(draft or final\)\n\nAlready received — thank you: Commercial invoice, Packing list, Container CSNU6184207/);
+  assert.match(fu.text, /Still missing:\n  1\. Bill of lading \(draft or final\)\n\nAlready received — thank you: Commercial invoice, Packing list, Warehouse receipt, Container CSNU6184207/);
   assert.doesNotMatch(fu.text, /Loading photos/);
   assert.equal(sc.followups, 1);
   await run('2026-12-08T02:00:00Z'); assert.equal(sent.length, n0 + 1);
@@ -2604,7 +2604,7 @@ test('shipping documents: request on the loading date, reply by email read by AI
   const mj = JSON.parse((await req(base, 'GET', `/admin/orders/shipping/draft?kind=missing&id=${sc.id}`, { cookie })).text);
   assert.ok(mj.ok, mj.error); assert.deepEqual(mj.kinds, ['request', 'reminder', 'missing']); assert.equal(mj.code, sc.code);
   assert.deepEqual(mj.items.filter((x) => x.on).map((x) => x.text), ['Bill of lading (draft or final)']);
-  assert.deepEqual(mj.items.filter((x) => x.state === 'have').map((x) => x.text).length, 3);              // confirmation, CI, PL
+  assert.deepEqual(mj.items.filter((x) => x.state === 'have').map((x) => x.text).length, 4);              // confirmation, CI, PL, warehouse receipt
   assert.equal(mj.items.find((x) => /Loading photos/.test(x.text)).state, 'opt');
   assert.match(mj.received.join(), /Commercial invoice/); assert.equal(mj.greet, 'Lin Wei'); assert.match(mj.fixed, /800018 · Teether Ball Toy/);
   const sj = JSON.parse((await req(base, 'POST', '/admin/orders/shipping/send', { cookie, form: new URLSearchParams([['kind', 'missing'], ['id', sc.id], ['to', 'sales@huanger.cn,docs@huanger.cn'], ['cc', ''], ['subject', 'B/L please – PO 800018'], ['intro', 'Hello Lin, we still need the B/L.'], ['item', 'Bill of lading (draft or final)'], ['item', 'Certificate of origin'], ['received', '0']]).toString() })).text);

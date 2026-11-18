@@ -104,6 +104,7 @@
   // Copy a fixed text (e.g. a thread's email address)
   document.addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('[data-copy-text]'); if (!b) return;
+    e.preventDefault(); // also keeps a <details> it sits in from toggling
     var v = b.getAttribute('data-copy-text');
     (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).catch(function () { window.prompt('Copy:', v); });
     var old = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = old; }, 1500);
