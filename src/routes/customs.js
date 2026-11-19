@@ -164,6 +164,8 @@ module.exports = function customsRoutes(router, { db, config }) {
     } else if (f.unlink) Object.assign(p, { product_id: null, how: null, hts_on_file: null });
     else if (p.product_id) p.how = 'confirmed';
     await db.update('customs_entries', { id: e.id }, { lines });
+    // the comparisons depend on the product: re-run them
+    try { const ch = await CU.checks(db, { ...(e.facts || {}), entry_no: e.entry_no, lines }, { selfId: e.id }); await db.update('customs_entries', { id: e.id }, { checks: ch }); } catch (err) { console.error('Customs re-check failed:', err.message); }
     if (e.status === 'saved' && p.product_id) await CU.setPaid(db, p.product_id, { rate: CU.lineRate(l), at: e.entry_date, entry: e.entry_no });
     return { view: await viewOf(db, await getE(e.id)) };
   }));

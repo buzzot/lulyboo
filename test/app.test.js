@@ -3551,7 +3551,7 @@ test('customs entries: AI reads a 7501, links container / POs / products, checks
   assert.equal(v.lines[0].products[0].per_pc, 0.642);
   const txt = v.checks.map((x) => `${x.level}: ${x.text}`).join('\n');
   assert.match(txt, /ok: Duty math checks out/);
-  assert.match(txt, /warn: DPS 001 \(Potty seat\): duty up from 31\.3% \(Sep 2\) to 43\.8% — new 9903\.05\.31 \(prdts of china, note 52\) \+12\.5%/);
+  assert.match(txt, /warn: DPS 001 \(Potty seat\): same HTS, duty up from 31\.3% \(Sep 2\) to 43\.8% — new 9903\.05\.31 \(prdts of china, note 52\) \+12\.5%/);
   assert.equal(v.suggestions, 1);
   assert.equal(v.lines[1].suggestion.hts, '9503.00.0071');
   assert.match(JSON.stringify(hts), /6 months\+/);   // catalog facts went to the HTS review
@@ -4336,4 +4336,86 @@ test('7501 review: products linked by SKU / to confirm / not found, confirm, lin
   assert.match(pg, /Customs records/); assert.match(pg, /Use declared code/);
   await req(base, 'POST', `/admin/products/${a.id}/hts/use-declared`, { cookie, form: { hts: '3926909985' } });
   assert.equal(db.tables.products.find((x) => x.id === a.id).hts_verified_code, '3926909985');
+});
+
+test('HTS classification: AI classifies once, rates from USITC, checked save keeps the original, pricing + 7501 comparison', async (t) => {
+  const realFetch = global.fetch; let sent = null;
+  const ROWS2 = {
+    '3922.20': [{ htsno: '3922.20.00.00', description: 'Seats and covers', general: '3.4%', footnotes: [{ value: 'See 9903.88.03.' }] }],
+    '3922.90': [{ htsno: '3922.90.00.00', description: 'Other', general: '6.3%', footnotes: [{ value: 'See 9903.88.03.' }] }],
+    '9503.00': [{ htsno: '9503.00.00.73', description: 'Toys, other', general: 'Free', footnotes: [] }],
+    '9903.88.03': [{ htsno: '9903.88.03', description: 'Section 301', general: 'The duty provided in the applicable subheading + 25%' }],
+  };
+  global.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.startsWith('https://hts.usitc.gov')) { const k = decodeURIComponent(u.split('keyword=')[1]); const hit = Object.keys(ROWS2).find((x) => k.startsWith(x)); return new Response(JSON.stringify(hit ? ROWS2[hit] : []), { status: 200 }); }
+    if (u.startsWith('https://api.anthropic.com')) {
+      sent = JSON.parse(opts.body); const name = sent.tool_choice.name;
+      const input = { customs_description: 'Child toilet training seat of molded PP plastic, fits an adult toilet, for ages 1–4.', summary: 'Potty seat insert',
+        candidates: [{ hts: '3922.20.0000', title: 'Lavatory seats and covers', fit: 'strong', why: 'GRI 1: heading names lavatory seats.' }, { hts: '3922.90.0000', title: 'Other sanitary ware', fit: 'possible', why: 'Residual.' }, { hts: '9503.00.0073', title: 'Toys', fit: 'weak', why: 'Not a toy.' }], missing_facts: ['Exact age grade on the label'] };
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  process.env.ANTHROPIC_API_KEY = 'sk-test'; Duty._cache.clear();
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; Duty._cache.clear(); server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Kean' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Dino potty seat', supplier_sku: 'DPS 001', materials: 'PP', unit_price: 1.45, currency: 'USD', status: 'Selected', hts_verified_code: '3922900000', country_of_origin: 'China' });
+  // last import: 3922.90 at 6.3 + 25 + 12.5 (country-wide 9903.01.25)
+  const line = { no: '001', hts: '3922.90.0000', rate: 6.3, extras: [{ code: '9903.88.03', rate: 25 }, { code: '9903.01.25', rate: 12.5 }], value: 2854, qty: 1968, duty: 1250, products: [{ code: 'DPS 001', product_id: p.id, value: 2854, qty: 1968, per_pc: 0.64 }] };
+  await db.insert('customs_entries', { entry_no: 'E-1', entry_date: '2026-10-01', status: 'saved', lines: [line], facts: {}, from_email: 'Broker <chb@broker.test>' });
+
+  // not classified yet → the card offers the AI run
+  let r = await req(base, 'GET', `/admin/products/${p.id}`, { cookie });
+  assert.match(r.text, /HTS classification[\s\S]*Classify with AI/);
+  r = await req(base, 'POST', `/admin/products/${p.id}/hts/classify`, { cookie });
+  assert.equal(r.status, 303); assert.match(r.location, /\?hts=1#tab-customs/);
+  let pr = await db.get('products', p.id);
+  assert.match(pr.customs_description, /toilet training seat/);
+  assert.equal(pr.hts_original_code, '3922900000');
+  const c1 = pr.hts_review.candidates;
+  assert.deepEqual(c1.map((c) => [c.hts, c.total]), [['3922.20.0000', 40.9], ['3922.90.0000', 43.8], ['9503.00.0073', 12.5]]);
+  assert.equal(c1[0].duty_pc, 0.593); // $1.45 × 40.9%
+  assert.equal(pr.hts_review.original_rate.paid, 43.8);
+  assert.ok(sent.messages[0].content[0].text.includes('3922.90.0000'), 'declared history goes to the model');
+  // card + popup: recommended, comparison per pc and per import, weak cheaper code not recommended
+  r = await req(base, 'GET', `/admin/products/${p.id}?hts=1`, { cookie });
+  assert.match(r.text, /data-autoopen/);
+  assert.match(r.text, /Recommended/);
+  assert.match(r.text, /Saves \$0\.042\/pc · ≈ \$83 per import \(1,968 pcs at \$1\.45\)/);
+  assert.doesNotMatch(r.text, /Cheaper but less certain/); assert.match(r.text, /9503\.00\.0073[\s\S]*hc-fit fw">weak/);
+  assert.match(r.text, /hts-mail[\s\S]*chb@broker\.test/);
+  // save needs the "I checked" tick
+  r = await req(base, 'POST', `/admin/products/${p.id}/hts/declare`, { cookie, form: { code: '3922200000' } });
+  assert.equal((await db.get('products', p.id)).hts_declare_code ?? null, null);
+  r = await req(base, 'POST', `/admin/products/${p.id}/hts/declare`, { cookie, form: { code: '3922200000', checked: '1' } });
+  pr = await db.get('products', p.id);
+  assert.equal(pr.hts_declare_code, '3922200000'); assert.equal(pr.hts_verified_code, '3922200000'); assert.equal(pr.hts_original_code, '3922900000'); assert.equal(pr.hts_declare_pct, 40.9);
+  const ctx = await require('../src/services').getCtx(db);
+  assert.equal(calc.analyzeProduct(pr, ctx).duty_source, 'HTS to declare');
+  // a new 7501 that still declares the old code → alert with $ impact and a broker ask
+  const CU = require('../src/customs');
+  const e2 = { entry_no: 'E-2', lines: [{ ...line, no: '001', products: [{ ...line.products[0] }] }] };
+  const ch = await CU.checks(db, e2);
+  const dec = ch.find((x) => x.kind === 'declare');
+  assert.ok(dec, 'declare alert');
+  assert.match(dec.text, /declared 3922\.90\.0000 — your checked code is 3922\.20\.0000 \(\+2\.9 pts ≈ \+\$0\.042\/pc · \$82\.77 more on this entry\)/);
+  assert.match(CU.brokerDraft({ ...e2, checks: ch, facts: {} }).body, /Our checked classification for this product is 3922\.20\.0000/);
+  // declared the checked code → good news, not a warning
+  const e3 = { entry_no: 'E-3', lines: [{ ...line, hts: '3922.20.0000', rate: 3.4, products: [{ ...line.products[0] }] }] };
+  const ch3 = await CU.checks(db, e3);
+  assert.ok(ch3.some((x) => x.level === 'ok' && /declared the checked code 3922\.20\.0000/.test(x.text)));
+  assert.ok(!ch3.some((x) => x.kind === 'declare' || (x.kind === 'hts_prev' && x.level === 'warn')));
+  // re-check rates: Section 301 goes up → reported
+  ROWS2['9903.88.03'][0].general = 'The duty provided in the applicable subheading + 50%'; Duty._cache.clear();
+  r = await req(base, 'POST', `/admin/products/${p.id}/hts/recheck`, { cookie });
+  pr = await db.get('products', p.id);
+  assert.equal(pr.hts_declare_pct, 65.9);
+  // back to the original
+  r = await req(base, 'POST', `/admin/products/${p.id}/hts/keep`, { cookie });
+  pr = await db.get('products', p.id);
+  assert.equal(pr.hts_declare_code, null); assert.equal(pr.hts_verified_code, '3922900000');
 });

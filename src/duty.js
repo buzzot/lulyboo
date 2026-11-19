@@ -293,4 +293,4 @@ function productPatch(r) {
   return { hts_verified_code: r.hts_code, duty_ai_pct: r.total_pct, duty_ai_detail: r, duty_ai_checked_at: r.checked_at };
 }
 
-module.exports = { explainHts, researchDuty, productPatch, parseGeneralRate, formatHts, pickCandidates, usitcSearch, _cache: CACHE };
+module.exports = { chapter99Info, explainHts, researchDuty, productPatch, parseGeneralRate, formatHts, pickCandidates, usitcSearch, _cache: CACHE };

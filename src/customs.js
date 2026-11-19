@@ -219,6 +219,7 @@ function brokerDraft(e, { to = '', from = 'Lulyboo' } = {}) {
   for (const c of e.checks || []) {
     if (c.level === 'ok') continue;
     if (c.kind === 'math') for (const it of c.items || []) asks.push(it.line ? `Line ${it.line}${it.hts ? ` (HTS ${it.hts}${it.description ? `, ${String(it.description).toLowerCase()}` : ''})` : ''}: ${it.text}.` : `${it.text[0].toUpperCase()}${it.text.slice(1)}.`);
+    else if (c.kind === 'declare') asks.push(`Line ${c.line}: ${c.text.replace(/^[^:]+: /, '').replace(/\.$/, '')}. Our checked classification for this product is ${c.declare} — could you confirm which code is correct${c.extra ? ' and amend the entry if needed' : ''}?`);
     else if (/HTS on file|HTS changed/.test(c.text)) asks.push(`Line ${c.line}: ${c.text.replace(/\.$/, '')} — could you confirm the classification?`);
     else if (/differs from the PO price/.test(c.text)) asks.push(`Line ${c.line}: ${c.text.replace(/\.$/, '')} — please confirm the entered value.`);
   }
@@ -264,25 +265,45 @@ async function checks(db, e, { selfId = null } = {}) {
   }
   // vs past entries per product
   const past = (await db.list('customs_entries', { order: 'entry_date.desc' }).catch(() => [])).filter((x) => x.status === 'saved' && x.id !== selfId && x.entry_no !== e.entry_no);
+  // the products as they are now: a checked "code to declare" (Customs records → HTS classification)
+  const ids = [...new Set(e.lines.flatMap((l) => (l.products || []).map((p) => p.product_id)).filter(Boolean))];
+  const cat = {}; for (const id of ids) cat[id] = await db.get('products', id).catch(() => null);
+  const same = [];
   for (const l of e.lines) {
     const rate = (l.rate || 0) + l.extras.reduce((a, x) => a + (x.rate || 0), 0);
     for (const p of l.products || []) {
       const label = `${p.code}${p.name && code(p.name) !== code(p.code) ? ` (${p.name})` : ''}`;
-      if (p.hts_on_file && digits(p.hts_on_file).slice(0, 10) !== digits(l.hts).slice(0, digits(p.hts_on_file).length)) out.push({ level: 'warn', line: l.no, text: `${label}: declared ${l.hts}, but the HTS on file is ${fmtHts(p.hts_on_file)}.` });
+      const pr = p.product_id ? cat[p.product_id] : null;
+      const dec = pr?.hts_declare_code ? digits(pr.hts_declare_code) : null;
+      let flagged = false;
+      if (dec && dec !== digits(l.hts).slice(0, dec.length)) {
+        const dPct = Number(pr.hts_declare_pct);
+        const diff = Number.isFinite(dPct) ? Math.round((rate - dPct) * 10) / 10 : null;
+        const extra = diff != null && p.value ? r2(p.value * diff / 100) : null;
+        const pc = extra != null && p.qty ? Math.round((extra / p.qty) * 1000) / 1000 : null;
+        out.push({ level: 'warn', kind: 'declare', line: l.no, product_id: p.product_id, hts: l.hts, declare: fmtHts(dec), diff, extra, text: `${label}: declared ${l.hts} — your checked code is ${fmtHts(dec)}${diff ? ` (${diff > 0 ? '+' : '−'}${Math.abs(diff)} pts${pc ? ` ≈ ${diff > 0 ? '+' : '−'}${`$${Math.abs(pc).toFixed(3)}`}/pc` : ''}${extra ? ` · ${money(Math.abs(extra))} ${diff > 0 ? 'more' : 'less'} on this entry` : ''})` : ''}.` });
+        flagged = true;
+      } else if (p.hts_on_file && !(dec && dec === digits(p.hts_on_file)) && digits(p.hts_on_file).slice(0, 10) !== digits(l.hts).slice(0, digits(p.hts_on_file).length)) { out.push({ level: 'warn', line: l.no, product_id: p.product_id || null, text: `${label}: declared ${l.hts}, but the HTS on file is ${fmtHts(p.hts_on_file)}.` }); flagged = true; }
       if (p.unit_price && p.qty && p.value) { const pc = p.value / p.qty; if (Math.abs(pc - p.unit_price) / p.unit_price > 0.1) out.push({ level: 'warn', line: l.no, text: `${label}: entered value ${money(pc)}/pc differs from the PO price ${money(p.unit_price)}/pc.` }); }
       const prev = p.product_id ? past.map((x) => ({ x, l: (x.lines || []).find((y) => (y.products || []).some((q) => q.product_id === p.product_id)) })).find((y) => y.l) : null;
       if (!prev) continue;
       const pl = prev.l; const pRate = (pl.rate || 0) + (pl.extras || []).reduce((a, x) => a + (x.rate || 0), 0);
       const when = PL.short(String(prev.x.entry_date || prev.x.created_at).slice(0, 10));
-      if (digits(pl.hts) !== digits(l.hts)) out.push({ level: 'warn', line: l.no, text: `${label}: HTS changed — ${pl.hts} on the ${when} entry, ${l.hts} now.` });
+      const htsChanged = digits(pl.hts) !== digits(l.hts);
+      // changed on purpose (now the checked code to declare) → said once, as good news
+      if (htsChanged && dec && dec === digits(l.hts).slice(0, dec.length)) out.push({ level: 'ok', kind: 'hts_prev', line: l.no, product_id: p.product_id, text: `${label}: declared the checked code ${l.hts} (was ${pl.hts} on the ${when} entry).` });
+      else if (htsChanged) { out.push({ level: 'warn', kind: 'hts_prev', line: l.no, product_id: p.product_id, text: `${label}: HTS changed since the last import — ${pl.hts} on the ${when} entry, ${l.hts} now.` }); flagged = true; }
       const added = l.extras.filter((x) => !(pl.extras || []).some((y) => digits(y.code) === digits(x.code)));
       const gone = (pl.extras || []).filter((y) => !l.extras.some((x) => digits(x.code) === digits(y.code)));
       if (Math.abs(rate - pRate) >= 0.05 || added.length || gone.length) {
         const why = [...added.map((x) => `new ${x.code}${x.label ? ` (${x.label.toLowerCase()})` : ''} +${x.rate}%`), ...gone.map((x) => `${x.code} gone`)].join(', ');
-        out.push({ level: rate > pRate ? 'warn' : 'ok', line: l.no, text: `${label}: duty ${rate > pRate ? 'up' : 'down'} from ${Math.round(pRate * 10) / 10}% (${when}) to ${Math.round(rate * 10) / 10}%${why ? ` — ${why}` : ''}.` });
+        out.push({ level: rate > pRate ? 'warn' : 'ok', kind: 'rate', line: l.no, product_id: p.product_id, text: `${label}: ${htsChanged ? '' : 'same HTS, '}duty ${rate > pRate ? 'up' : 'down'} from ${Math.round(pRate * 10) / 10}% (${when}) to ${Math.round(rate * 10) / 10}%${why ? ` — ${why}` : ''}.` });
+        flagged = true;
       }
+      if (!flagged && !htsChanged) same.push(p.code);
     }
   }
+  if (same.length) out.push({ level: 'ok', kind: 'same', text: `${[...new Set(same)].join(', ')}: same HTS and duty rate as the last import.` });
   const rank = { bad: 0, warn: 1, ai: 2, ok: 3 };
   return out.sort((a, b) => rank[a.level] - rank[b.level]);
 }

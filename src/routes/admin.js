@@ -151,6 +151,84 @@ async function customsCard(db, p, list, a) {
     </tbody></table></div></section>`;
 }
 
+/** The customs broker's email: from the latest saved entry with this product that came by email. */
+async function brokerFor(db, customs) {
+  for (const x of customs) { const e = await db.get('customs_entries', x.id).catch(() => null); if (e?.from_email && !/lulyboo/i.test(e.from_email)) return String(e.from_email).replace(/^.*<([^>]+)>.*$/, '$1').trim(); }
+  return '';
+}
+
+/** HTS classification card (Customs records tab): original vs to-declare code, duty comparison, AI popup, broker email. */
+function htsCard(p, list, { aiOn, broker = '' } = {}) {
+  const HC = require('../hts-classify');
+  const CU = require('../customs');
+  const dig = (h) => String(h || '').replace(/\D/g, '');
+  const fmtH = (h) => (dig(h) ? CU.fmtHts(h) : '—');
+  const usd = (v, d = 2) => (v == null ? '—' : `$${Math.abs(Number(v)).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`);
+  const rv = p.hts_review && typeof p.hts_review === 'object' ? p.hts_review : null;
+  const last = list[0] || null;
+  const original = dig(p.hts_original_code) || (rv && dig(rv.original)) || dig(last?.hts) || dig(p.hts_verified_code || p.hs_code);
+  const declare = dig(p.hts_declare_code);
+  const d10 = (x) => (x ? PL.short(String(x).slice(0, 10)) : '');
+  const parts = (r) => (r ? [r.base != null ? `${r.base}%` : '?', ...(r.extras || []).map((x) => `${x.rate}%`)].join(' + ') : '');
+  if (!rv) {
+    return html`<section class="card hc" id="hts"><div class="hc-h"><h2 class="sec">HTS classification</h2><span class="hc-tag">Not classified yet</span></div>
+      <p class="cr-n">AI reads the photos, the description and the attached spec / documents, writes a description for customs and ranks the HTS codes that fit — most correct first, with the duty of each. You check it, then choose the code to declare. The original code is kept.</p>
+      <form method="post" action="/admin/products/${p.id}/hts/classify" data-busy><button class="btn" ${aiOn ? '' : raw('disabled title="Add ANTHROPIC_API_KEY in Railway"')}>✦ Classify with AI</button> <span class="sub">Current code ${fmtH(original)}</span></form></section>`;
+  }
+  const { best, cheap } = HC.picks(rv);
+  const shown = declare || dig(best?.hts);
+  const cmp = HC.compare(rv, shown);
+  const cand = (code) => (rv.candidates || []).find((c) => dig(c.hts) === dig(code));
+  const o = rv.original_rate; const t = cand(shown);
+  const same = dig(original) === dig(shown);
+  const checked = !!(declare && p.hts_checked_at);
+  const mail = shown && !same ? HC.brokerEmail(p, rv, shown, { to: broker }) : null;
+  const fitC = { strong: 'fs', possible: 'fp', weak: 'fw' };
+  const srcs = rv.sources || {};
+  const from = [srcs.photos ? `${srcs.photos} photo${srcs.photos === 1 ? '' : 's'}` : '', 'the product description', ...(srcs.docs || [])].filter(Boolean);
+  const card = html`<section class="card hc" id="hts"><div class="hc-h"><h2 class="sec">HTS classification</h2>
+      ${checked ? html`<span class="hc-tag ok">Checked ${d10(p.hts_checked_at)}${p.hts_checked_by ? ` by ${String(p.hts_checked_by).split(' ')[0]}` : ''}</span>` : same ? html`<span class="hc-tag ok">AI agrees with the current code</span>` : html`<span class="hc-tag w">To check</span>`}</div>
+    <div class="hc-cmp">
+      <div><span>Original · ${last ? 'declared on imports' : 'on file'}</span><b class="cu-mono">${fmtH(original)}</b>${o ? html`<small>${o.paid != null ? html`paid on last import` : parts(o) + ' ='}</small><em>${o.paid ?? o.total ?? '—'}%</em>` : html`<small>rate not found</small>`}</div>
+      <div class="rec"><span>To declare · ${checked ? 'checked' : 'AI recommended'}</span><b class="cu-mono">${fmtH(shown)}</b>${t ? html`<small>${parts(t)} =</small><em>${t.total ?? '—'}%</em>` : ''}</div>
+    </div>
+    ${cmp && cmp.save_pc ? html`<div class="hc-save ${cmp.save_pc < 0 ? 'up' : ''}"><span>${cmp.save_pc > 0 ? 'Saves' : 'Costs'} ${usd(cmp.save_pc, 3)}/pc${cmp.save_import ? html` · ≈ ${usd(cmp.save_import, 0)} per import (${Number(cmp.qty).toLocaleString('en-US')} pcs at ${usd(cmp.value_pc)})` : ''}</span><span>${cmp.from.rate - cmp.to.rate > 0 ? '−' : '+'}${Math.round(Math.abs(cmp.from.rate - cmp.to.rate) * 10) / 10} pts</span></div>` : ''}
+    ${cheap && dig(cheap.hts) !== dig(shown) ? html`<p class="cr-n">Cheaper but less certain: <b class="cu-mono">${cheap.hts}</b> ${cheap.total}% (${cheap.fit} fit) — see the classification.</p>` : ''}
+    <div class="hc-row"><button type="button" class="btn ghost small" data-open-dialog="hts-dlg">View classification</button>
+      <form method="post" action="/admin/products/${p.id}/hts/recheck" data-busy class="inline"><button class="btn ghost small">Re-check rates</button></form>
+      ${mail ? html`<button type="button" class="btn ghost small" data-open-dialog="hts-mail">✉ Tell the broker</button>` : ''}
+      <span class="sub hc-at">Rates checked ${d10(p.hts_rates_at || rv.rates_at)}</span></div>
+  </section>`;
+  const dlg = html`<dialog id="hts-dlg" class="rp-modal hc-dlg" aria-labelledby="hts-t" ${p._htsOpen ? raw('data-autoopen') : ''}><form method="post" action="/admin/products/${p.id}/hts/declare">
+    <h2 id="hts-t">HTS classification · ${p.product_name} <span class="hc-tag v">AI</span></h2>
+    <p class="sub">From ${from.join(', ').replace(/, ([^,]*)$/, ' and $1')} · ${d10(rv.at)}</p>
+    ${p.customs_description ? html`<div class="hc-desc"><b>Customs description</b> (saved for declarations, not shown in the catalog)<br>${p.customs_description}</div>` : ''}
+    <div class="table-wrap"><table class="list hc-t"><thead><tr><th></th><th>HTS</th><th>Description</th><th>Fit</th><th class="r">Total rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
+    ${(rv.candidates || []).map((c) => { const isBest = best && dig(c.hts) === dig(best.hts); const cur = dig(c.hts) === dig(original); return html`<tr class="${isBest ? 'hc-best' : cur ? 'hc-cur' : ''}">
+      <td><input type="radio" name="code" value="${dig(c.hts)}" aria-label="Choose ${c.hts}" ${dig(c.hts) === shown ? raw('checked') : ''} ${c.fit === 'weak' ? raw('data-weak') : ''}></td>
+      <td><span class="cu-mono">${c.hts}</span>${isBest ? html`<div><span class="hc-tag v">Recommended</span></div>` : ''}${cur ? html`<div class="sub">declared now</div>` : ''}</td>
+      <td>${c.title || c.usitc_title}<div class="sub">${c.why}</div></td><td><span class="hc-fit ${fitC[c.fit]}">${c.fit}</span></td>
+      <td class="r">${c.total != null ? `${c.total}%` : '—'}<div class="sub">${parts(c)}</div></td><td class="r">${c.duty_pc != null ? usd(c.duty_pc) : '—'}</td></tr>`; })}
+    </tbody></table></div>
+    ${(rv.missing || []).length ? html`<p class="sub"><b>Would help to know:</b> ${rv.missing.join('; ')}</p>` : ''}
+    <p class="sub">Rates: base from the USITC schedule, Section 301 from its Chapter 99 lines${rv.original_rate?.extras?.some((x) => x.from === '7501') ? ', country-wide extras as paid on your last 7501' : ''}. Duty/pc at ${rv.basis?.value_pc ? `${usd(rv.basis.value_pc)}/pc (${rv.basis.from})` : 'unknown value'}.</p>
+    <label class="hc-chk"><input type="checkbox" name="checked" value="1" required> I checked the chosen code against the USITC description (required to save)</label>
+    <div class="hc-acts">
+      <button type="submit" formaction="/admin/products/${p.id}/hts/classify" formnovalidate class="btn ghost small">↻ Re-run AI</button>
+      <span class="r"><button type="button" class="btn ghost" data-close-dialog>Close</button>
+      ${declare && dig(declare) !== dig(original) ? html`<button type="submit" formaction="/admin/products/${p.id}/hts/keep" formnovalidate class="btn ghost">Back to ${fmtH(original)}</button>` : ''}
+      <button class="btn hc-go">Save as code to declare</button></span></div>
+  </form></dialog>`;
+  const mailDlg = mail ? html`<dialog id="hts-mail" class="rp-modal hc-dlg" aria-labelledby="hts-m"><form method="dialog">
+    <h2 id="hts-m">Email to the broker</h2>
+    <label class="cu-mail-f">To<input type="email" value="${mail.to}" placeholder="broker@example.com" data-hm="to"></label>
+    <label class="cu-mail-f">Subject<input value="${mail.subject}" data-hm="subject"></label>
+    <label class="cu-mail-f">Message<textarea rows="12" data-hm="body">${mail.body}</textarea></label>
+    <div class="hc-acts"><span class="sub">Opens in your mail app — nothing is sent from the portal.</span><span class="r"><button type="button" class="btn ghost" data-close-dialog>Close</button><button type="button" class="btn ghost" data-hm-copy>Copy</button><button type="button" class="btn" data-hm-open>Open in mail</button></span></div>
+  </form></dialog>` : '';
+  return html`${card}${dlg}${mailDlg}`;
+}
+
 function dutyPanel({ p, a, testDuty, aiOn, customs = [] }) {
   const d = p.duty_ai_detail || null;
   const manual = p.duty_rate_pct !== null && p.duty_rate_pct !== undefined;
@@ -734,6 +812,52 @@ module.exports = function adminRoutes(router, { db, config }) {
     }));
   }));
 
+  // ── HTS classification (Customs records tab)
+  const HC = require('../hts-classify');
+  const lastImport = async (id) => (await require('./customs').forProduct(db, id).catch(() => []))[0] || null;
+  router.post('/admin/products/:id/hts/classify', G(async (req, res) => {
+    const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
+    const customs = await require('./customs').forProduct(db, p.id).catch(() => []);
+    try {
+      const out = await HC.classify(db, p, { customs, by: ST.current()?.name || null });
+      await db.update('products', { id: p.id }, { ...HC.patch(out), ...(p.hts_original_code ? {} : { hts_original_code: out.review.original }), updated_at: new Date().toISOString() });
+      flash(res, 'ok', `Classified: ${out.review.candidates.length} code${out.review.candidates.length === 1 ? '' : 's'} to compare`);
+      return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`);
+    } catch (e) {
+      console.error('HTS classify failed:', e.message);
+      flash(res, 'error', /api_key|ANTHROPIC/i.test(e.message) ? 'AI is not configured (ANTHROPIC_API_KEY).' : /schema|column/i.test(e.message) ? 'Run supabase/hts-classify.sql in Supabase first.' : `Classification failed: ${e.message.slice(0, 160)}`);
+      return res.redirect(`/admin/products/${p.id}#tab-customs`);
+    }
+  }));
+  router.post('/admin/products/:id/hts/declare', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
+    const rv = p.hts_review; const code = String(fields.code || '').replace(/\D/g, '').slice(0, 10);
+    const c = (rv?.candidates || []).find((x) => String(x.hts).replace(/\D/g, '') === code);
+    if (!c) { flash(res, 'error', 'Choose one of the classified codes'); return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`); }
+    if (fields.checked !== '1') { flash(res, 'error', 'Tick “I checked…” first — the code must be checked by a person'); return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`); }
+    const original = p.hts_original_code || rv.original || String(p.hts_verified_code || p.hs_code || '').replace(/\D/g, '') || null;
+    await db.update('products', { id: p.id }, { hts_original_code: original, hts_declare_code: code, hts_declare_pct: c.total, hts_verified_code: code, hts_checked_by: ST.current()?.name || null, hts_checked_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    flash(res, 'ok', `${c.hts} saved as the code to declare${original && original !== code ? ` (original ${require('../customs').fmtHts(original)} kept)` : ''}`);
+    res.redirect(`/admin/products/${p.id}#tab-customs`);
+  }));
+  router.post('/admin/products/:id/hts/keep', G(async (req, res) => {
+    const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
+    const original = p.hts_original_code || p.hts_review?.original || null;
+    await db.update('products', { id: p.id }, { hts_declare_code: null, hts_declare_pct: null, hts_checked_by: null, hts_checked_at: null, ...(original ? { hts_verified_code: original } : {}), updated_at: new Date().toISOString() });
+    flash(res, 'ok', `Back to the original code${original ? ` ${require('../customs').fmtHts(original)}` : ''}`);
+    res.redirect(`/admin/products/${p.id}#tab-customs`);
+  }));
+  router.post('/admin/products/:id/hts/recheck', G(async (req, res) => {
+    const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
+    if (!p.hts_review) { flash(res, 'error', 'Classify the product first'); return res.redirect(`/admin/products/${p.id}#tab-customs`); }
+    const { review, changes } = await HC.recheck(p, await lastImport(p.id));
+    const dc = p.hts_declare_code ? review.candidates.find((x) => String(x.hts).replace(/\D/g, '') === p.hts_declare_code) : null;
+    await db.update('products', { id: p.id }, { hts_review: review, hts_rates_at: review.rates_at, ...(dc && dc.total != null ? { hts_declare_pct: dc.total } : {}), updated_at: new Date().toISOString() });
+    flash(res, changes.length ? 'warn' : 'ok', changes.length ? `Rates changed: ${changes.join(' · ')}` : 'Rates re-checked — no change');
+    res.redirect(`/admin/products/${p.id}#tab-customs`);
+  }));
+
   router.post('/admin/products/:id/hts/use-declared', G(async (req, res) => {
     const { fields } = await parseForm(req);
     const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
@@ -772,7 +896,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis,
-        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }), customsHtml: await customsCard(db, p, customs, realA), customsN: customs.length }),
+        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }), customsHtml: html`${htsCard({ ...p, _htsOpen: req.query.hts === '1' }, customs, { aiOn: AI.enabled(), broker: await brokerFor(db, customs) })}${await customsCard(db, p, customs, realA)}`, customsN: customs.length }),
     }));
   }));
 

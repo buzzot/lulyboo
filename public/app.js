@@ -2568,7 +2568,12 @@
   function view() {
     var v = S.view, probs = v.checks.filter(function (c) { return c.level === 'bad' || c.level === 'warn'; }).length + v.suggestions;
     var sugg = v.lines.filter(function (l) { return l.suggestion && (l.suggestion.verdict === 'suggest' || l.suggestion.verdict === 'ok'); });
-    var alerts = v.checks.map(function (c) { return '<div class="lp-fd-a ' + c.level + '"><span>' + ICON[c.level] + '</span><span>' + (c.line ? '<b>Line ' + esc(c.line) + ':</b> ' : '') + esc(c.text) + '</span><span></span></div>'; }).join('') +
+    var act = function (c) {
+      if (c.kind === 'declare' && v.broker) return '<button type="button" class="btn ghost small cu-act" data-cu-mail>Draft email</button>';
+      if ((c.kind === 'rate' || c.kind === 'hts_prev') && c.level === 'warn' && c.product_id) return '<a class="btn ghost small cu-act" href="/admin/products/' + encodeURIComponent(c.product_id) + '#hts">Re-check product</a>';
+      return '';
+    };
+    var alerts = v.checks.map(function (c) { return '<div class="lp-fd-a ' + c.level + '"><span>' + ICON[c.level] + '</span><span>' + (c.line ? '<b>Line ' + esc(c.line) + ':</b> ' : '') + esc(c.text) + '</span><span>' + act(c) + '</span></div>'; }).join('') +
       sugg.map(function (l) {
         var g = l.suggestion, names = (l.products || []).map(function (p) { return p.code; }).join(' & ');
         if (g.verdict === 'ok') return '<div class="lp-fd-a ok"><span>✓</span><span><b>Line ' + esc(l.no) + (names ? ', ' + esc(names) : '') + ':</b> ' + esc(l.hts) + ' fits — ' + esc(g.reason) + '</span><span></span></div>';
@@ -2898,4 +2903,27 @@
   if (list && window.MutationObserver) new MutationObserver(later).observe(list, { childList: true });
   input.addEventListener('change', later);
   sync();
+})();
+
+// HTS classification (product → Customs records): open the popup after a run, label the save button with the
+// chosen code (weak fits warn), and the broker email (opens the mail app; nothing is sent from the portal).
+(function () {
+  var dlg = document.getElementById('hts-dlg');
+  if (dlg) {
+    var go = dlg.querySelector('.hc-go');
+    var label = function () {
+      var r = dlg.querySelector('input[name="code"]:checked'); if (!go || !r) return;
+      var t = r.closest('tr').querySelector('.cu-mono').textContent.trim();
+      go.textContent = 'Save ' + t + ' as code to declare'; go.classList.toggle('warn', r.hasAttribute('data-weak'));
+    };
+    dlg.addEventListener('change', function (e) { if (e.target.name === 'code') label(); }); label();
+    if (dlg.hasAttribute('data-autoopen') && dlg.showModal) { try { dlg.showModal(); } catch (e) { /* ignore */ } }
+  }
+  var m = document.getElementById('hts-mail'); if (!m) return;
+  var val = function (k) { var x = m.querySelector('[data-hm="' + k + '"]'); return x ? x.value : ''; };
+  m.addEventListener('click', function (e) {
+    if (e.target.closest('[data-hm-open]')) location.href = 'mailto:' + encodeURIComponent(val('to')) + '?subject=' + encodeURIComponent(val('subject')) + '&body=' + encodeURIComponent(val('body'));
+    var c = e.target.closest('[data-hm-copy]');
+    if (c && navigator.clipboard) navigator.clipboard.writeText('Subject: ' + val('subject') + '\n\n' + val('body')).then(function () { c.textContent = 'Copied ✓'; setTimeout(function () { c.textContent = 'Copy'; }, 1500); });
+  });
 })();

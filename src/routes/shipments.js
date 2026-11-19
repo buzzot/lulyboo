@@ -88,6 +88,9 @@ async function load(db) {
       else if (docsOk || (pd.pos.length && !pd.open.length)) flags.push(['grn', 'Docs ✓']);
       if ((stage === 'arrived') && !ce.length) flags.push(['red', 'No customs entry yet']);
       if (ce.length) { const e = ce[0]; flags.push(e.status === 'saved' ? ['grn', `7501 ✓ duty ${usd(e.duty)}`] : ['amb', '7501 to review']); }
+      // HTS / duty vs the last import and the checked code to declare (from the 7501 checks)
+      const hw = ce.flatMap((e) => (e.checks || []).filter((k) => k.level === 'warn' && ['declare', 'hts_prev', 'rate'].includes(k.kind)));
+      if (hw.length) flags.push(['amb', hw.some((k) => k.kind === 'declare') ? 'HTS ≠ code to declare' : hw.some((k) => k.kind === 'hts_prev') ? 'HTS changed vs last import' : 'Duty rate changed', hw.map((k) => k.text).join('\n')]);
       if (lfd && (stage === 'arrived' || stage === 'customs')) { const d = daysBetween(today, lfd); flags.push(d < 0 ? ['red', `Free time over (${sh(lfd)}) · book delivery`] : d <= 3 ? ['amb', `Free time ends ${sh(lfd)}`] : ['gry', `Free time to ${sh(lfd)}`]); }
       if (stage === 'sailed' && f.eta) { const d = daysBetween(today, f.eta); if (d >= 0 && d <= 7) flags.push(['blu', d === 0 ? 'Arrives today' : `Arrives in ${d} day${d === 1 ? '' : 's'}`]); if (d < 0 && !arrivedOn) flags.push(['amb', `ETA passed ${sh(f.eta)} — no arrival notice`]); }
     } else {
