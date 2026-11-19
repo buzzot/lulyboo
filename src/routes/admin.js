@@ -169,7 +169,7 @@ function htsCard(p, list, { aiOn, broker = '' } = {}) {
   const original = dig(p.hts_original_code) || (rv && dig(rv.original)) || dig(last?.hts) || dig(p.hts_verified_code || p.hs_code);
   const declare = dig(p.hts_declare_code);
   const d10 = (x) => (x ? PL.short(String(x).slice(0, 10)) : '');
-  const parts = (r) => (r ? [r.base != null ? `${r.base}%` : '?', ...(r.extras || []).map((x) => `${x.rate}%`)].join(' + ') : '');
+  const parts = (r) => (r ? [r.base != null ? `${r.base}%` : '?', ...(r.extras || []).map((x) => `${x.rate}%${x.from === 'assumed' ? '?' : ''}`)].join(' + ') : '');
   if (!rv) {
     return html`<section class="card hc" id="hts"><div class="hc-h"><h2 class="sec">HTS classification</h2><span class="hc-tag">Not classified yet</span></div>
       <p class="cr-n">AI reads the photos, the description and the attached spec / documents, writes a description for customs and ranks the HTS codes that fit — most correct first, with the duty of each. You check it, then choose the code to declare. The original code is kept.</p>
@@ -201,20 +201,21 @@ function htsCard(p, list, { aiOn, broker = '' } = {}) {
   </section>`;
   const dlg = html`<dialog id="hts-dlg" class="rp-modal hc-dlg" aria-labelledby="hts-t" ${p._htsOpen ? raw('data-autoopen') : ''}><form method="post" action="/admin/products/${p.id}/hts/declare">
     <h2 id="hts-t">HTS classification · ${p.product_name} <span class="hc-tag v">AI</span></h2>
-    <p class="sub">From ${from.join(', ').replace(/, ([^,]*)$/, ' and $1')} · ${d10(rv.at)}</p>
+    <p class="sub">${srcs.reused ? 'Re-run from the saved customs description' : `From ${from.join(', ').replace(/, ([^,]*)$/, ' and $1')}`} · ${d10(rv.at)}</p>
     ${p.customs_description ? html`<div class="hc-desc"><b>Customs description</b> (saved for declarations, not shown in the catalog)<br>${p.customs_description}</div>` : ''}
     <div class="table-wrap"><table class="list hc-t"><thead><tr><th></th><th>HTS</th><th>Description</th><th>Fit</th><th class="r">Total rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
     ${(rv.candidates || []).map((c) => { const isBest = best && dig(c.hts) === dig(best.hts); const cur = dig(c.hts) === dig(original); return html`<tr class="${isBest ? 'hc-best' : cur ? 'hc-cur' : ''}">
       <td><input type="radio" name="code" value="${dig(c.hts)}" aria-label="Choose ${c.hts}" ${dig(c.hts) === shown ? raw('checked') : ''} ${c.fit === 'weak' ? raw('data-weak') : ''}></td>
       <td><span class="cu-mono">${c.hts}</span>${isBest ? html`<div><span class="hc-tag v">Recommended</span></div>` : ''}${cur ? html`<div class="sub">declared now</div>` : ''}</td>
-      <td>${c.title || c.usitc_title}<div class="sub">${c.why}</div></td><td><span class="hc-fit ${fitC[c.fit]}">${c.fit}</span></td>
-      <td class="r">${c.total != null ? `${c.total}%` : '—'}<div class="sub">${parts(c)}</div></td><td class="r">${c.duty_pc != null ? usd(c.duty_pc) : '—'}</td></tr>`; })}
+      <td><b class="hc-ti">${c.title || c.usitc_title || '—'}</b>${c.official ? html`<div class="hc-off"><span>USITC</span> ${c.official}</div>` : ''}<div class="sub">${c.why}</div>${(c.notes || []).length ? html`<div class="hc-note">${c.notes.join(' · ')}</div>` : ''}</td><td><span class="hc-fit ${fitC[c.fit]}">${c.fit}</span></td>
+      <td class="r">${c.total != null ? `${c.total}%` : html`<span class="hc-note">${c.found === false ? 'not in schedule' : 'no rate'}</span>`}<div class="sub">${c.total != null ? parts(c) : ''}</div></td><td class="r">${c.duty_pc != null ? usd(c.duty_pc) : '—'}</td></tr>`; })}
     </tbody></table></div>
     ${(rv.missing || []).length ? html`<p class="sub"><b>Would help to know:</b> ${rv.missing.join('; ')}</p>` : ''}
-    <p class="sub">Rates: base from the USITC schedule, Section 301 from its Chapter 99 lines${rv.original_rate?.extras?.some((x) => x.from === '7501') ? ', country-wide extras as paid on your last 7501' : ''}. Duty/pc at ${rv.basis?.value_pc ? `${usd(rv.basis.value_pc)}/pc (${rv.basis.from})` : 'unknown value'}.</p>
+    <p class="sub">Rates: base from the USITC schedule (the 8-digit line for a statistical suffix), Section 301 from its Chapter 99 notes${rv.original_rate?.extras?.some((x) => x.from === '7501') ? ', other Chapter 99 duties (IEEPA etc.) as paid on your last 7501' : ''}${(rv.candidates || []).some((c) => (c.extras || []).some((x) => x.from === 'assumed')) ? '; “?” = Section 301 assumed, not confirmed for that code' : ''}.${rv.verified ? ' Each code was checked against its official USITC text.' : ''} Duty/pc at ${rv.basis?.value_pc ? `${usd(rv.basis.value_pc)}/pc (${rv.basis.from})` : 'unknown value'}.</p>
     <label class="hc-chk"><input type="checkbox" name="checked" value="1" required> I checked the chosen code against the USITC description (required to save)</label>
     <div class="hc-acts">
-      <button type="submit" formaction="/admin/products/${p.id}/hts/classify" formnovalidate class="btn ghost small">↻ Re-run AI</button>
+      <span class="hc-rerun"><button type="submit" formaction="/admin/products/${p.id}/hts/classify" formnovalidate class="btn ghost small" title="Uses the saved customs description — no photos or documents, few tokens">↻ Re-run AI</button>
+      <button type="submit" name="full" value="1" formaction="/admin/products/${p.id}/hts/classify" formnovalidate class="link small" title="Reads the photos and documents again and rewrites the customs description">Re-read photos &amp; docs</button></span>
       <span class="r"><button type="button" class="btn ghost" data-close-dialog>Close</button>
       ${declare && dig(declare) !== dig(original) ? html`<button type="submit" formaction="/admin/products/${p.id}/hts/keep" formnovalidate class="btn ghost">Back to ${fmtH(original)}</button>` : ''}
       <button class="btn hc-go">Save as code to declare</button></span></div>
@@ -818,8 +819,9 @@ module.exports = function adminRoutes(router, { db, config }) {
   router.post('/admin/products/:id/hts/classify', G(async (req, res) => {
     const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
     const customs = await require('./customs').forProduct(db, p.id).catch(() => []);
+    const { fields } = await parseForm(req).catch(() => ({ fields: {} }));
     try {
-      const out = await HC.classify(db, p, { customs, by: ST.current()?.name || null });
+      const out = await HC.classify(db, p, { customs, by: ST.current()?.name || null, reuse: fields.full !== '1' && !!p.customs_description });
       await db.update('products', { id: p.id }, { ...HC.patch(out), ...(p.hts_original_code ? {} : { hts_original_code: out.review.original }), updated_at: new Date().toISOString() });
       flash(res, 'ok', `Classified: ${out.review.candidates.length} code${out.review.candidates.length === 1 ? '' : 's'} to compare`);
       return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`);
@@ -835,6 +837,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     const rv = p.hts_review; const code = String(fields.code || '').replace(/\D/g, '').slice(0, 10);
     const c = (rv?.candidates || []).find((x) => String(x.hts).replace(/\D/g, '') === code);
     if (!c) { flash(res, 'error', 'Choose one of the classified codes'); return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`); }
+    if (c.found === false || c.total == null) { flash(res, 'error', `${c.hts} has no rate in the US schedule — it can't be the code to declare. Check it on hts.usitc.gov or re-run the AI.`); return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`); }
     if (fields.checked !== '1') { flash(res, 'error', 'Tick “I checked…” first — the code must be checked by a person'); return res.redirect(`/admin/products/${p.id}?hts=1#tab-customs`); }
     const original = p.hts_original_code || rv.original || String(p.hts_verified_code || p.hs_code || '').replace(/\D/g, '') || null;
     await db.update('products', { id: p.id }, { hts_original_code: original, hts_declare_code: code, hts_declare_pct: c.total, hts_verified_code: code, hts_checked_by: ST.current()?.name || null, hts_checked_at: new Date().toISOString(), updated_at: new Date().toISOString() });

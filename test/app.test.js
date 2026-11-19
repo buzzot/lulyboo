@@ -4339,7 +4339,7 @@ test('7501 review: products linked by SKU / to confirm / not found, confirm, lin
 });
 
 test('HTS classification: AI classifies once, rates from USITC, checked save keeps the original, pricing + 7501 comparison', async (t) => {
-  const realFetch = global.fetch; let sent = null;
+  const realFetch = global.fetch; let sent = null; const calls = [];
   const ROWS2 = {
     '3922.20': [{ htsno: '3922.20.00.00', description: 'Seats and covers', general: '3.4%', footnotes: [{ value: 'See 9903.88.03.' }] }],
     '3922.90': [{ htsno: '3922.90.00.00', description: 'Other', general: '6.3%', footnotes: [{ value: 'See 9903.88.03.' }] }],
@@ -4350,7 +4350,7 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
     const u = String(url);
     if (u.startsWith('https://hts.usitc.gov')) { const k = decodeURIComponent(u.split('keyword=')[1]); const hit = Object.keys(ROWS2).find((x) => k.startsWith(x)); return new Response(JSON.stringify(hit ? ROWS2[hit] : []), { status: 200 }); }
     if (u.startsWith('https://api.anthropic.com')) {
-      sent = JSON.parse(opts.body); const name = sent.tool_choice.name;
+      sent = JSON.parse(opts.body); calls.push(sent); const name = sent.tool_choice.name;
       const input = { customs_description: 'Child toilet training seat of molded PP plastic, fits an adult toilet, for ages 1–4.', summary: 'Potty seat insert',
         candidates: [{ hts: '3922.20.0000', title: 'Lavatory seats and covers', fit: 'strong', why: 'GRI 1: heading names lavatory seats.' }, { hts: '3922.90.0000', title: 'Other sanitary ware', fit: 'possible', why: 'Residual.' }, { hts: '9503.00.0073', title: 'Toys', fit: 'weak', why: 'Not a toy.' }], missing_facts: ['Exact age grade on the label'] };
       return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
@@ -4365,7 +4365,7 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   const s = await db.insert('suppliers', { name: 'Kean' });
   const p = await db.insert('products', { supplier_id: s.id, product_name: 'Dino potty seat', supplier_sku: 'DPS 001', materials: 'PP', unit_price: 1.45, currency: 'USD', status: 'Selected', hts_verified_code: '3922900000', country_of_origin: 'China' });
   // last import: 3922.90 at 6.3 + 25 + 12.5 (country-wide 9903.01.25)
-  const line = { no: '001', hts: '3922.90.0000', rate: 6.3, extras: [{ code: '9903.88.03', rate: 25 }, { code: '9903.01.25', rate: 12.5 }], value: 2854, qty: 1968, duty: 1250, products: [{ code: 'DPS 001', product_id: p.id, value: 2854, qty: 1968, per_pc: 0.64 }] };
+  const line = { no: '001', hts: '3922.90.0000', rate: 6.3, extras: [{ code: '9903.88.03', rate: 25 }, { code: '9903.05.31', rate: 12.5 }], value: 2854, qty: 1968, duty: 1250, products: [{ code: 'DPS 001', product_id: p.id, value: 2854, qty: 1968, per_pc: 0.64 }] };
   await db.insert('customs_entries', { entry_no: 'E-1', entry_date: '2026-10-01', status: 'saved', lines: [line], facts: {}, from_email: 'Broker <chb@broker.test>' });
 
   // not classified yet → the card offers the AI run
@@ -4377,7 +4377,7 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   assert.match(pr.customs_description, /toilet training seat/);
   assert.equal(pr.hts_original_code, '3922900000');
   const c1 = pr.hts_review.candidates;
-  assert.deepEqual(c1.map((c) => [c.hts, c.total]), [['3922.20.0000', 40.9], ['3922.90.0000', 43.8], ['9503.00.0073', 12.5]]);
+  assert.deepEqual(c1.map((c) => [c.hts, c.total]), [['3922.20.0000', 40.9], ['3922.90.0000', 43.8], ['9503.00.0073', 37.5]]);
   assert.equal(c1[0].duty_pc, 0.593); // $1.45 × 40.9%
   assert.equal(pr.hts_review.original_rate.paid, 43.8);
   assert.ok(sent.messages[0].content[0].text.includes('3922.90.0000'), 'declared history goes to the model');
@@ -4418,4 +4418,29 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   r = await req(base, 'POST', `/admin/products/${p.id}/hts/keep`, { cookie });
   pr = await db.get('products', p.id);
   assert.equal(pr.hts_declare_code, null); assert.equal(pr.hts_verified_code, '3922900000');
+  // a 10-digit statistical line has no rate of its own: the 8-digit line's rate is used; a code not in the schedule gets no rate
+  ROWS2['9401.80'] = [{ htsno: '9401.80.60', description: 'Of rubber or plastics', general: '5.3%', footnotes: [{ value: 'See 9903.88.03.' }] }, { htsno: '9401.80.60.10', description: 'For children', general: '' }];
+  const HC = require('../src/hts-classify');
+  const r1 = await HC.rateOf('9401806010', { originExtras: [{ code: '9903.05.31', rate: 12.5 }] });
+  assert.equal(r1.base, 5.3); assert.equal(r1.found, true); assert.match(r1.official, /Of rubber or plastics › For children/);
+  assert.equal(r1.total, 67.8); // 5.3 + 301 (raised to 50% above) + 12.5
+  const r0 = await HC.rateOf('9403200080', {});
+  assert.equal(r0.found, false); assert.equal(r0.total, null);
+  // Section 301 paid on the last import but not listed for a new code → assumed, flagged
+  const r2 = await HC.rateOf('9503000073', { s301: { code: '9903.88.03', rate: 25 }, lastHts: '3922.90.0000' });
+  assert.equal(r2.total, 25); assert.ok(r2.extras.some((x) => x.from === 'assumed'));
+  // re-run reuses the saved customs description: no photos or documents sent
+  calls.length = 0;
+  await req(base, 'POST', `/admin/products/${p.id}/hts/classify`, { cookie });
+  assert.equal(calls[0].tool_choice.name, 'classify_product'); assert.equal(calls[1].tool_choice.name, 'verify_codes');
+  const firstCall = JSON.stringify(calls[0].messages[0].content);
+  assert.match(firstCall, /toilet training seat/);
+  assert.ok(!/"type":"image"|"type":"document"/.test(firstCall));
+  assert.match((await db.get('products', p.id)).hts_review.sources.reused ? 'reused' : '', /reused/);
+  // a code with no rate cannot be saved as the code to declare
+  const pr2 = await db.get('products', p.id);
+  pr2.hts_review.candidates.push({ hts: '9403.20.0080', fit: 'strong', why: 'x', found: false, total: null });
+  await db.update('products', { id: p.id }, { hts_review: pr2.hts_review });
+  await req(base, 'POST', `/admin/products/${p.id}/hts/declare`, { cookie, form: { code: '9403200080', checked: '1' } });
+  assert.equal((await db.get('products', p.id)).hts_declare_code, null);
 });
