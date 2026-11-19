@@ -4228,3 +4228,40 @@ test('PO page: add a line to a container (also a shipped one), move it, take it 
   row = db.tables.plan_orders.find((x) => x.id === pink.id);
   assert.equal(row.container_id, null); assert.equal(row.shipped, false);
 });
+
+test('add a document: one file for several POs (stored once), one supplier only, AI suggests the POs and checks the quantities', async (t) => {
+  const db = seedDb();
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.anthropic.com')) return new Response(JSON.stringify({ content: [{ type: 'tool_use', name: 'record_shipment', input: { summary: 'PL', invoice_no: 'XF-1107', lines: [{ po: '70011', product: 'Easy Spoon Squeeze Feeder - Blue', qty: 5040, cartons: 63 }, { po: '700013', product: 'Freezer Set', qty: 2880, cartons: 40 }, { po: '999', product: 'Unknown toy', qty: 10 }] } }] }), { status: 200 });
+    return realFetch(url, opts);
+  };
+  process.env.ANTHROPIC_API_KEY = 'k';
+  const { server, base } = await startServer(db);
+  t.after(() => { server.close(); global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const x = await db.insert('suppliers', { name: 'Dongguan Xing Fuming' }); const y = await db.insert('suppliers', { name: 'Yuanyi' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'shipped', fwd: { booking_no: 'YN0011', atd: '2026-11-10', eta: '2026-12-01' } });
+  await db.insert('plan_orders', { supplier_id: x.id, po: '70011', product: 'Easy Spoon Squeeze Feeder - Blue', qty: 5040, container_id: c.id, port: 'CNYTN' });
+  await db.insert('plan_orders', { supplier_id: x.id, po: '700013', product: 'Freezer Set', qty: 3000, container_id: c.id, port: 'CNYTN' });
+  await db.insert('plan_orders', { supplier_id: y.id, po: '500015', product: 'Infant Feeder', qty: 3072, container_id: c.id, port: 'CNYTN' });
+  const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det, /data-adddoc=/); assert.match(det, /name="pos" value="[^"]*\|70011"/); assert.match(det, /CI \+ PL/);
+  const mk = () => { const fd = new FormData(); fd.append('file', new Blob([Buffer.from('%PDF cipl')], { type: 'application/pdf' }), 'CI&PL XF.pdf'); return fd; };
+  // AI read: suggests both Xing Fuming POs, flags the short line
+  const sc = await (await fetch(`${base}/admin/orders/shipments/${c.id}/upload/scan`, { method: 'POST', headers: { cookie }, body: mk() })).json();
+  assert.equal(sc.ai, true); assert.equal(sc.kind, 'CIPL');
+  assert.deepEqual(sc.suggest.map((s) => s.po).sort(), ['700013', '70011']);
+  assert.equal(sc.checks.find((k) => k.po === '700013').diff, -4); assert.equal(sc.checks.find((k) => k.po === '70011').diff, 0);
+  assert.equal(sc.extra.length, 1);
+  // two suppliers in one file: refused
+  let fd = mk(); fd.append('pos', `${x.id}|70011`); fd.append('pos', `${y.id}|500015`); fd.append('kind', 'CIPL');
+  assert.equal((await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' })).status, 400);
+  // one file, both POs
+  fd = mk(); fd.append('pos', `${x.id}|70011`); fd.append('pos', `${x.id}|700013`); fd.append('kind', 'CIPL');
+  assert.equal((await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' })).status, 303);
+  const saved = db.tables.plan_files.filter((f) => f.name === 'CI&PL XF.pdf');
+  assert.equal(saved.length, 1); assert.deepEqual(saved[0].pos.sort(), ['700013', '70011']); assert.equal(saved[0].kind, 'Invoice & packing list');
+  const st = await require('../src/podocs').check(db, c);
+  assert.deepEqual(st.pos.filter((p) => p.sid === x.id).map((p) => p.missing), [[], []]);
+});

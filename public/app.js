@@ -2818,3 +2818,61 @@
     inp.addEventListener('search', function () { if (!inp.value && inp.form && /[?&]q=/.test(location.search)) inp.form.submit(); else run(); });   // the × clears
   });
 })();
+
+// Add a document (shipment page): PO tick-pills (one supplier per file), type pills, AI read of the file that
+// suggests the POs and checks the quantities against the plan.
+(function () {
+  var form = document.querySelector('form[data-adddoc]'); if (!form) return;
+  var boxes = Array.prototype.slice.call(form.querySelectorAll('input[name=pos]'));
+  var input = form.querySelector('input[type=file]'), list = form.querySelector('[data-list]');
+  var ai = form.querySelector('[data-ai]'), sum = form.querySelector('[data-sum]'), btn = form.querySelector('[data-addbtn]');
+  var touched = false, seq = 0;
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var fmt = function (n) { return n == null ? '—' : Number(n).toLocaleString('en-US'); };
+  var KN = { '': 'detected type', Invoice: 'commercial invoice', 'Packing list': 'packing list', CIPL: 'CI + PL', 'Bill of lading': 'bill of lading', 'Warehouse receipt': 'warehouse receipt', 'Loading photos': 'photos', Other: 'document' };
+  var kind = function () { var k = form.querySelector('input[name=kind]:checked'); return k ? k.value : ''; };
+  var sync = function () {
+    var on = boxes.filter(function (b) { return b.checked; }), sid = on.length ? on[0].getAttribute('data-sid') : null;
+    Array.prototype.forEach.call(form.querySelectorAll('.ad-sup'), function (g) { var other = sid && g.getAttribute('data-sup') !== sid; g.classList.toggle('dim', !!other); Array.prototype.forEach.call(g.querySelectorAll('input[name=pos]'), function (b) { b.disabled = !!other; }); });
+    var n = input.files ? input.files.length : 0, pos = on.map(function (b) { return b.getAttribute('data-po'); });
+    btn.disabled = !(on.length && n);
+    btn.textContent = on.length > 1 ? 'Add to ' + on.length + ' POs' : 'Add';
+    sum.innerHTML = !on.length ? 'Tick the PO(s) this file is for.' : !n ? 'Now drop the file.'
+      : 'Will add <b>' + (n === 1 ? esc(input.files[0].name) : n + ' files') + '</b> as <b>' + esc(KN[kind()] || 'document') + '</b> to <b>PO ' + esc(pos.join(', ')) + '</b>' + (on.length > 1 ? ' — one file, linked to all' : '') + '.';
+  };
+  boxes.forEach(function (b) { b.addEventListener('change', function () { touched = true; sync(); }); });
+  Array.prototype.forEach.call(form.querySelectorAll('[data-allsup]'), function (a) {
+    a.addEventListener('click', function () { var sid = a.getAttribute('data-allsup'); touched = true; boxes.forEach(function (b) { b.checked = b.getAttribute('data-sid') === sid; }); sync(); });
+  });
+  Array.prototype.forEach.call(form.querySelectorAll('input[name=kind]'), function (r) { r.addEventListener('change', sync); });
+  var scan = function () {
+    var n = input.files ? input.files.length : 0; sync();
+    if (!n) { ai.hidden = true; return; }
+    var my = ++seq, fd = new FormData(); Array.prototype.forEach.call(input.files, function (f) { fd.append('file', f, f.name); });
+    ai.hidden = false; ai.className = 'ad-ai busy'; ai.innerHTML = '<span class="ad-spin"></span> Reading the file…';
+    fetch(form.getAttribute('data-adddoc'), { method: 'POST', body: fd, credentials: 'same-origin', headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.json(); }).then(function (j) {
+        if (my !== seq) return;
+        if (j.kind && !kind()) { var k = form.querySelector('input[name=kind][value="' + j.kind + '"]'); if (k) k.checked = true; }
+        boxes.forEach(function (b) { var s = b.parentNode.querySelector('.ad-sug'); if (s) s.hidden = true; });
+        (j.suggest || []).forEach(function (s) { boxes.forEach(function (b) { if (b.getAttribute('data-sid') === s.sid && b.getAttribute('data-po') === s.po) { var m = b.parentNode.querySelector('.ad-sug'); if (m) m.hidden = false; } }); });
+        if (!touched && (j.suggest || []).length) { var sid = j.suggest[0].sid; boxes.forEach(function (b) { b.checked = b.getAttribute('data-sid') === sid && j.suggest.some(function (s) { return s.sid === sid && s.po === b.getAttribute('data-po'); }); }); }
+        if (!j.ai) { ai.className = 'ad-ai'; ai.innerHTML = j.error ? esc(j.error) + ' — choose the PO(s) and type yourself.' : 'Type set from the file name' + (j.kind ? ': <b>' + esc(KN[j.kind] || j.kind) + '</b>' : '') + '.'; sync(); return; }
+        var rows = (j.checks || []).map(function (c) {
+          var ok = c.diff != null && Math.abs(c.diff) <= 2, cls = c.diff == null ? '' : ok ? 'ok' : 'bad';
+          return '<tr><td><b>' + esc(c.po) + '</b> ' + esc(c.product) + '</td><td class="r">' + fmt(c.planned) + '</td><td class="r">' + fmt(c.actual) + '</td><td class="r ' + cls + '">' + (c.diff == null ? '—' : ok ? '✓' : (c.diff > 0 ? '+' : '') + c.diff + '%') + '</td></tr>';
+        }).join('');
+        var bad = (j.checks || []).filter(function (c) { return c.diff != null && Math.abs(c.diff) > 2; }).length;
+        ai.className = 'ad-ai ' + (bad || (j.extra || []).length ? 'warn' : 'good');
+        ai.innerHTML = '<div class="ad-ah"><b>AI check</b> ' + (j.suggest && j.suggest.length ? 'found PO ' + esc(j.suggest.map(function (s) { return s.po; }).join(', ')) : 'couldn\'t match a PO — tick it yourself') + (j.invoice_no ? ' · invoice ' + esc(j.invoice_no) : '') + '</div>'
+          + (rows ? '<table class="ad-t"><thead><tr><th>Line</th><th class="r">Planned</th><th class="r">In file</th><th class="r"></th></tr></thead><tbody>' + rows + '</tbody></table>' : '')
+          + (bad ? '<p class="ad-n">' + bad + ' line' + (bad > 1 ? 's differ' : ' differs') + ' from the plan — check before adding; the figures can be accepted later from the shipping-documents card.</p>' : rows ? '<p class="ad-n">Quantities match the plan.</p>' : '')
+          + ((j.extra || []).length ? '<p class="ad-n">Not in this container: ' + esc(j.extra.map(function (x) { return (x.po ? 'PO ' + x.po + ' · ' : '') + (x.product || '') + (x.qty != null ? ' (' + fmt(x.qty) + ' pcs)' : ''); }).join('; ')) + '</p>' : '');
+        sync();
+      }).catch(function () { if (my === seq) { ai.className = 'ad-ai'; ai.innerHTML = 'Couldn\'t read the file — choose the PO(s) and type yourself.'; } });
+  };
+  var t = null; var later = function () { clearTimeout(t); t = setTimeout(scan, 250); };
+  if (list && window.MutationObserver) new MutationObserver(later).observe(list, { childList: true });
+  input.addEventListener('change', later);
+  sync();
+})();

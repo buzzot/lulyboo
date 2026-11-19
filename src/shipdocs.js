@@ -161,7 +161,9 @@ async function factsOf(db, sc) {
   }
   return { supplier, c, sailing, lines };
 }
-const filesOf = async (db, sc) => (sc.id ? (await db.list('plan_files', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((f) => f.shipment_id === sc.id) : []);
+// a request's files: those that came in on it, and those added later for one of its POs (one file can cover several POs)
+const filesOf = async (db, sc) => (sc.id ? (await db.list('plan_files', { filters: { supplier_id: sc.supplier_id } }).catch(() => [])).filter((f) => f.shipment_id === sc.id
+  || (String(f.created_at || '') >= String(sc.created_at || '') && (f.pos || []).some((p) => (sc.pos || []).some((q) => PL.normPo(q) === PL.normPo(p))))) : []);
 
 /**
  * Document checklist right now: each document with its state.
@@ -172,7 +174,7 @@ function checklistOf(sc, files, sailing, day) {
   const out = [];
   if (!confirmed(sc)) out.push({ key: 'confirm', label: sc.mode === 'FCL' ? 'Container and seal number' : 'Shipment confirmation', ask: CONFIRM[sc.mode || ''], state: 'miss' });
   for (const [kind, label, ask, optional] of required(sc)) {
-    const have = files.some((f) => f.kind === kind);
+    const have = files.some((f) => f.kind === kind || (f.kind === 'Invoice & packing list' && (kind === 'Invoice' || kind === 'Packing list')));
     const state = have ? 'have' : optional ? 'opt' : kind === 'Bill of lading' && sc.mode !== 'COURIER' && bl && day < bl ? 'later' : 'miss';
     out.push({ key: kind, label, ask, state, from: state === 'later' ? bl : null });
   }

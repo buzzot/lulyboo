@@ -13,6 +13,7 @@ const PL = require('../planning');
 const SC = require('../schedules');
 const FW = require('../forwarding');
 const SD = require('../shipdocs');
+const AI = require('../ai');
 
 const BASE = '/admin/orders/shipments';
 const now = () => new Date().toISOString();
@@ -327,13 +328,23 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       <div class="dx-ft"><span class="sub">Hover a document to see its files · click to open</span>${addPos.length && editable ? html`<button type="button" class="link small" data-open-dialog="dx-add">+ Add file</button>` : ''}</div>
       ${rmForms.map((rm, i) => html`<form id="${`dx-rm-${i}`}" method="post" action="${BASE}/${r.id}/doc/remove" hidden><input type="hidden" name="src" value="${rm.src}"><input type="hidden" name="ref" value="${rm.ref}"><input type="hidden" name="i" value="${rm.i ?? ''}"><input type="hidden" name="back" value="docs"></form>`)}
     </section>`;
-    const addDlg = addPos.length && editable ? html`<dialog id="dx-add" class="rp-modal pd-dlg" aria-labelledby="dx-add-t"><form method="post" action="${BASE}/${r.id}/upload" enctype="multipart/form-data" data-busy>
+    // ── Add a document: tick the PO(s) it covers (one supplier), pick the type, drop the file; AI reads it and checks ──
+    const supName = {}; for (const sid of new Set(addPos.map((l) => l.supplier_id))) supName[sid] = (r.pd?.pos || []).find((p) => p.sid === sid)?.supplier || (await db.get('suppliers', sid).catch(() => null))?.name || 'Supplier';
+    const bySup = {}; for (const l of addPos) (bySup[l.supplier_id] = bySup[l.supplier_id] || []).push(l);
+    const needOf = (l) => { const p = (r.pd?.pos || []).find((x) => x.sid === l.supplier_id && PL.normPo(x.po) === PL.normPo(l.po)); if (!p) return ''; return p.missing.length ? `${p.missing.join(' · ')} missing` : '✓ CI & PL'; };
+    const ADD_KINDS = [['', 'Detect'], ['Invoice', 'Commercial invoice'], ['Packing list', 'Packing list'], ['CIPL', 'CI + PL'], ['Bill of lading', 'Bill of lading'], ['Warehouse receipt', 'Warehouse receipt'], ['Loading photos', 'Photos'], ['Other', 'Other']];
+    const addDlg = addPos.length && editable ? html`<dialog id="dx-add" class="rp-modal ad-dlg" aria-labelledby="dx-add-t"><form method="post" action="${BASE}/${r.id}/upload" enctype="multipart/form-data" data-busy data-adddoc="${`${BASE}/${r.id}/upload/scan`}">
       <div class="rp-top"><h2 id="dx-add-t">Add a document</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
-      <p class="sub">A file you got another way — WeChat, the forwarder, a download. It's filed to the PO and ticks it off.</p>
-      <div class="dx-addg"><label>PO<select name="po" required>${addPos.map((l) => html`<option value="${`${l.supplier_id}|${l.po}`}">${PL.normPo(l.po)} · ${(r.pd?.pos || []).find((p) => p.sid === l.supplier_id)?.supplier || ''}</option>`)}</select></label>
-        <label>Document<select name="kind"><option value="">Detect from the name</option>${['Invoice', 'Packing list', 'Bill of lading', 'Warehouse receipt', 'Loading photos', 'Other'].map((k) => html`<option>${k}</option>`)}</select></label></div>
+      <p class="sub">A file you got another way — WeChat, the forwarder, a download. One file can cover several POs; it's stored once.${AI.enabled() ? ' AI reads it, checks the quantities and suggests the POs.' : ''}</p>
+      <div class="ad-lbl">POs this file covers</div>
+      <div class="ad-pos">${Object.entries(bySup).map(([sid, ls]) => html`<div class="ad-sup" data-sup="${sid}"><div class="ad-sh"><b>${supName[sid]}</b>${ls.length > 1 ? html`<button type="button" class="link small" data-allsup="${sid}">Select all ${ls.length}</button>` : ''}<small class="ad-other">another supplier — one file is from one seller</small></div>
+        <div class="ad-row">${ls.map((l) => html`<label class="ad-po"><input type="checkbox" name="pos" value="${`${l.supplier_id}|${l.po}`}" data-sid="${sid}" data-po="${PL.normPo(l.po)}"><i aria-hidden="true"></i><b>${PL.normPo(l.po)}</b>${needOf(l) ? html`<small>${needOf(l)}</small>` : ''}<em class="ad-sug" hidden>AI ✓</em></label>`)}</div></div>`)}</div>
+      <div class="ad-lbl">What is it</div>
+      <div class="ad-kind" role="radiogroup" aria-label="Document type">${ADD_KINDS.map(([v, l], i) => html`<label><input type="radio" name="kind" value="${v}" ${i === 0 ? raw('checked') : ''}><span>${l}</span></label>`)}</div>
       <div class="mdrop small dx-drop" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop files here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">PDF, Excel, photos · several at once</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-      <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Add</button></div></form></dialog>` : '';
+      <div class="ad-ai" data-ai hidden></div>
+      <p class="ad-sum" data-sum>Tick the PO(s) this file is for.</p>
+      <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn" data-addbtn disabled>Add</button></div></form></dialog>` : '';
     const brokerDlg = r.c && r.kind !== 'courier' ? await (async () => {
                 const PM = require('../payments');
                 const bd = await PM.brokerDocs(db, r.c); const to = await PM.brokerEmail(db);
@@ -525,26 +536,58 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     flash(res, 'ok', 'Reopened.'); res.redirect(`${BASE}/${r.id}`);
   }));
   // a document received another way (WeChat, forwarder, download) → filed to the PO and, through its request, ticked off
+  // read a file before it's added: which POs it is for, and its quantities against the plan (AI)
+  router.post(`${BASE}/:id/upload/scan`, G(async (req, res) => {
+    const { r } = await one(req.params.id); const { files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    const ups = Object.values(files || {}).flat().filter((x) => x.buffer?.length);
+    if (!ups.length) return res.json({ ok: false });
+    const guess = SD.kindOf(ups[0].name, ups[0].type);
+    if (!AI.enabled() || /photos/i.test(guess) && ups.every((u) => /^image\//.test(u.type || ''))) return res.json({ ok: true, ai: false, kind: guess === 'Other' ? '' : guess });
+    const planned = r.lines.map((l) => ({ id: l.id, sid: l.supplier_id, po: PL.normPo(l.po), product: l.product || '', qty: l.qty, cartons: l.cartons, cbm: l.cbm }));
+    let facts = {};
+    try { facts = SD.factsFrom(await SD.readDocs({ files: ups.map((u) => ({ ...u, kind: guess })), planned })); }
+    catch (e) { return res.json({ ok: true, ai: false, kind: guess === 'Other' ? '' : guess, error: 'AI could not read the file' }); }
+    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const used = new Set(); const checks = []; const extra = [];
+    for (const a of facts.lines || []) {
+      const po = PL.normPo(a.po || '');
+      let hit = planned.find((p) => !used.has(p.id) && po && p.po === po && p.product && a.product && (norm(a.product).includes(norm(p.product)) || norm(p.product).includes(norm(a.product))))
+        || planned.find((p) => !used.has(p.id) && po && p.po === po && planned.filter((x) => x.po === po).length === 1)
+        || planned.find((p) => !used.has(p.id) && p.product && a.product && (norm(a.product).includes(norm(p.product)) || norm(p.product).includes(norm(a.product))));
+      if (!hit) { extra.push({ po: po || '', product: a.product || '', qty: a.qty }); continue; }
+      used.add(hit.id);
+      const diff = hit.qty && a.qty != null ? Math.round(((a.qty - hit.qty) / hit.qty) * 1000) / 10 : null;
+      checks.push({ sid: hit.sid, po: hit.po, product: hit.product, planned: hit.qty ?? null, actual: a.qty ?? null, cartons: a.cartons ?? null, diff });
+    }
+    const suggest = [...new Map(checks.map((c) => [`${c.sid}|${c.po}`, { sid: c.sid, po: c.po }])).values()];
+    const isPL = (facts.lines || []).length > 0; const isCI = !!facts.invoice_no || facts.invoice_total != null || /invoice|\bci\b/i.test(ups[0].name);
+    const kind = isPL && isCI ? 'CIPL' : isPL && !/invoice|\bci\b/i.test(ups[0].name) ? 'Packing list' : isCI ? 'Invoice' : guess === 'Other' ? '' : guess;
+    res.json({ ok: true, ai: true, kind, suggest, checks, extra: extra.slice(0, 10), invoice_no: facts.invoice_no || null, invoice_total: facts.invoice_total ?? null });
+  }));
+
+  // a document received another way (WeChat, forwarder, download) → stored once, tagged with every PO it covers
   router.post(`${BASE}/:id/upload`, G(async (req, res) => {
     const { r } = await one(req.params.id); const { fields: f, files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
-    const [sid, po] = String(f.po || '').split('|');
-    if (!r.lines.some((l) => l.supplier_id === sid && PL.normPo(l.po) === PL.normPo(po))) throw new HttpError(400, 'Choose a PO of this shipment');
+    const picks = [].concat(f.pos || f.po || []).flatMap((x) => String(x).split(',')).map((x) => { const [sid, po] = x.split('|'); return { sid, po }; })
+      .filter((x) => x.sid && x.po && r.lines.some((l) => l.supplier_id === x.sid && PL.normPo(l.po) === PL.normPo(x.po)));
+    if (!picks.length) throw new HttpError(400, 'Choose the PO(s) this file is for');
+    const sid = picks[0].sid;
+    if (picks.some((x) => x.sid !== sid)) throw new HttpError(400, 'One file comes from one supplier — choose POs of one supplier');
+    const pos = [...new Set(picks.map((x) => PL.normPo(x.po)))];
     const ups = Object.values(files || {}).flat().filter((x) => x.buffer?.length);
     if (!ups.length) throw new HttpError(400, 'Choose a file');
-    const sc = r.scs.find((s) => s.supplier_id === sid && (s.pos || []).some((p) => PL.normPo(p) === PL.normPo(po))) || null;
-    const kinds = ['Invoice', 'Packing list', 'Bill of lading', 'Warehouse receipt', 'Loading photos', 'Other'];
-    let n = 0;
+    const scs = r.scs.filter((s) => s.supplier_id === sid && (s.pos || []).some((p) => pos.includes(PL.normPo(p))));
+    const kinds = { Invoice: 'Invoice', 'Packing list': 'Packing list', CIPL: 'Invoice & packing list', 'Bill of lading': 'Bill of lading', 'Warehouse receipt': 'Warehouse receipt', 'Loading photos': 'Loading photos', Other: 'Other' };
     for (const u of ups) {
-      const kind = kinds.includes(f.kind) ? f.kind : SD.kindOf(u.name, u.type);
-      const out = await PL.storeFiles(db, sid, [u], { pos: [po], kind, by: by(req), shipmentId: sc?.id || null });
-      n += out.saved?.length ?? 1;
+      const kind = kinds[f.kind] || SD.kindOf(u.name, u.type);
+      await PL.storeFiles(db, sid, [u], { pos, kind, by: by(req), shipmentId: scs[0]?.id || null });
     }
-    if (sc) {
+    for (const sc of scs) {
       const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
       const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
       await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Added ${ups.map((u) => u.name).join(', ')} (${by(req)})` }].slice(-60), updated_at: now() }).catch(() => null);
     }
-    flash(res, 'ok', `Added ${ups.length} file${ups.length === 1 ? '' : 's'} to PO ${PL.normPo(po)}`);
+    flash(res, 'ok', `Added ${ups.length === 1 ? ups[0].name : `${ups.length} files`} to PO ${pos.join(', ')}`);
     res.redirect(`${BASE}/${r.id}#docs`);
   }));
 

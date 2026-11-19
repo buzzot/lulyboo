@@ -17,6 +17,7 @@ const isCI = (f) => tok('C\\.?I').test(f.name || '') || /commercial/i.test(f.nam
 const isInvoiceKind = (f) => /invoice/i.test(f.kind || '') || isCI(f) || /invoice/i.test(f.name || '');
 /** 'CI' | 'PI' | 'PL' | 'PIPL' (combined: counts as PL) | null */
 function classify(f) {
+  if (/invoice/i.test(f.kind || '') && /packing/i.test(f.kind || '') && !/proforma/i.test(f.kind || '')) return 'CIPL';   // "Invoice & packing list"
   const pl = isPL(f); const pi = isPI(f);
   // "CL&PL" is a common typo for CI&PL: next to a packing list it counts as the commercial invoice
   if (pl && !pi && tok('CL').test(f.name || '')) return 'CIPL';
