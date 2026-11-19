@@ -4265,3 +4265,43 @@ test('add a document: one file for several POs (stored once), one supplier only,
   const st = await require('../src/podocs').check(db, c);
   assert.deepEqual(st.pos.filter((p) => p.sid === x.id).map((p) => p.missing), [[], []]);
 });
+
+test('record-only shipments: create, list in Records (not active), detail, from a forwarder update, edit, make full, delete', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Kean Silicone' });
+  const line = await db.insert('plan_orders', { supplier_id: k.id, po: '310002', product: 'Toothbrush', qty: 1000, port: 'CNYTN', shipped: false });
+  let r = await req(base, 'POST', '/admin/orders/shipments/records/new', { cookie, form: { name: 'ONE 011E · ONEYSZPGX1565502', atd: '2026-11-04', ata: '2026-11-21', duty: '3,234.43', fees: '79.12', freight: '', pos: 'PO310002, 999999', entry_no: '9T2-0090981-5' } });
+  assert.equal(r.status, 303);
+  const rec = db.tables.plan_containers.find((c) => c.record_only);
+  assert.ok(rec); assert.equal(rec.record.duty, 3234.43); assert.deepEqual(rec.record.pos, [{ sid: k.id, po: '310002' }]); assert.deepEqual(rec.record.pos_text, ['310002', '999999']);
+  assert.equal(db.tables.plan_orders.find((x) => x.id === line.id).shipped, false);   // not ticked → lines untouched
+  const active = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
+  assert.doesNotMatch(active, /shp-row rec/); assert.match(active, /Records <span class="sub">1/);
+  const recs = (await req(base, 'GET', '/admin/orders/shipments?view=records', { cookie })).text;
+  assert.match(recs, /shp-st rec">Record</); assert.match(recs, /\$3,314/);
+  const det = (await req(base, 'GET', r.location, { cookie })).text;
+  assert.match(det, /Record only/); assert.match(det, /\$3,234\.43/); assert.match(det, /999999 <span class="sub">not in the portal/); assert.match(det, /Make it a full shipment/);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/logistics/planning/load?port=CNYTN', { cookie })).text, /ONEYSZPGX1565502/);
+  assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=310002`, { cookie })).text, /📦 Record · ONE 011E/);
+  // edit: tick "mark shipped"
+  await req(base, 'POST', `/admin/orders/shipments/${rec.id}/record`, { cookie, form: { name: 'ONE 011E', atd: '2026-11-04', ata: '2026-11-21', duty: '3234.43', fees: '79.12', freight: '1,850', pos: '310002', mark_shipped: '1' } });
+  assert.equal(db.tables.plan_containers.find((c) => c.id === rec.id).record.freight, 1850);
+  assert.equal(db.tables.plan_orders.find((x) => x.id === line.id).shipped, true);
+  // from a forwarder update
+  const u = await db.insert('fwd_updates', { status: 'pending', facts: { doc_type: 'arrival_notice', carrier: 'MSC', vessel: 'MSC ANNA', voyage: '2547W', mbl_no: 'MEDU123', ata: '2026-09-02', pos: ['310002'], pol: '57078', pod: '2704' }, files: [], created_at: new Date().toISOString() });
+  const sd = (await req(base, 'GET', '/admin/orders/shipping', { cookie })).text;
+  assert.match(sd, new RegExp(`rec-u-${u.id}`)); assert.match(sd, /Save as record only/); assert.match(sd, /value="MSC · MSC ANNA 2547W · MEDU123"/);
+  r = await req(base, 'POST', `/admin/orders/shipping/fwd/${u.id}/record`, { cookie, form: { name: 'MSC 2547W', ata: '2026-09-02', pos: '310002', freight: '1240' } });
+  const rec2 = db.tables.plan_containers.find((c) => c.record_only && c.id !== rec.id);
+  assert.equal(r.location, `/admin/orders/shipments/${rec2.id}`);
+  const uu = db.tables.fwd_updates.find((x) => x.id === u.id); assert.equal(uu.status, 'logged'); assert.equal(uu.container_id, rec2.id);
+  assert.equal(rec2.fwd.vessel, 'MSC ANNA'); assert.equal(rec2.fwd.pol, 'Yantian');
+  // make full, delete
+  await req(base, 'POST', `/admin/orders/shipments/${rec2.id}/record/full`, { cookie });
+  assert.equal(db.tables.plan_containers.find((c) => c.id === rec2.id).record_only, false);
+  await req(base, 'POST', `/admin/orders/shipments/${rec.id}/record/delete`, { cookie });
+  assert.ok(!db.tables.plan_containers.some((c) => c.id === rec.id));
+});

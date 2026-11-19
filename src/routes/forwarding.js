@@ -104,7 +104,8 @@ function reviewForm(u, cs, back, { choose = false } = {}) {
   const c = u.container_id ? cs[u.container_id] : null;
   const facts = u.facts || {};
   const rows = FW.diff(c, facts);
-  const open = Object.values(cs).filter((x) => x.status !== 'planned' || x.fwd).concat(Object.values(cs).filter((x) => x.status === 'planned' && !x.fwd));
+  const live = Object.values(cs).filter((x) => !x.record_only);
+  const open = live.filter((x) => x.status !== 'planned' || x.fwd).concat(live.filter((x) => x.status === 'planned' && !x.fwd));
   const files = (u.files || []).map((f, i) => ({ ...f, url: `${BASE}/${u.id}/files/${i}` }));
   const willShip = ['shipping_advice', 'bill_of_lading'].includes(facts.doc_type) || facts.atd;
   return html`<form method="post" action="${BASE}/${u.id}/accept" class="fw-rv" id="fwd-${u.id}">
@@ -121,10 +122,18 @@ function reviewForm(u, cs, back, { choose = false } = {}) {
     ${files.length ? html`<div class="fw-src">${files.map((f) => html`<a class="fw-chip" href="${f.url}?inline=1" ${/pdf|image/.test(f.type || '') ? raw(`data-preview="${f.url}?inline=1" data-type="${/image/.test(f.type) ? 'image' : 'doc'}" data-dl="${f.url}"`) : raw('target="_blank" rel="noopener"')}>📄 ${f.name}</a>`)}</div>` : ''}
     ${u.text ? html`<details class="sd-orig"><summary>Original message</summary><pre>${String(u.text).slice(0, 6000)}</pre></details>` : ''}
     <div class="fw-acts"><button class="btn small">Accept &amp; save</button>
-      ${c && !choose ? html`<button class="btn ghost small" formaction="${BASE}/${u.id}/detach" formnovalidate>Not this shipment…</button>` : ''}
+      <details class="dd fw-not" data-dd><summary class="btn ghost small">${c && !choose ? 'Not this shipment' : 'Other options'} <span class="dd-car" aria-hidden="true">▾</span></summary><div class="dd-menu fw-not-m">
+        ${c && !choose ? html`<button formaction="${BASE}/${u.id}/detach" formnovalidate><b>Attach to another shipment…</b><small>moves it to Unmatched, where you pick the shipment</small></button>` : ''}
+        <button type="button" class="rec" data-open-dialog="${`rec-u-${u.id}`}"><b>✦ Save as record only</b><small>keep duty, costs, dates and POs — no tracking, not in active shipments</small></button></div></details>
       <button class="link small" formaction="${BASE}/${u.id}/dismiss" formnovalidate>Dismiss</button>
       <span class="sub fw-hint">${willShip ? 'Accepting marks it sailed — the container and its POs become shipped.' : facts.doc_type === 'arrival_notice' ? 'Accepting marks it arrived.' : ''}</span></div>
-  </form>`;
+  </form>
+  <dialog id="${`rec-u-${u.id}`}" class="rp-modal rf-dlg" aria-labelledby="${`rec-u-t-${u.id}`}"><form method="post" action="${BASE}/${u.id}/record" data-busy>
+    <input type="hidden" name="back" value="${back}">
+    <div class="rp-top"><h2 id="${`rec-u-t-${u.id}`}">Save as record only</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+    <p class="sub">Filled in from the document — check and save. The record keeps the numbers and this document; it isn't tracked and stays out of active shipments.</p>
+    ${require('../views/record-form').recordFields(require('../records').fromUpdate(u), { customs: facts.doc_type === 'customs_entry', id: u.id })}
+    <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Save record</button></div></form></dialog>`;
 }
 
 /** Shipping documents page: forwarder updates waiting for you (matched and unmatched). */
@@ -280,6 +289,27 @@ function routes(router, { db, config }) {
     const { fields } = await parseForm(req);
     await FW.dismiss(db, await getU(req.params.id), by(req));
     flash(res, 'ok', 'Dismissed.'); res.redirect(backOf(fields));
+  }));
+  // "Save as record only": a record-only shipment holding this document (a 7501 also goes to Customs, linked to it)
+  router.post(`${BASE}/:id/record`, G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const u = await getU(req.params.id);
+    const REC = require('../records');
+    const near = u.container_id ? await db.get('plan_containers', u.container_id).catch(() => null) : null;
+    let rec;
+    try { rec = await REC.create(db, { ...fields, mark_shipped: fields.mark_shipped === '1', port: near?.port || 'CNYTN', fwd: (() => { const fx = FW.portFix(u.facts || {}); return Object.fromEntries(['forwarder', 'carrier', 'vessel', 'voyage', 'hbl_no', 'mbl_no', 'booking_no', 'pol', 'pod'].filter((k) => fx[k]).map((k) => [k, fx[k]])); })() }, { by: by(req) }); }
+    catch (e) { if (/record_only|record\b|column/i.test(e.message)) { flash(res, 'error', 'Run supabase/records.sql in Supabase → SQL Editor first.'); return res.redirect(backOf(fields)); } throw e; }
+    await db.update('fwd_updates', { id: u.id }, { container_id: rec.id, match_reason: 'saved as a record', status: 'logged', decided_by: by(req), decided_at: new Date().toISOString() });
+    let note = '';
+    if (u.facts?.doc_type === 'customs_entry') {
+      try {
+        const files = []; for (const f of u.files || []) files.push({ name: f.name, type: f.type, buffer: await db.docs.download(f.path) });
+        await require('../customs').createEntry(db, config, { files, text: u.text || '', source: 'upload', containerId: rec.id, by: by(req) });
+        note = ' — the 7501 is in Customs to review; its duty counts on the record once saved';
+      } catch (e) { note = ` — the 7501 couldn't be read into Customs (${String(e.message).slice(0, 80)})`; }
+    }
+    flash(res, 'ok', `Saved as a record${note}.`);
+    res.redirect(`/admin/orders/shipments/${rec.id}`);
   }));
   router.post(`${BASE}/:id/detach`, G(async (req, res) => {
     const { fields } = await parseForm(req);

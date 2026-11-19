@@ -1116,3 +1116,7 @@ alter table public.suppliers add column if not exists bank_account text;
 alter table public.suppliers add column if not exists bank_address text;
 alter table public.plan_files add column if not exists signed boolean not null default false;
 alter table public.po_payments add column if not exists paid_by text;
+
+-- Record-only shipments (see records.sql)
+alter table public.plan_containers add column if not exists record_only boolean not null default false;
+alter table public.plan_containers add column if not exists record jsonb;

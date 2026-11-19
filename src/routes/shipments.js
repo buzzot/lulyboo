@@ -43,6 +43,20 @@ async function load(db) {
   const out = [];
   for (const c of all) {
     const f = c.fwd || {};
+    if (c.record_only) {   // record-only: numbers kept, nothing tracked
+      const rec = c.record || {};
+      const ce = entries.filter((e) => e.container_id === c.id);
+      const saved = ce.filter((e) => e.status === 'saved');
+      const duty = saved.length ? saved.reduce((a, e) => a + (Number(e.duty) || 0), 0) : rec.duty ?? null;
+      const fees = saved.length ? saved.reduce((a, e) => a + (Number(e.fees) || 0), 0) : rec.fees ?? null;
+      const pos = (rec.pos || []).map((p) => ({ po: p.po, supplier_id: p.sid }));
+      out.push({ record: true, rec, id: c.id, kind: 'record', c, f, stage: 'record', entries: ce, lines: [], scs: [], flags: ce.some((e) => e.status !== 'saved') ? [['amb', '7501 to review']] : [],
+        title: rec.name || require('../shipname').shipName(c), sub: [rec.entry_no ? `entry ${rec.entry_no}` : '', f.carrier, [f.vessel, f.voyage].filter(Boolean).join(' '), f.mbl_no || f.hbl_no].filter((x) => x && !String(rec.name || '').includes(x)).join(' · '),
+        pos, suppliers: [...new Set(pos.map((p) => sups[p.supplier_id]?.name).filter(Boolean))], port: c.port, forwarder: f.forwarder || '',
+        from: day(f.atd), eta: day(f.ata || f.eta), arrivedOn: day(f.ata), delivered: day(c.delivered_at), freight: rec.freight ?? (Number(f.ocean_usd) || null),
+        duty: duty == null && fees == null ? null : (duty || 0) + (fees || 0), dutyOnly: duty, fees, drayage: null, cbm: 0, cartons: 0 });
+      continue;
+    }
     const fs = FW.stageOf(f);
     if (c.status !== 'shipped' && !c.delivered_at && !(fs && fs !== 'booked')) continue;
     const ls = lines.filter((l) => l.container_id === c.id);
@@ -120,6 +134,16 @@ function progress(r, today) {
 }
 
 function rowHTML(r, today) {
+  if (r.record) {
+    const cost = (r.freight || 0) + (r.duty || 0);
+    return html`<a class="shp-row rec" href="${BASE}/${r.id}">
+      <div class="shp-t"><span class="shp-st rec">Record</span><b title="${r.title}">${r.title}</b><span class="sub">${r.sub || '—'}</span></div>
+      <div class="shp-pos">${r.pos.slice(0, 5).map((p) => html`<span>${p.po}</span>`)}${r.pos.length > 5 ? html`<span>+${r.pos.length - 5}</span>` : ''}<em class="sub">${r.suppliers.length > 2 ? `${r.suppliers.length} suppliers` : r.suppliers.join(' · ')}</em></div>
+      <div class="shp-trk"><div class="shp-ln"><span>${r.from ? `Sailed ${sh(r.from)}` : ''}</span><b>${r.arrivedOn ? `Arrived ${sh(r.arrivedOn)}` : r.delivered ? sh(r.delivered) : ''}</b></div></div>
+      <div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}</div>
+      <div class="shp-cost">${cost ? html`<b>${usd(cost)}</b><span class="sub">${[r.freight ? 'freight' : '', r.duty ? 'duty' : ''].filter(Boolean).join(' + ')}</span>` : html`<span class="sub">no costs yet</span>`}</div>
+    </a>`;
+  }
   const [lab, cls] = STAGE_TAG[r.stage];
   const pct = progress(r, today);
   const left = r.stage === 'delivered' ? `Delivered ${sh(r.delivered)}` : r.stage === 'arrived' || r.stage === 'customs' ? `Arrived ${r.f.pod || ''} ${sh(r.arrivedOn || r.eta)}` : r.stage === 'courier' ? `Picked up ${sh(r.from)}` : r.stage === 'sailed' ? `Sailed ${sh(r.from)}` : `Shipped ${sh(r.from)}`;
@@ -142,13 +166,15 @@ module.exports = function shipmentRoutes(router, { db, config }) {
   router.get(BASE, G(async (req, res) => {
     const { list, today } = await load(db);
     const q = req.query;
-    const view = q.view === 'delivered' ? 'delivered' : 'active';
+    const view = ['delivered', 'records'].includes(q.view) ? q.view : 'active';
+    const records = list.filter((r) => r.record);
     const tile = ['transit', 'soon', 'port', 'done'].includes(q.tile) ? q.tile : '';
     const ports = [...new Set(list.filter((r) => r.port).map((r) => r.port))];
     const fwds = [...new Set(list.map((r) => r.forwarder).filter(Boolean))].sort();
     const term = String(q.q || '').trim().toUpperCase().replace(/\s+/g, '');
     const hit = (r) => !term || [r.title, r.sub, ...r.pos.map((p) => p.po), ...r.lines.map((l) => `${l.sku || ''} ${l.product || ''}`), r.f.hbl_no, r.f.mbl_no, r.f.container_no, r.c?.container_no, r.f.booking_no].filter(Boolean).join(' ').toUpperCase().replace(/\s+/g, '').includes(term);
-    const base = list.filter((r) => (!q.port || r.port === q.port) && (!q.fwd || r.forwarder === q.fwd) && hit(r));
+    const recHit = records.filter((r) => hit(r));
+    const base = list.filter((r) => !r.record && (!q.port || r.port === q.port) && (!q.fwd || r.forwarder === q.fwd) && hit(r));
     const month = today.slice(0, 7);
     const dAgo = PL.addDays(today, -30);
     const T = {
@@ -157,18 +183,24 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       port: base.filter((r) => r.stage === 'arrived' || r.stage === 'customs'),
       done: base.filter((r) => r.stage === 'delivered' && r.delivered && r.delivered >= dAgo),
     };
-    const monthCost = base.filter((r) => (r.delivered || r.arrivedOn || r.eta || '').startsWith(month)).reduce((a, r) => ({ f: a.f + (r.freight || 0), d: a.d + (r.duty || 0) + (r.drayage || 0) }), { f: 0, d: 0 });
+    const monthCost = [...base, ...records].filter((r) => (r.delivered || r.arrivedOn || r.eta || '').startsWith(month)).reduce((a, r) => ({ f: a.f + (r.freight || 0), d: a.d + (r.duty || 0) + (r.drayage || 0) }), { f: 0, d: 0 });
     const lfdSoon = T.port.filter((r) => r.lfd).sort((a, b) => a.lfd.localeCompare(b.lfd))[0];
     const shortN = T.done.filter((r) => r.flags.some(([k]) => k === 'red')).length;
-    let rows = tile ? T[tile] : base.filter((r) => (view === 'delivered' ? r.stage === 'delivered' : r.stage !== 'delivered'));
-    const groups = view === 'delivered' || tile === 'done'
+    let rows = tile ? T[tile] : view === 'records' ? recHit : base.filter((r) => (view === 'delivered' ? r.stage === 'delivered' : r.stage !== 'delivered'));
+    const groups = view === 'records' && !tile ? [['Records — kept for duty, costs and dates; not tracked', rows.sort((a, b) => String(b.delivered || '').localeCompare(String(a.delivered || '')))]]
+      : view === 'delivered' || tile === 'done'
       ? [['Delivered', rows.sort((a, b) => String(b.delivered).localeCompare(String(a.delivered)))]]
       : [['At port / customs', rows.filter((r) => r.stage === 'arrived' || r.stage === 'customs')], ['On the water', rows.filter((r) => r.stage === 'sailed').sort((a, b) => String(a.eta || '9').localeCompare(String(b.eta || '9')))], ['Shipped · waiting to sail', rows.filter((r) => r.stage === 'shipped')], ['Courier', rows.filter((r) => r.stage === 'courier')], ['Delivered', rows.filter((r) => r.stage === 'delivered')]];
     const link = (o) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ port: q.port || '', fwd: q.fwd || '', q: q.q || '', view, tile, ...o }).filter(([, v]) => v)))}`;
     const recent = base.filter((r) => r.stage === 'delivered' && r.delivered >= dAgo).length;
     res.html(page({
       title: 'Shipments', nav: adminNav('shipments'), flash: takeFlash(req, res), wide: true, req,
-      body: html`<div class="cp-head"><div><h2 class="sl-title">Shipments</h2><p class="muted">Everything that has left the factory, until it's in your warehouse.</p></div></div>
+      body: html`<div class="cp-head"><div><h2 class="sl-title">Shipments</h2><p class="muted">Everything that has left the factory, until it's in your warehouse.</p></div><div class="cp-acts"><button type="button" class="btn ghost small" data-open-dialog="rec-new" title="Keep duty, costs, dates and POs of a shipment without tracking it">+ Record</button></div></div>
+        <dialog id="rec-new" class="rp-modal rf-dlg" aria-labelledby="rec-new-t"><form method="post" action="${BASE}/records/new" enctype="multipart/form-data" data-busy>
+          <div class="rp-top"><h2 id="rec-new-t">New record</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+          <p class="sub">A shipment kept for its numbers — duty, fees, freight, dates and POs — without tracking: no document checklist, reminders or emails, and not in active shipments.</p>
+          ${require('../views/record-form').recordFields({}, { files: true, id: 'new record' })}
+          <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Save record</button></div></form></dialog>
         <div class="shp-kp">
           ${[['transit', 'In transit', T.transit.length, `${T.transit.filter((r) => r.stage === 'sailed').length} on the water`], ['soon', 'Arriving ≤ 7 days', T.soon.length, T.soon.map((r) => sh(r.eta)).slice(0, 3).join(' · ')], ['port', 'At port / customs', T.port.length, lfdSoon ? `Free time ends ${sh(lfdSoon.lfd)}` : ''], ['done', 'Delivered · 30 days', T.done.length, shortN ? `${shortN} with a shortage` : '']].map(([k, l, nn, s]) => html`<a href="${link({ tile: tile === k ? '' : k })}" class="${tile === k ? 'on' : ''}"><span>${l}</span><b>${nn}</b><small>${s}</small></a>`)}
           <div><span>Landed cost · ${new Date(`${month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</span><b>${usd(monthCost.f + monthCost.d)}</b><small>freight ${usd(monthCost.f)} · duty ${usd(monthCost.d)}</small></div>
@@ -176,7 +208,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         <form method="get" action="${BASE}" class="shp-bar">
           ${ports.length > 1 ? html`<span class="rh-seg">${[['', 'All'], ...ports.map((p) => [p, portName(p)])].map(([v, l]) => html`<a href="${link({ port: v })}" class="${(q.port || '') === v ? 'on' : ''}">${l}</a>`)}</span>` : ''}
           ${fwds.length > 1 ? html`<select name="fwd" data-autosubmit aria-label="Forwarder"><option value="">All forwarders</option>${fwds.map((x) => html`<option ${q.fwd === x ? raw('selected') : ''}>${x}</option>`)}</select>` : ''}
-          <span class="rh-seg"><a href="${link({ view: 'active', tile: '' })}" class="${view === 'active' && !tile ? 'on' : ''}">Active</a><a href="${link({ view: 'delivered', tile: '' })}" class="${view === 'delivered' && !tile ? 'on' : ''}">Delivered</a></span>
+          <span class="rh-seg"><a href="${link({ view: 'active', tile: '' })}" class="${view === 'active' && !tile ? 'on' : ''}">Active</a><a href="${link({ view: 'delivered', tile: '' })}" class="${view === 'delivered' && !tile ? 'on' : ''}">Delivered</a><a href="${link({ view: 'records', tile: '' })}" class="${view === 'records' && !tile ? 'on' : ''}">Records${records.length ? html` <span class="sub">${records.length}</span>` : ''}</a></span>
           <input type="search" name="q" value="${q.q || ''}" placeholder="Search PO, B/L, container, SKU…" aria-label="Search">
           ${q.port ? html`<input type="hidden" name="port" value="${q.port}">` : ''}<input type="hidden" name="view" value="${view}">
         </form>
@@ -192,8 +224,99 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     return { r, today };
   }
 
+  // ── record-only shipments ────────────────────────────────────────────────
+  const RF = require('../views/record-form'); const REC = require('../records');
+  async function recordPage(req, res, r) {
+    const c = r.c; const rec = r.rec; const f = r.f;
+    const sups = {}; for (const s of await db.list('suppliers').catch(() => [])) sups[s.id] = s;
+    const ups = (await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
+    const fileA = (name, url, type, extra = '') => html`<span class="rc-doc"><a href="${url}" ${/pdf|image/.test(type || '') ? raw(`data-preview="${url}?inline=1" data-type="${/image/.test(type) ? 'image' : 'doc'}" data-dl="${url}"`) : raw('download')}>📄 ${name}</a>${extra}</span>`;
+    const docs = [
+      ...(rec.files || []).map((x, i) => fileA(x.name, `${BASE}/${c.id}/record/files/${i}`, x.type, html`<form method="post" action="${BASE}/${c.id}/record/files/${i}/delete" class="inline" data-confirm="${`Delete ${x.name}?`}"><button class="rc-x" aria-label="${`Delete ${x.name}`}">×</button></form>`)),
+      ...ups.flatMap((u) => (u.files || []).map((x, i) => fileA(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type))),
+    ];
+    const v = { name: rec.name || '', entry_no: rec.entry_no || '', atd: day(f.atd) || '', ata: day(f.ata) || '', duty: rec.duty ?? '', fees: rec.fees ?? '', freight: rec.freight ?? '', pos: (rec.pos_text || rec.pos?.map((p) => p.po) || []).join(', '), notes: rec.notes || '' };
+    const unknown = (rec.pos_text || []).filter((p) => !(rec.pos || []).some((x) => x.po === p));
+    return page({
+      title: r.title, nav: adminNav('shipments'), flash: takeFlash(req, res), wide: true, req,
+      body: html`<p class="crumbs"><a href="${BASE}?view=records">Shipments · Records</a></p>
+        <div class="cp-head"><div><h2 class="sl-title">${r.title} <span class="shp-st rec">Record only</span></h2><p class="muted">${r.sub || 'Kept for duty, costs and dates — not tracked.'}</p></div>
+          <div class="cp-acts"><button type="button" class="btn ghost small" data-open-dialog="rec-edit">Edit</button>
+            <form method="post" action="${BASE}/${c.id}/record/full" class="inline" data-confirm="Make it a full shipment? It gets the document checklist, forwarder tracking and broker email like any other shipment."><button class="btn ghost small">Make it a full shipment</button></form>
+            <form method="post" action="${BASE}/${c.id}/record/delete" class="inline" data-confirm="Delete this record? Its customs entries stay in Customs, unlinked."><button class="btn ghost small danger">Delete</button></form></div></div>
+        <div class="cp-kpis">
+          <div class="cp-kpi"><span>Sailed → arrived</span><b>${r.from ? sh(r.from) : '—'} → ${r.arrivedOn ? sh(r.arrivedOn) : '—'}</b><small>${[f.pol, f.pod].filter(Boolean).join(' → ') || portName(c.port)}</small></div>
+          <div class="cp-kpi"><span>Customs duty</span><b>${usd(r.dutyOnly, 2)}</b><small>${r.entries.length ? `from ${r.entries.length} customs entr${r.entries.length === 1 ? 'y' : 'ies'}` : r.dutyOnly != null ? 'entered by hand' : 'not entered'}</small></div>
+          <div class="cp-kpi"><span>Fees</span><b>${usd(r.fees, 2)}</b><small>MPF, HMF…</small></div>
+          <div class="cp-kpi"><span>Freight</span><b>${usd(r.freight, 2)}</b><small>${r.freight == null ? 'add it with Edit' : ' '}</small></div>
+        </div>
+        <section class="card rc"><div class="rc-g">
+          <div><h3>POs</h3>${r.pos.length || unknown.length ? html`<ul class="rc-pos">${r.pos.map((p) => html`<li><a href="/admin/orders/view?supplier=${p.supplier_id}&po=${encodeURIComponent(p.po)}">${p.po}</a> <span class="sub">${sups[p.supplier_id]?.name || ''}</span></li>`)}${unknown.map((p) => html`<li>${p} <span class="sub">not in the portal</span></li>`)}</ul>` : html`<p class="sub">None linked — add them with Edit.</p>`}</div>
+          <div><h3>Customs entries</h3>${r.entries.length ? html`<ul class="rc-pos">${r.entries.map((e) => html`<li><a href="/admin/logistics/customs?review=${e.id}">${e.entry_no || 'Entry'}</a> <span class="sub">${e.status === 'saved' ? `duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}` : 'to review'}</span></li>`)}</ul>` : html`<p class="sub">${rec.entry_no ? `Entry ${rec.entry_no} (no 7501 file)` : 'None.'}</p>`}</div>
+        </div>
+          <h3>Documents</h3><div class="rc-docs">${docs.length ? docs : html`<span class="sub">No files yet.</span>`}</div>
+          <form method="post" action="${BASE}/${c.id}/record/files" enctype="multipart/form-data" class="rc-add" data-busy><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop documents here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">7501, freight invoice, B/L…</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div><button class="btn small">Add</button></form>
+          ${rec.notes ? html`<p class="rc-notes">${rec.notes}</p>` : ''}
+          <p class="rc-foot">Record only — no document checklist, reminders, supplier requests, broker email, Telegram or tracking. Duty and costs count in Customs and the landed-cost figures.</p>
+        </section>
+        <dialog id="rec-edit" class="rp-modal rf-dlg" aria-labelledby="rec-edit-t"><form method="post" action="${BASE}/${c.id}/record">
+          <div class="rp-top"><h2 id="rec-edit-t">Edit record</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+          ${RF.recordFields(v, { customs: r.entries.some((e) => e.status === 'saved') })}
+          <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Save</button></div></form></dialog>`,
+    });
+  }
+  const recOf = async (id) => { const c = await db.get('plan_containers', id).catch(() => null); if (!c || !c.record_only) throw new HttpError(404, 'Record not found'); return c; };
+  const filesIn = (files) => Object.values(files || {}).flat().filter((x) => x.buffer?.length);
+
+  router.post(`${BASE}/records/new`, G(async (req, res) => {
+    const { fields: f, files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    let c;
+    try { c = await REC.create(db, { ...f, mark_shipped: f.mark_shipped === '1' }, { by: by(req) }); }
+    catch (e) { if (/record_only|record\b|column/i.test(e.message)) { flash(res, 'error', 'Run supabase/records.sql in Supabase → SQL Editor first.'); return res.redirect(`${BASE}?view=records`); } throw e; }
+    const ups = filesIn(files); if (ups.length) await REC.addFiles(db, c, ups, { by: by(req) });
+    flash(res, 'ok', 'Record saved'); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.post(`${BASE}/:id/record`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const { fields: f } = await parseForm(req);
+    await REC.update(db, c, { ...f, mark_shipped: f.mark_shipped === '1' });
+    flash(res, 'ok', 'Record saved'); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.post(`${BASE}/:id/record/files`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const { files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    const ups = filesIn(files); if (!ups.length) throw new HttpError(400, 'Choose a file');
+    await REC.addFiles(db, c, ups, { by: by(req) });
+    flash(res, 'ok', `Added ${ups.length} file${ups.length === 1 ? '' : 's'}`); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.get(`${BASE}/:id/record/files/:i`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const x = ((c.record || {}).files || [])[Number(req.params.i)]; if (!x) throw new HttpError(404, 'File not found');
+    const buf = await db.docs.download(x.path); const type = x.type || 'application/octet-stream';
+    const inline = req.query.inline === '1' && /^(image\/(png|jpeg|webp)|application\/pdf)$/.test(type);
+    const head = { 'Content-Type': type, 'Content-Length': buf.length, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(x.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
+    if (inline) Object.assign(head, { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': type === 'application/pdf' ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'" });
+    res.writeHead(200, head); res.end(buf);
+  }));
+  router.post(`${BASE}/:id/record/files/:i/delete`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const list = [...((c.record || {}).files || [])]; const x = list[Number(req.params.i)];
+    if (x) { await db.docs.remove([x.path]).catch(() => null); list.splice(Number(req.params.i), 1); await db.update('plan_containers', { id: c.id }, { record: { ...c.record, files: list }, updated_at: now() }); }
+    flash(res, 'ok', x ? `Deleted ${x.name}` : 'Already gone'); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.post(`${BASE}/:id/record/full`, G(async (req, res) => {
+    const c = await recOf(req.params.id);
+    await db.update('plan_containers', { id: c.id }, { record_only: false, updated_at: now() });
+    flash(res, 'ok', 'Now a full shipment — tracked like any other'); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.post(`${BASE}/:id/record/delete`, G(async (req, res) => {
+    const c = await recOf(req.params.id);
+    for (const x of (c.record || {}).files || []) await db.docs.remove([x.path]).catch(() => null);
+    for (const e of await db.list('customs_entries', { filters: { container_id: c.id } }).catch(() => [])) await db.update('customs_entries', { id: e.id }, { container_id: null }).catch(() => null);
+    for (const u of await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])) await db.update('fwd_updates', { id: u.id }, { container_id: null }).catch(() => null);
+    await db.remove('plan_containers', { id: c.id });
+    flash(res, 'ok', 'Record deleted'); res.redirect(`${BASE}?view=records`);
+  }));
+
   router.get(`${BASE}/:id`, G(async (req, res) => {
     const { r, today } = await one(req.params.id);
+    if (r.record) return res.html(await recordPage(req, res, r));
     const prods = await db.list('products').catch(() => []);
     const sups = {}; for (const s of await db.list('suppliers').catch(() => [])) sups[s.id] = s;
     // duty per piece from customs entries (by line, else product code), freight share by m³

@@ -180,7 +180,20 @@ function boxOf(t) {
  * What would change on the container: [{ key, label, old, value, state: new|changed|same, date, tick }].
  * `ctx` (from context()) supplies portal values that aren't stored on the container yet (chosen quote, sailing).
  */
+// CBP forms give ports as codes (Schedule D for US ports, Schedule K for foreign ones): translate the ones we use,
+// and never let a bare code overwrite a port name.
+const CBP_PORTS = { 2704: 'Los Angeles', 2709: 'Long Beach', 2809: 'San Francisco', 3001: 'Seattle', 1001: 'New York', 57078: 'Yantian' };   // other codes are left out, not guessed
+function portFix(facts) {
+  const out = { ...facts };
+  for (const k of ['pol', 'pod']) {
+    const v = String(out[k] ?? '').trim();
+    if (/^\d{4,5}$/.test(v)) { if (CBP_PORTS[v]) out[k] = CBP_PORTS[v]; else delete out[k]; }
+  }
+  return out;
+}
+
 function diff(container, facts, ctx = {}) {
+  facts = portFix(facts || {});
   const cur = container?.fwd || {};
   const from = (k) => cur[k] ?? (k === 'container_no' ? container?.container_no : null) ?? ctx.portal?.[k] ?? null;
   const eq = (a, b, k) => (MONEY.includes(k) ? Math.abs(Number(a) - Number(b)) < 0.005 : clean(String(a), 200) === clean(String(b), 200));
@@ -421,4 +434,4 @@ async function logOnly(db, upd, { containerId = null, by = null } = {}) {
 
 async function dismiss(db, upd, by = null) { await db.update('fwd_updates', { id: upd.id }, { status: 'dismissed', decided_by: by, decided_at: now() }); }
 
-module.exports = { healShipped, boxOf, context, checks, logOnly, settle, quoteIsBooked, FIELDS, DATES, DOC_TYPES, STAGES, TOOL, shipmentsAddress, read, factsFrom, stageOf, stageLabel, trackUrl, storeFiles, match, diff, createUpdate, handleFwdEmail, accept, dismiss };
+module.exports = { portFix, healShipped, boxOf, context, checks, logOnly, settle, quoteIsBooked, FIELDS, DATES, DOC_TYPES, STAGES, TOOL, shipmentsAddress, read, factsFrom, stageOf, stageLabel, trackUrl, storeFiles, match, diff, createUpdate, handleFwdEmail, accept, dismiss };
