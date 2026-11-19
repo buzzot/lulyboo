@@ -224,8 +224,8 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
     const vals = {};
     for (const k of FIELDS) if (o[k] !== null && o[k] !== undefined && o[k] !== '') vals[k] = o[k];
     if (o.change === 'new') {
-      const twin = existing.find((e) => normPo(e.po) === normPo(o.po));   // keep the PO number as we already write it ("PO900018", not "900018")
-      await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: twin ? twin.po : cleanPo(o.po), ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
+      // PO numbers are kept as the number only ("900018", never "PO900018")
+      await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: cleanPo(o.po), ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
     }
     else if (o.change === 'updated') {
       const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE].includes(k)));

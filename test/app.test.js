@@ -2691,7 +2691,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const r1 = await upload('PO900018_Kean Signed.pdf', 'PO');
   assert.equal(r1.status, 303); assert.match(r1.headers.get('location'), /\/admin\/orders\/view.*#docs/);
   assert.match(prompts[0], /purchase order from Shenzhen Kean/); assert.match(prompts[0], /PO PO900018/);
-  let ls = db.tables.plan_orders.filter((o) => o.po === 'PO900018');
+  let ls = db.tables.plan_orders.filter((o) => o.po.replace(/^PO/, '') === '900018');
   assert.equal(ls.length, 2);                                                                  // placeholder replaced
   assert.ok(!ls.some((o) => o.id === ph.id));
   assert.ok(ls.every((o) => o.ready_date === '2026-12-01' && o.port === 'CNYTN'));            // kept its date and port
@@ -2706,7 +2706,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   answer = { orders: [{ po: 'PO900018', product: 'Suction plate (silicone) blue', sku: 'KS 200', units_per_carton: 48, carton_l_cm: 52, carton_w_cm: 40, carton_h_cm: 30, carton_gw_kg: 11.5, carton_nw_kg: 10.2 }] };
   const r2 = await upload('PL PO900018.pdf', 'Packing list');
   assert.equal(r2.status, 303);
-  ls = db.tables.plan_orders.filter((o) => o.po === 'PO900018');
+  ls = db.tables.plan_orders.filter((o) => o.po === '900018');
   assert.equal(ls.length, 2);
   const plate = ls.find((o) => o.sku === 'KS-200');
   assert.equal(plate.product, 'Silicone Suction Plate');                                      // name from the PO kept
@@ -2722,7 +2722,7 @@ test('PO / packing list upload: AI adds product lines, packing → product, volu
   const c2 = db.tables.products.find((p) => p.id === cat.id);
   assert.equal(c2.carton_l_cm, 54); assert.equal(c2.units_per_carton, 50); assert.equal(c2.carton_nw_kg, 10.2);
   assert.match(c2.factory_notes, /packing updated from the packing list of 900018 \(was 52×40×30 cm, 48 pcs\/ctn, GW 11\.5 kg\)/);
-  const plate2 = db.tables.plan_orders.find((o) => o.po === 'PO900018' && o.sku === 'KS-200');
+  const plate2 = db.tables.plan_orders.find((o) => o.po === '900018' && o.sku === 'KS-200');
   assert.equal(plate2.cartons, 72); assert.equal(plate2.cbm, 4.67);                              // 3600 / 50 × 0.0648 m³
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=PO900018`, { cookie });
   assert.match(po.text, /50 pcs\/ctn · 54×40×30 cm · 12 kg\/ctn · 72 ctns/); assert.match(po.text, /✓ In Shenzhen Kean(?:'|&#39;)s products/); assert.doesNotMatch(po.text, /Add \d+ products? to/);
