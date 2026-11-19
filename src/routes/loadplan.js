@@ -3,7 +3,7 @@
 // pick a sailing, and see how full each box is. Assignments are saved as plan_orders.container_id.
 
 const { html, raw } = require('../lib/html');
-const { parseForm, takeFlash, HttpError } = require('../lib/http');
+const { parseForm, takeFlash, flash, HttpError } = require('../lib/http');
 const { sendEmail } = require('../email');
 const Q = require('../quotes');
 const { page, adminNav } = require('../views/layout');
@@ -54,6 +54,24 @@ async function containerIndex(db) {
 function loadPlanRoutes(router, { db, config }) {
   const G = (fn) => guard(config, fn);
   const now = () => new Date().toISOString();
+
+  // put one line into a container (also a shipped one: fixing a loading mistake), or take it out
+  router.post(`${BASE}/line/:id/move`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req);
+    const o = await db.get('plan_orders', req.params.id); if (!o) throw new HttpError(404, 'Line not found');
+    const back = String(f.back || '').startsWith('/admin/') ? f.back : '/admin/orders';
+    if (f.container_id === 'none') {
+      const old = o.container_id ? await db.get('plan_containers', o.container_id).catch(() => null) : null;
+      await db.update('plan_orders', { id: o.id }, { container_id: null, shipped: false, updated_at: now() });
+      flash(res, 'ok', `${o.product || `PO ${o.po}`} taken out of ${old ? require('../shipname').shipName(old) : 'the container'}`);
+      return res.redirect(back);
+    }
+    const c = await db.get('plan_containers', String(f.container_id || '')).catch(() => null); if (!c) throw new HttpError(400, 'Choose a container');
+    const gone = c.status === 'shipped' || !!c.delivered_at;
+    await db.update('plan_orders', { id: o.id }, { container_id: c.id, ...(o.port ? {} : { port: c.port }), ...(gone ? { shipped: true } : {}), updated_at: now() });
+    flash(res, 'ok', `${o.product || `PO ${o.po}`} → ${require('../shipname').shipName(c)}${gone ? ' (shipped)' : ''}`);
+    res.redirect(back);
+  }));
 
   router.get(`${BASE}/load`, G(async (req, res) => {
     const day = PL.today();

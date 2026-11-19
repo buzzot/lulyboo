@@ -4208,3 +4208,23 @@ test('a line left open in a shipped container is healed to shipped and leaves Co
   assert.equal(db.tables.plan_orders.find((x) => x.id === l.id).shipped, true);
   assert.doesNotMatch(lp.text, /3 Stage Self-Feeder/);
 });
+
+test('PO page: add a line to a container (also a shipped one), move it, take it out', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Dongguan Xing Fuming' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'shipped', fwd: { booking_no: 'YN0011' } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '70011', product: 'Easy Spoon - Blue', qty: 5040, port: 'CNYTN', container_id: c.id, shipped: true });
+  const pink = await db.insert('plan_orders', { supplier_id: s.id, po: '70011', product: 'Easy Spoon - Pink', qty: 5040, port: 'CNYTN', shipped: false });
+  const pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=70011`, { cookie })).text;
+  assert.match(pg, new RegExp(`id="mv-${pink.id}"`)); assert.match(pg, /Add to container…/); assert.match(pg, /YN0011 · 40′ HQ · Yantian → LA/);
+  let r = await req(base, 'POST', `/admin/logistics/planning/line/${pink.id}/move`, { cookie, form: { container_id: c.id, back: `/admin/orders/view?supplier=${s.id}&po=70011` } });
+  assert.equal(r.status, 303);
+  let row = db.tables.plan_orders.find((x) => x.id === pink.id);
+  assert.equal(row.container_id, c.id); assert.equal(row.shipped, true);
+  r = await req(base, 'POST', `/admin/logistics/planning/line/${pink.id}/move`, { cookie, form: { container_id: 'none' } });
+  row = db.tables.plan_orders.find((x) => x.id === pink.id);
+  assert.equal(row.container_id, null); assert.equal(row.shipped, false);
+});

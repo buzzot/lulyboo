@@ -3062,3 +3062,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .dx-drop .mdrop-box{min-height:96px}
 .shp-row .shp-t>b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;vertical-align:bottom}.shp-row .shp-t{min-width:0}
 .cp-table .cp-po{white-space:nowrap;min-width:90px}.cp-table .cp-rd{white-space:nowrap;min-width:70px}.cp-table .cp-pr{min-width:260px}
+.or-mvb{margin-left:8px;white-space:nowrap}tr.done .or-mvb{text-decoration:underline}
