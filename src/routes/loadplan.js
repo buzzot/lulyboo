@@ -58,11 +58,13 @@ function loadPlanRoutes(router, { db, config }) {
   router.get(`${BASE}/load`, G(async (req, res) => {
     const day = PL.today();
     let lines = []; let missing = false;
-    try { lines = (await db.list('plan_orders', { order: 'ready_date.asc' })).filter((l) => !l.shipped); }
+    try { lines = await db.list('plan_orders', { order: 'ready_date.asc' }); }
     catch (e) { if (/plan_orders|PGRST205|relation/i.test(e.message)) missing = true; else throw e; }
     let containers = [];
     try { containers = await db.list('plan_containers', { order: 'created_at.asc' }); }
     catch (e) { if (missingTable(e)) missing = true; else throw e; }
+    await require('../forwarding').healShipped(db, lines, containers);   // a line in a shipped container is shipped
+    lines = lines.filter((l) => !l.shipped);
 
     const known = SC.ORIGINS.map((p) => p.code);
     const ports = [...new Set([...known.filter((k) => lines.some((l) => l.port === k)), ...lines.map((l) => l.port).filter(Boolean)])];

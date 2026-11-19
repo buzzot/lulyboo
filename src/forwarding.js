@@ -384,6 +384,17 @@ async function shipLines(db, containerId) {
   for (const l of await db.list('plan_orders', { filters: { container_id: containerId } }).catch(() => [])) if (!l.shipped) await db.update('plan_orders', { id: l.id }, { shipped: true, updated_at: now() }).catch(() => null);
 }
 
+/**
+ * Lines whose container has shipped are shipped too. Heals lines left open (e.g. edited back to "not shipped" or
+ * added after the container sailed) so they don't reappear on Container planning / Load containers.
+ */
+async function healShipped(db, lines, containers) {
+  const gone = new Set((containers || []).filter((c) => c.status === 'shipped').map((c) => c.id));
+  let n = 0;
+  for (const l of lines) if (!l.shipped && l.container_id && gone.has(l.container_id)) { await db.update('plan_orders', { id: l.id }, { shipped: true, updated_at: now() }).catch(() => null); l.shipped = true; n++; }
+  return n;
+}
+
 /** Booked containers whose ETD has passed after a shipping advice / B/L become shipped (checked when pages load). */
 async function settle(db, containers) {
   for (const c of containers) {
@@ -410,4 +421,4 @@ async function logOnly(db, upd, { containerId = null, by = null } = {}) {
 
 async function dismiss(db, upd, by = null) { await db.update('fwd_updates', { id: upd.id }, { status: 'dismissed', decided_by: by, decided_at: now() }); }
 
-module.exports = { boxOf, context, checks, logOnly, settle, quoteIsBooked, FIELDS, DATES, DOC_TYPES, STAGES, TOOL, shipmentsAddress, read, factsFrom, stageOf, stageLabel, trackUrl, storeFiles, match, diff, createUpdate, handleFwdEmail, accept, dismiss };
+module.exports = { healShipped, boxOf, context, checks, logOnly, settle, quoteIsBooked, FIELDS, DATES, DOC_TYPES, STAGES, TOOL, shipmentsAddress, read, factsFrom, stageOf, stageLabel, trackUrl, storeFiles, match, diff, createUpdate, handleFwdEmail, accept, dismiss };

@@ -4194,3 +4194,17 @@ test('shipment names: container no. → house B/L (LCL) → booking → planned 
   assert.equal(n.b, 'Sails ~Dec 1 · 40′ HQ · Yantian → LA #2');
   assert.equal(S.shipRef({ box: '40HQ', fwd: {} }), null);
 });
+
+test('a line left open in a shipped container is healed to shipped and leaves Container planning / Load containers', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Yuanyi' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '20GP', status: 'shipped' });
+  const l = await db.insert('plan_orders', { supplier_id: s.id, po: '500024', product: '3 Stage Self-Feeder', qty: 12000, cbm: 14.26, port: 'CNYTN', ready_date: '2026-11-15', container_id: c.id, shipped: false });
+  const lp = await req(base, 'GET', '/admin/logistics/planning/load?port=CNYTN', { cookie });
+  assert.equal(lp.status, 200);
+  assert.equal(db.tables.plan_orders.find((x) => x.id === l.id).shipped, true);
+  assert.doesNotMatch(lp.text, /3 Stage Self-Feeder/);
+});

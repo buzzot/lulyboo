@@ -66,6 +66,7 @@ function planningRoutes(router, { db, config }) {
     let changed = 0;
     for (const sid of noVol) changed += await PL.fillVolumes(db, sid).catch(() => 0);
     if (changed) orders = await db.list('plan_orders', { order: 'ready_date.asc' });
+    await require('../forwarding').healShipped(db, orders, await db.list('plan_containers').catch(() => []));   // a line in a shipped container is shipped
     const ids = [...new Set(orders.map((o) => o.supplier_id))];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
     const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
