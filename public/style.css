@@ -3095,3 +3095,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .ad-sum{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
 .ad-row .ad-po{flex:0 0 auto;width:auto}.ad-dlg .rp-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .ad-dlg .ad-row{justify-content:flex-start}
+.cp-kpi.bad b,.cp-kpi.bad small{color:#a3312a}
