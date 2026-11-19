@@ -2375,7 +2375,7 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   await j(`${B}/assign`, { order: o1.id, container: c2.id });
 
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${b.id}&po=PO200014`, { cookie });
-  assert.match(po.text, /📦 Ningbo · sails ~\w+ \d+ · 40′ GP/);
+  assert.match(po.text, /📦 Sails ~\w+ \d+ · 40′ GP · Ningbo → LA/);
   assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /Quotes requested/);
 
   assert.ok((await j(`${B}/containers/${c.id}/shipped`, {})).ok);
@@ -2514,7 +2514,7 @@ test('load containers: LCL shipment — W/M totals, LCL quote request with CFS q
   assert.equal((await j(`${B}/containers/${c.id}`, { box: 'LCLX' })).ok, false);
   const LP = require('../src/routes/loadplan');
   const ci = await LP.containerIndex(db);
-  assert.match(ci.labelFor(db.tables.plan_orders.find((o) => o.id === o1.id)).text, /^Yantian · (sails ~\w+ \d+|not scheduled yet) · LCL · Planned$/);
+  assert.match(ci.labelFor(db.tables.plan_orders.find((o) => o.id === o1.id)).text, /^(Sails ~\w+ \d+|Not scheduled yet) · LCL · Yantian → LA · Planned$/);
 });
 
 test('shipping documents: request on the loading date, reply by email read by AI, follow-ups for missing documents, draft editor, accept', async (t) => {
@@ -3603,7 +3603,7 @@ test('shipments: shipped containers and courier parcels, stages and flags, detai
 
   let pg = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
   assert.match(pg, /At port \/ customs/); assert.match(pg, /On the water/); assert.match(pg, /Courier/);
-  assert.match(pg, /YN0012 · Yantian → LA · 20′ GP|· 20′ GP · Yantian → LA/); assert.match(pg, /YN0012/);
+  assert.match(pg, /· 20′ GP · Yantian → LA/); assert.match(pg, /YN0012/);
   assert.match(pg, /ETA \+3 days/); assert.match(pg, /Docs: Bill of lading \(500024\) missing/); assert.match(pg, /Arrives in 5 days/);
   assert.match(pg, /Free time over/); assert.match(pg, /7501 ✓ duty \$3,234/);
   assert.match(pg, /Courier · Shenzhen Kean/); assert.match(pg, /DHL · 4482119022/);
@@ -4184,11 +4184,13 @@ test('view as: an Admin sees another role\'s menu and limits, actions recorded a
 
 test('shipment names: container no. → house B/L (LCL) → booking → planned sailing', () => {
   const S = require('../src/shipname');
-  assert.equal(S.shipName({ port: 'CNYTN', box: '20GP', fwd: { container_no: 'ZCSU7687624', booking_no: 'YN0013' } }), 'ZCSU 7687624 · 20′ GP · Yantian → LA');
-  assert.equal(S.shipName({ port: 'CNYTN', box: 'LCL', fwd: { hbl_no: 'HKAL2611031A', booking_no: 'YN0013' } }), 'HBL HKAL2611031A · LCL · Yantian → LA');
-  assert.equal(S.shipName({ port: 'CNYTN', box: '20GP', fwd: { booking_no: 'YN0013' } }), 'YN0013 · Yantian → LA · 20′ GP');
-  assert.equal(S.shipName({ port: 'CNYTN', box: '40HQ' }, { sailing: { etd: '2026-12-01' } }), 'Yantian · sails ~Dec 1 · 40′ HQ');
+  assert.equal(S.shipName({ port: 'CNYTN', box: '20GP', fwd: { container_no: 'ZCSU7687624', booking_no: 'YN0013' } }), 'YN0013 · ZCSU 7687624 · 20′ GP · Yantian → LA');
+  assert.equal(S.shipName({ port: 'CNYTN', box: '20GP', fwd: { container_no: 'ZCSU7687624' } }), 'ZCSU 7687624 · 20′ GP · Yantian → LA');
+  assert.equal(S.shipName({ port: 'CNYTN', box: 'LCL', fwd: { hbl_no: 'HKAL2611031A', booking_no: 'YN0013' } }), 'YN0013 · HBL HKAL2611031A · LCL · Yantian → LA');
+  assert.equal(S.shipRef({ box: '20GP', fwd: { container_no: 'ZCSU7687624', booking_no: 'YN0013' } }), 'YN0013');
+  assert.equal(S.shipName({ port: 'CNYTN', box: '20GP', fwd: { booking_no: 'YN0013' } }), 'YN0013 · 20′ GP · Yantian → LA');
+  assert.equal(S.shipName({ port: 'CNYTN', box: '40HQ' }, { sailing: { etd: '2026-12-01' } }), 'Sails ~Dec 1 · 40′ HQ · Yantian → LA');
   const n = S.shipNames([{ id: 'a', port: 'CNYTN', box: '40HQ', loading_date: '2026-12-01' }, { id: 'b', port: 'CNYTN', box: '40HQ', loading_date: '2026-12-01' }]);
-  assert.equal(n.b, 'Yantian · sails ~Dec 1 · 40′ HQ #2');
+  assert.equal(n.b, 'Sails ~Dec 1 · 40′ HQ · Yantian → LA #2');
   assert.equal(S.shipRef({ box: '40HQ', fwd: {} }), null);
 });

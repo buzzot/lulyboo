@@ -1,10 +1,12 @@
 'use strict';
 // One name per shipment, everywhere (Shipments, planning, forwarders, customs, payments, emails, Telegram).
-// It uses the best real identifier known so far:
-//   container known (FCL)  → "ZCSU 7687624 · 20′ GP · Yantian → LA"
-//   LCL with a house B/L   → "HBL HKAL2611031A · LCL · Yantian → LA"
-//   booked                 → "YN0013 · Yantian → LA · 20′ GP"
-//   only planned           → "Yantian · sails ~Dec 1 · 20′ GP"
+// The booking number always comes first (it's the reference everyone uses and it exists earliest), then the
+// container number (FCL) or house B/L (LCL) once known, then box and route:
+//   "YN0013 · ZCSU 7687624 · 20′ GP · Yantian → LA"
+//   "YN0013 · HBL HKAL2611031A · LCL · Yantian → LA"
+//   "YN0013 · 20′ GP · Yantian → LA"                (booked, container not known yet)
+//   "ZCSU 7687624 · 20′ GP · Yantian → LA"          (no booking number recorded)
+//   "Sails ~Dec 1 · 20′ GP · Yantian → LA"          (only planned)
 // The old "Container 1" was just a running count per port and is only kept on the planning board for boxes with
 // no identifier yet.
 
@@ -17,17 +19,16 @@ const fmtCont = (v) => { const t = clean(v); return /^[A-Z]{4}\d{7}$/.test(t) ? 
 const portName = (code) => { try { return require('./schedules').PORT[code]?.name || code || ''; } catch { return code || ''; } };
 const podShort = (pod) => { const p = String(pod || ''); if (!p || /los angeles|long beach|\bLAX\b|\bLGB\b|USLAX|USLGB/i.test(p)) return 'LA'; return p.split(/[,(]/)[0].trim().slice(0, 18); };
 
-/** The identifier alone: container no. (FCL), house B/L (LCL), booking no., or null. */
-function shipRef(c) {
-  if (!c) return null;
-  const f = c.fwd || {};
-  const cno = f.container_no || c.container_no;
-  if (c.box !== 'LCL' && clean(cno).length >= 6) return fmtCont(cno);
-  if (c.box === 'LCL' && f.hbl_no) return `HBL ${f.hbl_no}`;
-  if (f.booking_no) return String(f.booking_no).trim();
-  if (clean(cno).length >= 6) return fmtCont(cno);
-  return null;
-}
+const ids = (c) => {
+  const f = c.fwd || {}; const cno = f.container_no || c.container_no; const out = [];
+  if (f.booking_no) out.push(String(f.booking_no).trim());
+  if (c.box === 'LCL' && f.hbl_no) out.push(`HBL ${f.hbl_no}`);
+  else if (clean(cno).length >= 6) out.push(fmtCont(cno));
+  return out;
+};
+
+/** The identifier alone: booking no., else container no. (FCL) / house B/L (LCL), or null. */
+function shipRef(c) { return c ? ids(c)[0] || null : null; }
 
 /** Full name of a container / LCL shipment. `sailing` (optional) gives the planned ETD. */
 function shipName(c, { sailing = null } = {}) {
@@ -35,12 +36,10 @@ function shipName(c, { sailing = null } = {}) {
   const f = c.fwd || {};
   const box = BOX[c.box] || c.box || '';
   const route = `${portName(c.port)} → ${podShort(f.pod)}`;
-  const cno = f.container_no || c.container_no;
-  if (c.box !== 'LCL' && clean(cno).length >= 6) return `${fmtCont(cno)} · ${box} · ${route}`;
-  if (c.box === 'LCL' && f.hbl_no) return `HBL ${f.hbl_no} · LCL · ${route}`;
-  if (f.booking_no) return `${String(f.booking_no).trim()} · ${route} · ${box}`;
+  const id = ids(c);
+  if (id.length) return [...id, box, route].join(' · ');
   const etd = day(f.atd || f.etd || sailing?.etd || (c.sailing && c.sailing.etd) || c.loading_date);
-  return `${portName(c.port)} · ${etd ? `sails ~${short(etd)}` : 'not scheduled yet'} · ${box}`;
+  return `${etd ? `Sails ~${short(etd)}` : 'Not scheduled yet'} · ${box} · ${route}`;
 }
 
 /** Names for many containers at once; two planned boxes with the same name get " #2", " #3". */
