@@ -3570,7 +3570,9 @@ test('customs entries: AI reads a 7501, links container / POs / products, checks
 
   // product page and PO page
   const prod = (await req(base, 'GET', `/admin/products/${dps.id}`, { cookie })).text;
-  assert.match(prod, /Customs entries/); assert.match(prod, /43\.8%/); assert.match(prod, /was \$0\.46/);
+  assert.match(prod, /Customs records/); assert.match(prod, /43\.8%/); assert.match(prod, /was \$0\.46/);
+  // the rate paid on the latest import becomes the product's duty for pricing
+  assert.equal(db.tables.products.find((x) => x.id === dps.id).duty_paid_pct, 43.8); assert.match(prod, /Pricing uses <b>43\.8%<\/b>/);
   const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800022`, { cookie })).text;
   assert.match(po, /id="customs"/); assert.match(po, /duty <b>\$1,250\.05<\/b>/);
 
@@ -4304,4 +4306,34 @@ test('record-only shipments: create, list in Records (not active), detail, from 
   assert.equal(db.tables.plan_containers.find((c) => c.id === rec2.id).record_only, false);
   await req(base, 'POST', `/admin/orders/shipments/${rec.id}/record/delete`, { cookie });
   assert.ok(!db.tables.plan_containers.some((c) => c.id === rec.id));
+});
+
+test('7501 review: products linked by SKU / to confirm / not found, confirm, link by search, HTS differs, rate paid on the product', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Xing Fuming' });
+  const a = await db.insert('products', { supplier_id: s.id, supplier_sku: 'FRT 001', product_name: 'Flower rattle', hts_verified_code: '3924104000' });
+  const b = await db.insert('products', { supplier_id: s.id, supplier_sku: 'SST 001', product_name: 'Sea Spinner Toy' });
+  const e = await db.insert('customs_entries', { status: 'pending', entry_no: '9T2-1', entry_date: '2026-11-21', facts: {}, pos: [], files: [],
+    lines: [{ no: '002', description: 'Silicone teethers', hts: '3926.90.9985', rate: 5.3, extras: [{ code: '9903.88.15', rate: 7.5 }], qty: 5040, duty: 100, products: [{ code: 'FRT 001', how: 'name', product_id: a.id, name: 'Flower rattle', hts_on_file: '3924104000', qty: 5040, per_pc: 0.02 }] },
+      { no: '003', description: 'Toys', hts: '9503.00.0073', rate: 0, extras: [{ code: '9903.88.15', rate: 25 }], qty: 1200, duty: 50, products: [{ code: 'SST 001', how: null, product_id: null, qty: 1200, per_pc: 0.04 }] }] });
+  const v = JSON.parse((await req(base, 'GET', `/admin/logistics/customs/${e.id}/view`, { cookie })).text).view;
+  assert.deepEqual([v.linkSum.total, v.linkSum.linked, v.linkSum.toConfirm, v.linkSum.none, v.linkSum.htsDiff.length], [2, 0, 1, 1, 1]);
+  const post = async (form) => JSON.parse((await req(base, 'POST', `/admin/logistics/customs/${e.id}/link`, { cookie, form })).text).view;
+  let w = await post({ line: '002', i: '0' });
+  assert.equal(w.lines[0].products[0].how, 'confirmed');
+  const found = JSON.parse((await req(base, 'GET', '/admin/logistics/customs/products?q=sst', { cookie })).text).products;
+  assert.equal(found[0].id, b.id);
+  w = await post({ line: '003', i: '0', product: b.id });
+  assert.equal(w.lines[1].products[0].product_id, b.id); assert.equal(w.linkSum.linked, 2); assert.equal(w.linkSum.none, 0);
+  // saving: each linked product's duty for pricing = the rate paid
+  await req(base, 'POST', `/admin/logistics/customs/${e.id}/save`, { cookie });
+  assert.equal(db.tables.products.find((x) => x.id === a.id).duty_paid_pct, 12.8);
+  assert.equal(db.tables.products.find((x) => x.id === b.id).duty_paid_pct, 25);
+  const pg = (await req(base, 'GET', `/admin/products/${a.id}`, { cookie })).text;
+  assert.match(pg, /Customs records/); assert.match(pg, /Use declared code/);
+  await req(base, 'POST', `/admin/products/${a.id}/hts/use-declared`, { cookie, form: { hts: '3926909985' } });
+  assert.equal(db.tables.products.find((x) => x.id === a.id).hts_verified_code, '3926909985');
 });

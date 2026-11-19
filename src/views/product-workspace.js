@@ -44,7 +44,7 @@ function pricingTag(p, supplier) {
 }
 
 function renderWorkspace(c) {
-  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, renderAnalysis } = c;
+  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, customsHtml = '', customsN = 0, renderAnalysis } = c;
   const v = (x) => (x === null || x === undefined ? '' : x);
   const stars = p.score ? '★'.repeat(p.score) + '☆'.repeat(5 - p.score) : '';
   const money = (x) => (x === null || x === undefined ? '—' : fmt.money(x));
@@ -87,7 +87,7 @@ function renderWorkspace(c) {
       ${srcDoc ? html`<li><a href="/admin/documents/${srcDoc.id}" download title="Original quotation file: ${srcDoc.name}" class="src-chip">${icon('download', 13)}<span class="trunc">Source file: ${srcDoc.name}</span></a></li>` : ''}
     </ul>
     <div class="pw-tabs" role="tablist" aria-label="Product sections">
-      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${tab('costing', 'Costing')}${tab('logistics', 'Logistics')}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
+      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${tab('costing', 'Costing')}${tab('logistics', 'Logistics')}${tab('customs', 'Customs records', customsN ? { text: customsN } : null)}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
     </div>
   </div>`;
 
@@ -305,7 +305,8 @@ function renderWorkspace(c) {
     </section>
   </section>`;
 
-  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${costing}${logistics}${review}${documents}</div>`;
+  const customs = html`<section class="pw-panel" role="tabpanel" id="tab-customs" aria-labelledby="tabbtn-customs" data-panel="customs" hidden>${customsHtml}</section>`;
+  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${costing}${logistics}${customs}${review}${documents}</div>`;
 }
 
 module.exports = { renderWorkspace, normSize, DOC_KINDS, UPLOAD_KINDS };

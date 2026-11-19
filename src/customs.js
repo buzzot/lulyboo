@@ -185,8 +185,10 @@ async function link(db, e, { containerId = null, poHint = [] } = {}) {
       let p = null;
       if (o) p = PL.catalogMatch(o, await prodsOf(o.supplier_id));
       if (!p) p = allProds.find((x) => code(x.supplier_sku) === k) || allProds.find((x) => code(x.product_name).startsWith(k)) || null;
+      // how sure: the SKU itself (automatic) or only the name (to confirm in the review)
+      const how = !p ? null : code(p.supplier_sku) === k || (o && code(o.sku) === k) ? 'sku' : 'name';
       if (!o && p) o = scope.find((x) => x.supplier_id === p.supplier_id && PL.catalogMatch(x, [p])) || null;
-      found.push({ code: c0, product_id: p?.id || null, name: p?.product_name || o?.product || c0, supplier_id: p?.supplier_id || o?.supplier_id || null, po: o?.po || null, line_id: o?.id || null, unit_price: num(o?.unit_price), qty: num(o?.qty), hts_on_file: p?.hts_verified_code || null, supplier_hs: p?.hs_code || null, description: p?.description || null, materials: p?.materials || null, category: p?.category || null, subcategory: p?.subcategory || null });
+      found.push({ code: c0, how, product_id: p?.id || null, name: p?.product_name || o?.product || c0, supplier_id: p?.supplier_id || o?.supplier_id || null, po: o?.po || null, line_id: o?.id || null, unit_price: num(o?.unit_price), qty: num(o?.qty), hts_on_file: p?.hts_verified_code || null, supplier_hs: p?.hs_code || null, description: p?.description || null, materials: p?.materials || null, category: p?.category || null, subcategory: p?.subcategory || null });
     }
     // split the line's value, duty and fees between its products: by PO value, else by quantity, else equally
     const w = found.map((f) => (f.unit_price && f.qty ? f.unit_price * f.qty : null));
@@ -343,6 +345,8 @@ async function save(db, entry, { by = null } = {}) {
   if (entry.entry_no) for (const old of (await db.list('customs_entries', { filters: { entry_no: entry.entry_no } }).catch(() => [])).filter((x) => x.status === 'saved' && x.id !== entry.id)) await db.update('customs_entries', { id: old.id }, { status: 'replaced' });
   const recheck = await checks(db, { ...(entry.facts || {}), lines: entry.lines || [] }, { selfId: entry.id });
   await db.update('customs_entries', { id: entry.id }, { status: 'saved', saved_at: now(), saved_by: by, checks: recheck });
+  // each linked product: the rate actually paid on its latest import is what pricing uses from now on
+  for (const l of entry.lines || []) for (const p of l.products || []) if (p.product_id) await setPaid(db, p.product_id, { rate: lineRate(l), at: entry.entry_date, entry: entry.entry_no });
   // the 7501 on each PO's documents (once per supplier)
   const lines = await db.list('plan_orders').catch(() => []);
   const bySup = {};
@@ -369,7 +373,17 @@ async function confirmHts(db, entry, lineNo, which, by = null) {
   return { hts: hts ? fmtHts(hts) : null, products: (l.products || []).filter((p) => p.product_id).length };
 }
 
+/** Record the duty rate paid on a product's import, if it is its latest (needs supabase/customs-products.sql). */
+async function setPaid(db, productId, { rate, at, entry }) {
+  const p = await db.get('products', productId).catch(() => null); if (!p || rate == null) return false;
+  const d = at ? String(at).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  if (p.duty_paid_at && String(p.duty_paid_at).slice(0, 10) > d) return false;
+  if (Number(p.duty_paid_pct) === rate && String(p.duty_paid_at || '').slice(0, 10) === d) return false;
+  await db.update('products', { id: productId }, { duty_paid_pct: rate, duty_paid_at: d, duty_paid_entry: entry || null }).catch(() => null);
+  return true;
+}
+
 /** Effective rate of a line (base + chapter 99), %. */
 const lineRate = (l) => Math.round(((l.rate || 0) + (l.extras || []).reduce((a, x) => a + (x.rate || 0), 0)) * 10) / 10;
 
-module.exports = { brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };
+module.exports = { setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };

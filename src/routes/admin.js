@@ -118,17 +118,37 @@ function termsAndPacking({ p }) {
     </dl></div></div></section>`;
 }
 
-/** Duty actually paid: every customs entry this product came in on. */
-function customsHistory(p, list) {
-  if (!list || !list.length) return '';
+/** Customs records: every import of this product (saved 7501 lines) — declared HTS, duty rate paid, duty per piece. */
+async function customsCard(db, p, list, a) {
   const usd = (v, d = 2) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`);
-  const last = list[0]; const prev = list[1];
-  return html`<div class="cu-prod"><div class="cu-prod-h"><b>Customs entries</b><span class="sub">duty actually paid${p.hts_verified_code ? ` · HTS on file ${p.hts_verified_code}` : ''}</span></div>
-    <div class="cu-prod-k"><div><span>Duty now</span><b>${last.rate}%</b><small>${[last.base != null ? `${last.base}%` : null, ...last.extras.map((x) => `${x.rate}% (${x.code})`)].filter(Boolean).join(' + ')}</small></div>
-      <div><span>Duty + fees per pc</span><b>${usd(last.per_pc)}</b><small>${prev && prev.per_pc != null ? `was ${usd(prev.per_pc)}` : ''}</small></div></div>
-    <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Entry</th><th>Date</th><th>PO</th><th class="r">Qty</th><th class="r">Value/pc</th><th>HTS</th><th class="r">Rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
-    ${list.map((x) => html`<tr><td><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a></td><td>${x.date ? String(x.date).slice(0, 10) : ''}</td><td>${x.po || '—'}</td><td class="r">${x.qty != null ? Number(x.qty).toLocaleString('en-US') : '—'}</td><td class="r">${usd(x.value_pc)}</td><td class="cu-mono">${x.hts}</td><td class="r">${x.rate}%</td><td class="r"><b>${usd(x.per_pc)}</b></td></tr>`)}
-    </tbody></table></div></div>`;
+  const dig = (h) => String(h || '').replace(/\D/g, '');
+  const fmtH = (h) => require('../customs').fmtHts(h);
+  if (!list.length) return html`<section class="card cr"><h2 class="sec">Customs records</h2><p class="muted">No imports yet. When a customs entry (CBP 7501) that includes this product is saved, it shows up here — the HTS declared, the duty rate paid and the duty per piece — and pricing uses the rate actually paid.</p></section>`;
+  const entries = await db.list('customs_entries').catch(() => []);
+  const cs = Object.fromEntries((await db.list('plan_containers').catch(() => [])).map((c) => [c.id, c]));
+  const SN = require('../shipname');
+  const shipOf = (id) => { const e = entries.find((x) => x.id === id); const c = e?.container_id ? cs[e.container_id] : null; return c ? { id: c.id, name: c.record_only ? `Record · ${(c.record || {}).name || SN.shipName(c)}` : SN.shipName(c) } : null; };
+  const last = list[0]; const prev = list.find((x, i) => i > 0 && x.per_pc != null);
+  const codes = [...new Set(list.map((x) => dig(x.hts).slice(0, 10)).filter(Boolean))];
+  const rates = list.filter((x) => x.rate != null);
+  const oldest = rates[rates.length - 1];
+  const file = dig(p.hts_verified_code || p.hs_code);
+  const differs = file && dig(last.hts) && file.slice(0, 8) !== dig(last.hts).slice(0, 8);
+  const d10 = (x) => (x ? PL.short(String(x).slice(0, 10)) : '');
+  return html`<section class="card cr" id="customs"><div class="head-row"><h2 class="sec">Customs records <span class="sub">${list.length} import${list.length === 1 ? '' : 's'}</span></h2></div>
+    <div class="cr-k">
+      <div><span>Declared HTS · last import</span><b class="cu-mono">${fmtH(last.hts)}</b><small>${codes.length > 1 ? html`<span class="bad">changed: ${codes.map((c) => fmtH(c)).join(' → ')}</span>` : list.length > 1 ? `✓ same on all ${list.length} imports` : d10(last.date)}</small></div>
+      <div><span>Duty rate paid</span><b>${last.rate}%</b><small>${[last.base != null ? `${last.base}%` : null, ...(last.extras || []).map((x) => `${x.rate}% (${x.code})`)].filter(Boolean).join(' + ')}</small></div>
+      <div><span>Duty + fees per pc</span><b>${usd(last.per_pc)}</b><small>${prev ? `was ${usd(prev.per_pc)} · ${d10(prev.date)}` : ''}</small></div>
+    </div>
+    ${differs ? html`<form method="post" action="/admin/products/${p.id}/hts/use-declared" class="cr-al"><span>Product file says <b class="cu-mono">${fmtH(file)}</b> — the last import was declared <b class="cu-mono">${fmtH(last.hts)}</b>.</span><input type="hidden" name="hts" value="${dig(last.hts)}"><button class="link small">Use declared code</button></form>` : ''}
+    ${oldest && oldest.rate !== last.rate ? html`<p class="cr-n">Rate ${oldest.rate}% → ${last.rate}% between ${d10(oldest.date)} and ${d10(last.date)}.</p>` : ''}
+    <p class="cr-n">${a.duty_source === 'customs entry' ? html`Pricing uses <b>${a.duty_pct}%</b> — the rate paid on entry ${p.duty_paid_entry || last.entry_no}.` : a.duty_source === 'manual' ? html`Pricing uses your manual override (${a.duty_pct}%), not the rate paid.` : html`Pricing will use the rate paid once the database is updated (supabase/customs-products.sql).`}</p>
+    <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Imported</th><th>Entry · PO</th><th>Shipment</th><th class="r">Qty</th><th class="r">Value/pc</th><th>HTS declared</th><th class="r">Rate</th><th class="r">Duty + fees/pc</th></tr></thead><tbody>
+    ${list.map((x) => { const sh = shipOf(x.id); return html`<tr><td>${d10(x.date)}</td><td><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a><div class="sub">${x.po ? `PO ${PL.normPo(x.po)}` : ''}</div></td>
+      <td>${sh ? html`<a href="/admin/orders/shipments/${sh.id}">${sh.name}</a>` : html`<span class="sub">—</span>`}</td><td class="r">${x.qty != null ? Number(x.qty).toLocaleString('en-US') : '—'}</td><td class="r">${usd(x.value_pc)}</td>
+      <td class="cu-mono">${fmtH(x.hts)}</td><td class="r">${x.rate}%</td><td class="r">${usd(x.per_pc, 3)}</td></tr>`; })}
+    </tbody></table></div></section>`;
 }
 
 function dutyPanel({ p, a, testDuty, aiOn, customs = [] }) {
@@ -167,12 +187,12 @@ function dutyPanel({ p, a, testDuty, aiOn, customs = [] }) {
       ${(d.review_flags || []).length ? html`<div class="flash warn"><strong>Verify:</strong><ul class="plain">${d.review_flags.map((f) => html`<li>${f}</li>`)}</ul></div>` : ''}
       ${(d.alternatives || []).length ? html`<details><summary>Other tariff lines considered (${d.alternatives.length})</summary><ul class="plain">${d.alternatives.map((x) => html`<li><strong>${x.htsno}</strong> ${x.general} <span class="sub">${x.description}</span></li>`)}</ul></details>` : ''}
     ` : html`<p class="dt-empty">Not researched yet. Confirm the code in step 1 and press “Check with USITC + AI”.</p>`}
-    ${customsHistory(p, customs)}
   </details>`;
 }
 
 // ── Auth ──────────────────────────────────────────────────────
 const ST = require('../staff');
+const PL = require('../planning');
 function guard(config, fn) {
   return async (req, res) => {
     const real = await ST.currentStaff(config, req);
@@ -595,7 +615,7 @@ module.exports = function adminRoutes(router, { db, config }) {
         <tbody>${slice.map(({ product: p, analysis: a }) => html`<tr>
           <td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td>
           <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="" loading="lazy">` : html`<span class="noimg">—</span>`}</td>
-          <td><a href="/admin/products/${p.id}">${p.product_name}</a>${dupPill(dup, p.id)}${a.issues.length ? html` <span class="warn-dot" title="${a.issues.join('\n')}">${a.issues.length}</span>` : ''}
+          <td><a href="/admin/products/${p.id}">${p.product_name}</a>${p.duty_paid_pct != null ? html` <a class="cu7501" href="/admin/products/${p.id}#customs" title="${`Imported — duty paid ${p.duty_paid_pct}% (entry ${p.duty_paid_entry || ''})`}">7501 ✓</a>` : ''}${dupPill(dup, p.id)}${a.issues.length ? html` <span class="warn-dot" title="${a.issues.join('\n')}">${a.issues.length}</span>` : ''}
             <div class="sub"><a href="/admin/suppliers/${p.supplier_id}">${p.supplier_name}</a>${p.supplier_sku ? ` · ${p.supplier_sku}` : ''}</div></td>
           <td>${p.category || '—'}<div class="sub">${p.subcategory || ''}</div></td>
           <td class="r">${fmt.money(p.unit_price, p.currency)}${p.currency !== 'USD' && a.unit_price_usd !== null ? html`<div class="sub">${fmt.money(a.unit_price_usd)}</div>` : ''}<div class="sub">${p.incoterm || ''}</div></td>
@@ -714,6 +734,15 @@ module.exports = function adminRoutes(router, { db, config }) {
     }));
   }));
 
+  router.post('/admin/products/:id/hts/use-declared', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const p = await db.get('products', req.params.id); if (!p) throw new HttpError(404, 'Product not found');
+    const code = String(fields.hts || '').replace(/\D/g, '').slice(0, 10); if (code.length < 6) throw new HttpError(400, 'No HTS code');
+    await db.update('products', { id: p.id }, { hts_verified_code: code, updated_at: new Date().toISOString() });
+    flash(res, 'ok', `HTS on file is now ${require('../customs').fmtHts(code)}`);
+    res.redirect(`/admin/products/${p.id}#customs`);
+  }));
+
   // ── Product detail
   router.get('/admin/products/:id', G(async (req, res) => {
     const p = await db.get('products', req.params.id);
@@ -725,7 +754,10 @@ module.exports = function adminRoutes(router, { db, config }) {
     p.supplier_name = supplier?.name;
     const srcDoc = p.source_document_id ? await db.get('supplier_documents', p.source_document_id).catch(() => null) : null;
     // Test mode: ?test_duty=12.5 re-costs the product with that duty, nothing is saved.
-    const tdRaw = F.parseNumber(req.query.test_duty);
+    // customs records: every import of this product; the latest rate paid feeds pricing (backfilled for older entries)
+    const customs = await require('./customs').forProduct(db, p.id).catch(() => []);
+    if (customs.length && await require('../customs').setPaid(db, p.id, { rate: customs[0].rate, at: customs[0].date, entry: customs[0].entry_no }).catch(() => false)) Object.assign(p, { duty_paid_pct: customs[0].rate, duty_paid_at: String(customs[0].date || '').slice(0, 10), duty_paid_entry: customs[0].entry_no });
+        const tdRaw = F.parseNumber(req.query.test_duty);
     const testDuty = req.query.test_duty !== undefined && req.query.test_duty !== '' && tdRaw !== null && !Number.isNaN(tdRaw) && tdRaw >= 0 && tdRaw <= 500 ? tdRaw : null;
     const realA = analyzeProduct(p, ctx);
     const a = testDuty !== null ? analyzeProduct({ ...p, duty_rate_pct: testDuty }, ctx) : realA;
@@ -740,7 +772,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
       body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis,
-        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY, customs: await require('./customs').forProduct(db, p.id).catch(() => []) }) }),
+        dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }), customsHtml: await customsCard(db, p, customs, realA), customsN: customs.length }),
     }));
   }));
 

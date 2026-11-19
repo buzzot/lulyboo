@@ -37,13 +37,17 @@ async function viewOf(db, e) {
   const f = e.facts || {};
   const lines = (e.lines || []).map((l) => ({ ...l, rate_total: CU.lineRate(l), value_pc: l.value && l.qty ? Math.round((l.value / l.qty) * 100) / 100 : null }));
   const suggestions = lines.filter((l) => l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts).length;
+  // products: linked (by SKU / confirmed / by hand), suggested by name (to confirm), not found; declared HTS ≠ product file
+  const prods = lines.flatMap((l) => (l.products || []).map((p) => ({ l, p })));
+  const linkSum = { total: prods.length, linked: prods.filter(({ p }) => p.product_id && p.how !== 'name').length, toConfirm: prods.filter(({ p }) => p.product_id && p.how === 'name').length, none: prods.filter(({ p }) => !p.product_id).length,
+    htsDiff: prods.filter(({ l, p }) => p.product_id && p.hts_on_file && CU.digits(p.hts_on_file).slice(0, 8) !== CU.digits(l.hts).slice(0, 8)).map(({ l, p }) => ({ code: p.code, file: CU.fmtHts(p.hts_on_file), declared: l.hts })) };
   return {
     id: e.id, status: e.status, entry_no: e.entry_no, entry_date: e.entry_date ? PL.short(String(e.entry_date).slice(0, 10)) : '', summary: f.summary || '',
     meta: [e.entry_date ? `Entry ${PL.short(String(e.entry_date).slice(0, 10))}` : '', f.port_code ? `Port ${f.port_code}` : '', f.carrier, f.voyage ? `voyage ${f.voyage}` : '', f.broker ? `Broker ${f.broker}${f.broker_file ? ` (file ${f.broker_file})` : ''}` : '', f.export_date ? `Exported ${PL.short(f.export_date)}` : '', f.importer_last4 ? `Importer ••••${f.importer_last4}` : ''].filter(Boolean),
     container: c ? { id: c.id, name: cname, port: c.port, reason: e.match_reason || '' } : null,
     pos: e.pos || [], hbls: e.hbls || [], mbl: e.mbl || '',
     value: e.entered_value, duty: e.duty, fees: e.fees, total: e.total, mpf: f.mpf, hmf: f.hmf, rate: pct(e.duty || 0, e.entered_value), totalRate: pct(e.total || 0, e.entered_value),
-    lines, checks: e.checks || [], suggestions,
+    lines, checks: e.checks || [], suggestions, linkSum,
     broker: CU.brokerDraft(e, { to: e.from_email && !/lulyboo/i.test(e.from_email) ? String(e.from_email).replace(/^.*<([^>]+)>.*$/, '$1').trim() : (await brokerEmail(db, e)) || '' }),
     files: (e.files || []).map((x, i) => ({ name: x.name, url: `${BASE}/${e.id}/file/${i}`, inline: /pdf|image/.test(x.type || '') })),
   };
@@ -141,6 +145,27 @@ module.exports = function customsRoutes(router, { db, config }) {
     const e = await getE(req.params.id);
     const r = await CU.confirmHts(db, e, f.line, f.use, by(req));
     return { ...r, view: await viewOf(db, await getE(e.id)) };
+  }));
+  // link a 7501 line's product: confirm the suggestion, or pick another product
+  router.get(`${BASE}/products`, J(async (req) => {
+    const q = String(req.query.q || '').trim().toLowerCase(); if (q.length < 2) return { products: [] };
+    const sups = {}; for (const x of await db.list('suppliers').catch(() => [])) sups[x.id] = x.name;
+    const list = (await db.list('products').catch(() => [])).filter((p) => !p.archived_at && [p.supplier_sku, p.product_name, p.lulyboo_sku].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 12);
+    return { products: list.map((p) => ({ id: p.id, sku: p.supplier_sku || '', name: p.product_name || '', supplier: sups[p.supplier_id] || '' })) };
+  }));
+  router.post(`${BASE}/:id/link`, J(async (req) => {
+    const { fields: f } = await parseForm(req);
+    const e = await getE(req.params.id);
+    const lines = e.lines || []; const l = lines.find((x) => String(x.no) === String(f.line)); const p = l && (l.products || [])[Number(f.i)];
+    if (!p) throw new HttpError(404, 'Line not found');
+    if (f.product) {
+      const prod = await db.get('products', String(f.product)).catch(() => null); if (!prod) throw new HttpError(404, 'Product not found');
+      Object.assign(p, { product_id: prod.id, name: prod.product_name || p.name, supplier_id: prod.supplier_id, how: 'manual', hts_on_file: prod.hts_verified_code || null, supplier_hs: prod.hs_code || null });
+    } else if (f.unlink) Object.assign(p, { product_id: null, how: null, hts_on_file: null });
+    else if (p.product_id) p.how = 'confirmed';
+    await db.update('customs_entries', { id: e.id }, { lines });
+    if (e.status === 'saved' && p.product_id) await CU.setPaid(db, p.product_id, { rate: CU.lineRate(l), at: e.entry_date, entry: e.entry_no });
+    return { view: await viewOf(db, await getE(e.id)) };
   }));
   router.get(`${BASE}/:id/file/:i`, G(async (req, res) => {
     const e = await getE(req.params.id);

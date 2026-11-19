@@ -1120,3 +1120,8 @@ alter table public.po_payments add column if not exists paid_by text;
 -- Record-only shipments (see records.sql)
 alter table public.plan_containers add column if not exists record_only boolean not null default false;
 alter table public.plan_containers add column if not exists record jsonb;
+
+-- Customs records on products (see customs-products.sql)
+alter table public.products add column if not exists duty_paid_pct numeric;
+alter table public.products add column if not exists duty_paid_at date;
+alter table public.products add column if not exists duty_paid_entry text;

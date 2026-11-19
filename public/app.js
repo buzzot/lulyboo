@@ -2578,7 +2578,15 @@
           (done || !(l.products || []).some(function (p) { return p.product_id; }) ? '<span></span>' : '<span class="cu-sg"><button type="button" class="btn small" data-cu-hts="' + esc(l.no) + '" data-use="suggested">Use ' + esc(g.hts) + '</button><button type="button" class="btn ghost small" data-cu-hts="' + esc(l.no) + '" data-use="declared">Keep declared</button><button type="button" class="link small" data-cu-hts="' + esc(l.no) + '" data-use="dismiss">Dismiss</button></span>') + '</div>';
       }).join('');
     var rows = v.lines.map(function (l) {
-      var prods = (l.products || []).map(function (p) { return '<span class="cu-pt' + (p.product_id ? '' : ' no') + '">' + (p.product_id ? '🔗 ' : '? ') + esc(p.code) + (p.name && p.name !== p.code ? ' · ' + esc(p.name) : '') + '</span>'; }).join('') + (l.pos || []).map(function (po) { return '<span class="cu-pt po">' + (/^PO/i.test(po) ? '' : 'PO ') + esc(po) + '</span>'; }).join('');
+      var prods = (l.products || []).map(function (p, pi) {
+        var nm = esc(p.code) + (p.name && p.name !== p.code ? ' · ' + esc(p.name) : '');
+        var diff = p.product_id && p.hts_on_file && String(p.hts_on_file).replace(/\D/g, '').slice(0, 8) !== String(l.hts || '').replace(/\D/g, '').slice(0, 8);
+        var key = ' data-line="' + esc(l.no) + '" data-i="' + pi + '"';
+        var box = '<span class="cu-pl" data-cu-pbox' + key + '>';
+        if (p.product_id && p.how !== 'name') return box + '<span class="cu-pt ok" title="' + (p.how === 'sku' ? 'Matched by SKU' : p.how === 'manual' ? 'Linked by hand' : 'Confirmed') + '">✓ ' + nm + '</span>' + (diff ? '<span class="cu-pt w" title="The product file has a different HTS than this line declares">HTS on file ' + esc(String(p.hts_on_file).replace(/\D/g, '').replace(/^(\d{4})(\d{2})(\d{0,4}).*/, function (m, a, b, c) { return a + '.' + b + (c ? '.' + c : ''); })) + '</span>' : '') + ' <button type="button" class="link small" data-cu-pick' + key + '>Change</button></span>';
+        if (p.product_id) return box + '<span class="cu-pt q" title="Suggested by name — confirm">? ' + nm + '</span> <button type="button" class="link small" data-cu-confirm' + key + '>Confirm</button> <button type="button" class="link small" data-cu-pick' + key + '>Change…</button></span>';
+        return box + '<span class="cu-pt no">' + esc(p.code) + ' — no product</span> <button type="button" class="link small" data-cu-pick' + key + '>Link product…</button></span>';
+      }).join('') + (l.pos || []).map(function (po) { return '<span class="cu-pt po">' + (/^PO/i.test(po) ? '' : 'PO ') + esc(po) + '</span>'; }).join('');
       var stack = '<span>' + '<span class="hts-tip" data-hts="' + esc(l.hts) + '" tabindex="0">' + esc(l.hts) + '</span>' + '<b>' + (l.rate == null ? esc(l.rate_text) : l.rate === 0 ? 'Free' : l.rate + '%') + '</b></span>' + l.extras.map(function (x) { return '<span>' + '<span class="hts-tip" data-hts="' + esc(x.code) + '" tabindex="0">' + esc(x.code) + '</span>' + (x.label ? ' · ' + esc(x.label.toLowerCase()) : '') + '<b>' + (x.rate == null ? esc(x.rate_text) : x.rate + '%') + '</b></span>'; }).join('');
       var per = (l.products || []).filter(function (p) { return p.per_pc != null; });
       return '<tr><td>' + esc(l.no) + '</td><td><b>' + esc(l.description) + '</b><div class="cu-mono">' + '<span class="hts-tip" data-hts="' + esc(l.hts) + '" tabindex="0">' + esc(l.hts) + '</span>' + (l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts && l.suggestion.status === 'open' ? ' <span class="cu-sug">✦ ' + esc(l.suggestion.hts.slice(-4)) + '?</span>' : '') + '</div><div class="cu-pts">' + prods + '</div></td>' +
@@ -2593,6 +2601,7 @@
       '<div class="cu-kp"><div><span>Entered value</span><b>' + usd(v.value, 0) + '</b></div><div><span>Duty</span><b>' + usd(v.duty) + '</b><small>' + (v.rate != null ? v.rate + '% of value' : '') + '</small></div><div><span>MPF + HMF</span><b>' + usd(v.fees) + '</b><small>' + (v.mpf != null ? 'MPF ' + usd(v.mpf) + ' · HMF ' + usd(v.hmf) : '') + '</small></div><div><span>Total</span><b>' + usd(v.total) + '</b><small>' + (v.totalRate != null ? v.totalRate + '% of value' : '') + '</small></div></div>' +
       (alerts ? '<div class="lp-fd-al">' + alerts + '</div>' : '') +
       (v.broker ? '<div class="cu-ask"><span>Something here doesn\'t match? Ask the broker.</span><button type="button" class="btn ghost small" data-cu-mail>✉ Draft email to broker</button></div>' : '') +
+      (v.linkSum && v.linkSum.total ? '<div class="cu-lsum ' + (v.linkSum.none || v.linkSum.toConfirm || v.linkSum.htsDiff.length ? 'w' : 'ok') + '"><b>Products:</b> ' + v.linkSum.linked + ' of ' + v.linkSum.total + ' linked' + (v.linkSum.toConfirm ? ' · ' + v.linkSum.toConfirm + ' to confirm' : '') + (v.linkSum.none ? ' · ' + v.linkSum.none + ' not found' : '') + (v.linkSum.htsDiff.length ? ' · <b>' + v.linkSum.htsDiff.length + ' HTS differ' + (v.linkSum.htsDiff.length === 1 ? 's' : '') + '</b> from the product file (' + v.linkSum.htsDiff.map(function (d) { return esc(d.code) + ': ' + esc(d.file) + ' vs ' + esc(d.declared); }).join('; ') + ')' : '') + '<span class="sub"> — each linked product gets this import on its Customs records</span></div>' : '') +
       '<div class="table-wrap"><table class="cu-lt"><thead><tr><th>Line</th><th>Goods · HTS</th><th class="r">Qty</th><th class="r">Value</th><th>Rates</th><th class="r">Duty</th><th class="r">Per pc</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="lp-fd-acts"><span class="sub">' + v.files.map(function (f) { return '<a href="' + f.url + (f.inline ? '?inline=1' : '') + '" target="_blank" rel="noopener">📄 ' + esc(f.name) + '</a>'; }).join(' ') + (v.status === 'saved' ? '' : ' · kept with the container, POs and products when saved') + '</span><span class="r">' +
         (v.status === 'saved' ? '<button type="button" class="btn" data-cu-close>Close</button>' : '<button type="button" class="link small" data-cu-discard>Discard</button><button type="button" class="btn" data-cu-save>Save entry</button>') + '</span></div></div>';
@@ -2627,6 +2636,20 @@
       return;
     }
     if ((b = e.target.closest('[data-cu-hts]'))) { b.disabled = true; post(C.base + '/' + S.view.id + '/hts', { line: b.getAttribute('data-cu-hts'), use: b.getAttribute('data-use') }).then(function (j) { S.view = j.view; S.changed = true; view(); }).catch(function (x) { b.disabled = false; alertMsg(x.message); }); return; }
+    if ((b = e.target.closest('[data-cu-confirm]'))) { b.disabled = true; post(C.base + '/' + S.view.id + '/link', { line: b.getAttribute('data-line'), i: b.getAttribute('data-i') }).then(function (j) { S.view = j.view; S.changed = true; view(); }).catch(function (x) { alertMsg(x.message); }); return; }
+    if ((b = e.target.closest('[data-cu-pick]'))) {
+      var pb = b.closest('[data-cu-pbox]'), ln = b.getAttribute('data-line'), ix = b.getAttribute('data-i');
+      pb.innerHTML = '<span class="cu-find"><input type="search" placeholder="SKU or product name…" data-cu-q aria-label="Find product"><span class="cu-res" data-cu-res></span></span>';
+      var q = pb.querySelector('[data-cu-q]'), res = pb.querySelector('[data-cu-res]'), t = null; q.focus();
+      q.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () {
+        if (q.value.trim().length < 2) { res.innerHTML = ''; return; }
+        fetch(C.base + '/products?q=' + encodeURIComponent(q.value.trim()), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+          res.innerHTML = (j.products || []).map(function (p) { return '<button type="button" data-cu-set="' + esc(p.id) + '" data-line="' + esc(ln) + '" data-i="' + esc(ix) + '"><b>' + esc(p.sku || '—') + '</b> ' + esc(p.name) + ' <span class="sub">' + esc(p.supplier) + '</span></button>'; }).join('') || '<span class="sub">No product found</span>';
+        });
+      }, 200); });
+      return;
+    }
+    if ((b = e.target.closest('[data-cu-set]'))) { post(C.base + '/' + S.view.id + '/link', { line: b.getAttribute('data-line'), i: b.getAttribute('data-i'), product: b.getAttribute('data-cu-set') }).then(function (j) { S.view = j.view; S.changed = true; view(); }).catch(function (x) { alertMsg(x.message); }); return; }
     if (e.target.closest('[data-cu-mail]')) { mailView(); return; }
     if (e.target.closest('[data-cu-back]')) { mailVals(); view(); return; }
     if (e.target.closest('[data-cu-copy]')) { var mv = mailVals(); var txt = 'To: ' + mv.to + '\nSubject: ' + mv.subject + '\n\n' + mv.body; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () { var b = e.target.closest('[data-cu-copy]'); b.textContent = 'Copied ✓'; setTimeout(function () { b.textContent = 'Copy text'; }, 1600); }, function () { window.prompt('Copy this email:', txt); }); return; }
