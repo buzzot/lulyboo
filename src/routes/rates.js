@@ -64,7 +64,7 @@ module.exports = function rateRoutes(router, { db, config }) {
     res.html(page({
       title: 'Rate history · Logistics', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, req,
       body: html`${SCR.logisticsTabs('rates')}
-        ${missing ? html`<p class="flash warn">Run the rate history SQL in Supabase first (supabase/schema.sql, "Freight rate history").</p>` : ''}
+        ${missing ? html`<p class="flash warn">Run the rate history SQL in Supabase first (supabase/rate-history.sql).</p>` : ''}
         <div class="cp-head"><div><h2 class="sl-title">Rate history</h2><p class="muted">Every priced forwarder quote, kept even after the container is gone. Compared like for like: same lane, same container type; LCL per W/M.</p></div>
           ${rows.length ? html`<a class="btn ghost small" href="${BASE}/export.csv">Export CSV</a>` : ''}</div>
         ${!rows.length ? html`<section class="card"><p class="muted">No quotes yet. When forwarders reply to a request for quotation from Load containers, their prices are kept here.</p></section>` : html`
