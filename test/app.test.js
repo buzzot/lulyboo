@@ -3615,7 +3615,7 @@ test('shipments: shipped containers and courier parcels, stages and flags, detai
   // detail: landed cost per piece, timeline, cost
   const det = (await req(base, 'GET', `/admin/orders/shipments/${c2.id}`, { cookie })).text;
   assert.match(det, /Arrived · customs/); assert.match(det, /Customs entry 9T2-0090981-5/);
-  assert.match(det, /Voyage/); assert.match(det, /Container &amp; booking/); assert.match(det, /Customs record →/); assert.match(det, /SNAL2610035A/);
+  assert.match(det, /Voyage/); assert.match(det, /Container &amp; booking/); assert.match(det, /Record →/); assert.match(det, /SNAL2610035A/);
   assert.doesNotMatch(det, /Landed \/ pc/);
   assert.match(det, /Mark delivered…/);
 
@@ -3733,7 +3733,7 @@ test('shipment detail: pick the forwarder from the list, delete a wrong file', a
   const logo = await db.insert('plan_files', { supplier_id: s.id, name: 'huanger logo.jpg', content_type: 'image/jpeg', kind: 'Loading photos', pos: ['800018'], shipment_id: sc.id, path: 'x' });
   let pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
   assert.match(pg, /Choose forwarder/); assert.match(pg, /name="forwarder" value="Affinity"/);
-  assert.match(pg, /shp-dr ok/); assert.match(pg, /doc\/remove/);
+  assert.match(pg, /dx-chip ok/); assert.match(pg, /doc\/remove/);
   let r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/forwarder`, { cookie, form: { forwarder: 'Affinity' } });
   assert.equal(r.status, 303); assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.forwarder, 'Affinity');
   assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.booking_no, 'YN0013');
@@ -3938,7 +3938,7 @@ test('payments: terms → installments, dates follow the shipment, mark paid, re
   r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/broker`, { cookie, form: { to: 'ops@broker.com', subject: 'Docs', body: 'Hi', doc: String(k), go: 'send' } });
   assert.equal(mails.at(-1).attachments[0].filename, 'PO800018-PI-2026-11-18.pdf');
   r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/doc/remove`, { cookie, form: { src: 'plan', ref: longF.id, i: '', back: 'broker' } });
-  assert.equal(r.status, 303); assert.match(r.location, /#broker$/);
+  assert.equal(r.status, 303); assert.match(r.location, /#docs$/);
   assert.ok(!db.tables.plan_files.some((x) => x.id === longF.id));
 });
 
@@ -4003,7 +4003,7 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   const chk = await D.check(db, c);
   assert.ok(chk.alert); assert.deepEqual(chk.open.map((p) => [p.po, p.missing.join('+')]), [['400001', 'CI'], ['500024', 'CI+PL']]);
   const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
-  assert.match(det, /Shipping documents missing for 2 of 3 POs/); assert.match(det, /Documents by PO/); assert.match(det, /only a proforma invoice/); assert.match(det, /Request from 2 suppliers/);
+  assert.match(det, /2 POs without a commercial invoice or a packing list/); assert.match(det, /id="docs"/); assert.match(det, /dx-chip pi[^>]*>PI only/); assert.match(det, /Request 3 missing…/);
   const list = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
   assert.match(list, /Docs: 2 POs missing CI \/ PL/);
   const r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/request-docs`, { cookie, form: { it: [`${m.id}|400001|CI`, `${y.id}|500024|CI`, `${y.id}|500024|PL`] } });
@@ -4020,6 +4020,17 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   const hm = mails[mails.length - 1];
   assert.match(hm.text, /Packing list for PO 800018/); assert.match(hm.text, /Bill of lading for PO 800018/); assert.match(hm.text, /Certificate of origin/); assert.match(hm.text, /Carton count differs/);
   assert.doesNotMatch(hm.text, /Commercial invoice for PO 800018/);
+  // "CL&PL" next to a packing list counts as CI and PL (combined)
+  assert.equal(D.classify({ name: 'PO900018 CL&PL-Lulyboo.pdf' }), 'CIPL');
+  // + Add file: filed to the PO, chip turns green
+  const fd = new FormData(); fd.append('po', `${y.id}|500024`); fd.append('kind', 'Invoice');
+  fd.append('file', new Blob([Buffer.from('%PDF ci')], { type: 'application/pdf' }), 'CI 500024.pdf');
+  const up = await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' });
+  assert.equal(up.status, 303); assert.match(up.headers.get('location'), /#docs$/);
+  assert.ok(db.tables.plan_files.some((x) => x.name === 'CI 500024.pdf' && x.kind === 'Invoice' && x.pos.includes('500024')));
+  assert.deepEqual((await D.check(db, c)).pos.find((p) => p.po === '500024').missing, ['PL']);
+  const det3 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det3, /data-popcard[^>]*>✓ CI/); assert.match(det3, /id="dx-rm-0"/); assert.match(det3, /id="broker"/);
 });
 
 test('accountant: finance pages only, document checks, bank details, mark paid with slip, owner notified, reports', async (t) => {

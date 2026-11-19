@@ -18,6 +18,8 @@ const isInvoiceKind = (f) => /invoice/i.test(f.kind || '') || isCI(f) || /invoic
 /** 'CI' | 'PI' | 'PL' | 'PIPL' (combined: counts as PL) | null */
 function classify(f) {
   const pl = isPL(f); const pi = isPI(f);
+  // "CL&PL" is a common typo for CI&PL: next to a packing list it counts as the commercial invoice
+  if (pl && !pi && tok('CL').test(f.name || '')) return 'CIPL';
   if (pl && (pi || isCI(f) || /invoice/i.test(f.name || ''))) return isCI(f) && !pi ? 'CIPL' : 'PIPL';
   if (pl) return 'PL';
   if (pi) return 'PI';

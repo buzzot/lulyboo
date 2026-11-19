@@ -2768,6 +2768,7 @@
     hide(); cur = a;
     t = setTimeout(function () {
       if (!card) { card = document.createElement('div'); card.className = 'hp-card'; card.hidden = true; document.body.appendChild(card); }
+      var host = a.closest('dialog[open]') || document.body; if (card.parentNode !== host) host.appendChild(card);
       var url = a.getAttribute('data-hoverprev');
       card.innerHTML = '';
       if (a.getAttribute('data-type') === 'image') { var im = document.createElement('img'); im.src = url; im.alt = ''; card.appendChild(im); }
@@ -2783,4 +2784,17 @@
     if (a && (!e.relatedTarget || !a.contains(e.relatedTarget))) hide();
   });
   document.addEventListener('click', hide); window.addEventListener('scroll', hide, true);
+})();
+
+// A clickable chip whose file can't be previewed: [data-href] downloads it.
+(function () {
+  document.addEventListener('click', function (e) {
+    var x = e.target.closest && e.target.closest('[data-href]'); if (!x || e.defaultPrevented) return;
+    if (e.target.closest('a,button') && e.target.closest('a,button') !== x) return;
+    location.href = x.getAttribute('data-href');
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return; var x = e.target.closest && e.target.closest('.dx-chip[data-popcard]'); if (!x) return;
+    e.preventDefault(); x.click();
+  });
 })();

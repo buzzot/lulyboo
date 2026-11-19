@@ -273,6 +273,83 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const rec = {}; for (const x of ((r.c || r.sc).received || [])) rec[x.line_id] = x;
     const cost = (r.freight || 0) + (r.duty || 0) + (r.drayage || 0);
     const editable = r.stage !== 'delivered';
+    // ── Documents panel: per PO (CI · PL), then whole-container documents; hover a chip for the files ──
+    const PD = require('../podocs');
+    const rmForms = [];
+    const rmId = (rm) => { rmForms.push(rm); return `dx-rm-${rmForms.length - 1}`; };
+    const who = (x) => [/^Email from/.test(x.uploaded_by || '') ? 'by email' : x.uploaded_by ? `added by ${x.uploaded_by}` : '', sh(x.created_at)].filter(Boolean).join(' · ');
+    const pfx = (x) => ({ ...fl(x.name, `/admin/logistics/planning/files/${x.id}`, x.content_type, null, { src: 'plan', ref: x.id }), meta: who(x) });
+    const fileCard = (list) => html`${list.map((x) => { const see = canSee(x.type); const u = `${x.url}?inline=1`;
+      return html`<div class="dx-pf" data-armbox><div class="dx-pn"><b title="${x.name}">${x.name}</b>${x.meta ? html`<small>${x.meta}</small>` : ''}</div>
+        <div class="dx-pa">${see ? html`<a href="${u}" data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}">Open</a>` : ''}<a href="${x.dl}" download>Download</a>${x.rm && editable ? html`<button type="button" class="bd-del" data-arm aria-label="${`Delete ${x.name}`}" title="Delete this file">Delete</button><button class="bd-yes" form="${rmId(x.rm)}">✓ Delete</button>` : ''}</div></div>`; })}`;
+    const chip = (cls, label, list = [], tip = '') => {
+      if (!list.length) return html`<span class="dx-chip ${cls}" title="${tip}">${label}</span>`;
+      const x = list[0]; const see = canSee(x.type); const u = `${x.url}?inline=1`;
+      return html`<span class="dx-chip ${cls}" tabindex="0" role="button" data-popcard ${see ? raw(`data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}"`) : raw(`data-href="${x.dl}"`)}>${label}${list.length > 1 ? html` <em>${list.length}</em>` : ''}<span class="or-pc-card dx-card">${fileCard(list)}</span></span>`;
+    };
+    const nextFu = {};
+    for (const p of r.pd?.pos || []) if (p.sc && p.missing.length) { try { const fr = await db.get('ship_confirmations', p.sc.id); const { sailing: sl } = await SD.factsOf(db, fr); nextFu[`${p.sid}|${p.po}`] = SD.nextFollowup(fr, SD.checklistOf(fr, await SD.filesOf(db, fr), sl, SD.chinaNow().day)); } catch { /* no follow-up shown */ } }
+    const poRows = (r.pd?.pos || []).map((p, pi) => {
+      const ciIds = new Set(p.ci.map((x) => x.id)); const comb = p.pl.some((x) => ciIds.has(x.id));
+      const gone = r.pd.shipped ? ['miss', 'Missing'] : ['soft', 'Not yet'];
+      const ci = p.ci.length ? chip('ok', html`✓ CI${comb ? html`<span class="s"> · combined</span>` : ''}`, p.ci.map(pfx)) : p.pi.length ? chip('pi', 'PI only', p.pi.map(pfx)) : chip(gone[0], gone[1], [], r.pd.shipped ? 'Shipped without a commercial invoice for this PO' : 'Expected when the goods ship');
+      const pl = p.pl.length ? chip('ok', html`✓ PL${comb ? html`<span class="s"> · combined</span>` : ''}`, p.pl.map(pfx)) : chip(gone[0], gone[1]);
+      const nx = nextFu[`${p.sid}|${p.po}`];
+      return { ok: (p.ci.length ? 1 : 0) + (p.pl.length ? 1 : 0), html: html`<tr><td class="dx-po"><b>${p.po}</b><small title="${p.supplier}">${p.supplier}</small></td><td>${ci}</td><td>${pl}</td>
+        <td class="dx-ask">${p.asked ? html`<b>${sh(p.asked)}</b>${nx && p.missing.length ? html`<small>next ${sh(nx)}</small>` : ''}` : html`<span class="sub">—</span>`}</td>
+        <td class="dx-act">${p.missing.length ? html`<button type="button" class="link small" data-open-dialog="${`pd-po-${pi}`}">Request</button>` : html`<button type="button" class="dx-ok" data-open-dialog="${`pd-po-${pi}`}" title="Both documents in — click to ask for something else">✓</button>`}</td></tr>` };
+    });
+    const conRows = docs.map((d) => {
+      const ok = d.files.length > 0 || !!d.okIf;
+      const files = d.files.map((x) => ({ ...x, meta: '' }));
+      const c = files.length ? chip('ok', html`✓ ${files.length === 1 ? 'on file' : `${files.length} files`}`, files) : ok ? chip('ok', '✓ recorded', [], d.note || '') : d.optional ? chip('soft', 'optional') : chip('soft', 'Not yet');
+      return { ok, optional: !!d.optional || (!ok && /delivery receipt/i.test(d.l) && r.stage !== 'delivered'), html: html`<tr><td class="dx-po"><b>${d.l}</b>${d.note ? html`<small class="cu-mono">${d.note}</small>` : ''}</td><td colspan="3">${c}</td>
+        <td class="dx-act">${d.customs && r.entries.length ? html`<a class="link small" href="/admin/logistics/customs?review=${r.entries[0].id}" title="${`Entry ${r.entries[0].entry_no || ''} · duty ${usd(r.entries[0].duty, 2)} + fees ${usd(r.entries[0].fees, 2)}`}">Record →</a>` : ''}</td></tr>` };
+    });
+    const nItems = poRows.length * 2 + conRows.filter((x) => !x.optional).length;
+    const nReady = poRows.reduce((a, x) => a + x.ok, 0) + conRows.filter((x) => !x.optional && x.ok).length;
+    const nMiss = (r.pd?.open || []).reduce((a, p) => a + p.missing.length, 0);
+    const bEta = day(f.eta); const bSent = r.c?.broker_docs_sent_at; const bDue = bEta ? PL.addDays(bEta, -5) : null;
+    const addPos = [...new Map(r.lines.map((l) => [`${l.supplier_id}|${PL.normPo(l.po)}`, l])).values()];
+    const docsPanel = html`<section class="dx" id="docs">
+      <div class="dx-hd"><h3>Documents</h3><span class="dx-prog" title="${`${nReady} of ${nItems} required documents in`}"><span class="dx-bar"><i class="${nReady >= nItems ? 'full' : ''}" style="width:${nItems ? Math.round((nReady / nItems) * 100) : 0}%"></i></span>${nReady} of ${nItems}</span>
+        <span class="dx-btns">${r.c && r.kind !== 'courier' ? html`<button type="button" class="btn ghost small" data-open-dialog="broker">${bSent ? 'Broker ✓' : 'Send to broker…'}</button>` : ''}${nMiss ? html`<button type="button" class="btn small" data-open-dialog="pd-req">Request ${nMiss} missing…</button>` : ''}</span></div>
+      ${r.pd?.alert ? html`<p class="dx-al"><b>Shipped${f.atd ? ` ${sh(f.atd)}` : ''}</b> — ${r.pd.open.length} PO${r.pd.open.length === 1 ? '' : 's'} without ${[...new Set(r.pd.open.flatMap((p) => p.missing))].map((k) => (k === 'CI' ? 'a commercial invoice' : 'a packing list')).join(' or ')}.${bDue && !bSent ? html` The broker needs them by <b>${sh(bDue)}</b>.` : ''}</p>`
+        : r.c && r.kind !== 'courier' && bEta ? html`<p class="dx-st">${bSent ? html`Sent to the broker ${sh(bSent)}` : html`Broker documents due <b>${sh(bDue)}</b> (ETA ${sh(bEta)} − 5 days)`}</p>` : ''}
+      <table class="dx-t">${poRows.length ? html`<thead><tr><th>PO</th><th>Invoice</th><th>Packing list</th><th>Asked</th><th></th></tr></thead>` : ''}
+        <tbody>${poRows.map((x) => x.html)}
+        ${poRows.length ? html`<tr class="dx-grp"><td colspan="5">Whole ${r.kind === 'courier' ? 'shipment' : r.kind === 'lcl' ? 'shipment' : 'container'}</td></tr>` : ''}
+        ${conRows.map((x) => x.html)}</tbody></table>
+      <div class="dx-ft"><span class="sub">Hover a document to see its files · click to open</span>${addPos.length && editable ? html`<button type="button" class="link small" data-open-dialog="dx-add">+ Add file</button>` : ''}</div>
+      ${rmForms.map((rm, i) => html`<form id="${`dx-rm-${i}`}" method="post" action="${BASE}/${r.id}/doc/remove" hidden><input type="hidden" name="src" value="${rm.src}"><input type="hidden" name="ref" value="${rm.ref}"><input type="hidden" name="i" value="${rm.i ?? ''}"><input type="hidden" name="back" value="docs"></form>`)}
+    </section>`;
+    const addDlg = addPos.length && editable ? html`<dialog id="dx-add" class="rp-modal pd-dlg" aria-labelledby="dx-add-t"><form method="post" action="${BASE}/${r.id}/upload" enctype="multipart/form-data" data-busy>
+      <div class="rp-top"><h2 id="dx-add-t">Add a document</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+      <p class="sub">A file you got another way — WeChat, the forwarder, a download. It's filed to the PO and ticks it off.</p>
+      <div class="dx-addg"><label>PO<select name="po" required>${addPos.map((l) => html`<option value="${`${l.supplier_id}|${l.po}`}">${PL.normPo(l.po)} · ${(r.pd?.pos || []).find((p) => p.sid === l.supplier_id)?.supplier || ''}</option>`)}</select></label>
+        <label>Document<select name="kind"><option value="">Detect from the name</option>${['Invoice', 'Packing list', 'Bill of lading', 'Warehouse receipt', 'Loading photos', 'Other'].map((k) => html`<option>${k}</option>`)}</select></label></div>
+      <label class="dx-file">File<input type="file" name="file" multiple required></label>
+      <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Add</button></div></form></dialog>` : '';
+    const brokerDlg = r.c && r.kind !== 'courier' ? await (async () => {
+                const PM = require('../payments');
+                const bd = await PM.brokerDocs(db, r.c); const to = await PM.brokerEmail(db);
+                const sent = r.c.broker_docs_sent_at; const eta = day(f.eta);
+                const name = `${r.title}${f.container_no ? ` (${f.container_no})` : ''}`;
+                const body = [`Hello,`, '', `Please find attached the documents for our shipment ${name}${f.hbl_no ? `, house B/L ${f.hbl_no}` : ''}${f.mbl_no ? `, master B/L ${f.mbl_no}` : ''}${eta ? `, ETA ${eta}` : ''}${f.pod ? ` at ${f.pod}` : ''}.`, '', `POs: ${[...new Set(r.lines.map((l) => l.po))].join(', ')}`, '', 'Please let us know if anything else is needed for the customs entry.', '', 'Thank you,', 'Lulyboo'].join('\n');
+                return html`<dialog id="broker" class="rp-modal bd-dlg" aria-labelledby="bd-t"><div class="bd-in">
+                  <div class="rp-top"><h2 id="bd-t">Docs to the customs broker</h2>${sent ? html`<span class="shp-f grn">sent ${sh(sent)}</span>` : eta ? html`<span class="shp-f ${daysBetween(today, eta) <= 5 ? 'amb' : 'gry'}">send by ${sh(PL.addDays(eta, -5))}</span>` : ''}<button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+                  <form method="post" action="${BASE}/${r.id}/broker" class="shp-brk-f">
+                    <label>To <input type="email" name="to" value="${to}" required placeholder="broker@…"></label>
+                    <label>Subject <input name="subject" value="${`Customs documents · ${name}${eta ? ` · ETA ${sh(eta)}` : ''}`}"></label>
+                    <div class="shp-brk-docs" data-hp-host>${bd.length ? bd.map((x, i) => { const see = canSee(x.type); const u = `${x.url}?inline=1`;
+                      return html`<div class="bd-r ${x.pi || x.away ? 'pi' : ''}" data-armbox><label class="bd-l"><input type="checkbox" name="doc" value="${i}" ${x.pi || x.away ? '' : raw('checked')}><span class="bd-po ${x.away ? 'away' : ''}" title="${x.away ? `PO ${x.po} is not in this container's plan — not sent unless you tick it` : x.po ? '' : 'No PO on this file (e.g. a forwarder document for the whole container)'}">${x.po ? `PO ${x.po}` : 'All POs'}</span><span class="bd-k" title="${x.pi ? 'Proforma — not sent by default' : ''}">${x.kind}</span></label>
+                        ${see ? html`<a class="bd-f" href="${u}" data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.url}" data-gallery="${`bd-${r.id}`}" data-hoverprev="${u}" title="${x.nice !== x.name ? `${x.name} — click to preview` : 'Click to preview'}">${x.nice}</a>` : html`<a class="bd-f" href="${x.url}" title="${`${x.name} — download (no preview for this file type)`}">${x.nice}</a>`}
+                        <span class="bd-x"><button type="button" class="bd-del" data-arm aria-label="${`Delete ${x.name}`}" title="Delete this file">×</button><button class="bd-yes" form="${`bd-rm-${i}`}" title="${`Delete ${x.name} from the portal`}">✓ Delete</button></span></div>`; }) : html`<span class="sub">No CI / PL / B/L files yet.</span>`}</div>
+                    <label>Message <textarea name="body" rows="7">${body}</textarea></label>
+                    <div class="shp-brk-a"><button class="btn small" name="go" value="send">Send email</button><button class="link small" name="go" value="mark">Already sent — mark it</button></div></form>
+                  ${bd.map((x, i) => html`<form id="${`bd-rm-${i}`}" method="post" action="${BASE}/${r.id}/doc/remove" hidden><input type="hidden" name="src" value="${x.src}"><input type="hidden" name="ref" value="${x.ref}"><input type="hidden" name="i" value="${x.i ?? ''}"><input type="hidden" name="back" value="broker"></form>`)}</div></dialog>`;
+    })() : '';
+
     res.html(page({
       title: r.title, nav: adminNav('shipments'), flash: takeFlash(req, res), wide: true, req,
       body: html`<p class="crumbs"><a href="${BASE}">Shipments</a></p>
@@ -286,9 +363,6 @@ module.exports = function shipmentRoutes(router, { db, config }) {
           <p class="sub">${r.sub}</p>
           <div class="shp-steps">${steps.map(([k, l], i) => html`<div class="shp-s ${done(k) ? 'done' : i === cur ? 'now' : ''}"><b>${l}</b><small>${sDate[k] || ''}</small></div>`)}</div>
           ${r.flags.length ? html`<div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}</div>` : ''}
-          ${r.pd?.alert ? html`<div class="pd-al"><span class="pd-al-i">⚠️</span><div class="pd-al-t"><b>Shipping documents missing for ${r.pd.open.length} of ${r.pd.pos.length} PO${r.pd.pos.length === 1 ? '' : 's'}</b> — the goods have shipped, and the broker needs a commercial invoice and packing list for every PO${f.eta ? ` before arrival (ETA ${sh(f.ata || f.eta)})` : ''}.
-            <ul>${r.pd.open.map((p) => html`<li><b>${p.po}</b> · ${p.supplier} — <b>${p.missing.map((k) => k).join(' and ')}</b> missing${p.pi.length && p.missing.includes('CI') ? ' (only a proforma invoice)' : ''}${p.asked ? html` <span class="sub">· asked ${sh(p.asked)}</span>` : ''}</li>`)}</ul></div>
-            <button type="button" class="btn small" data-open-dialog="pd-req">✉ Request from ${r.pd.suppliers.length} supplier${r.pd.suppliers.length === 1 ? '' : 's'}…</button></div>` : ''}
           <div class="shp-two">
             <div>
               ${r.kind === 'courier' ? html`<h3>Parcel</h3><div class="shp-facts">${fact('Courier', r.forwarder)}${fact('Tracking no.', r.sub.split(' · ')[1] || '')}${fact('Picked up', sh(r.from))}${fact('Cartons · m³', [tot('cartons') ? `${int(tot('cartons'))} ctns` : '', tot('cbm') ? `${n2(tot('cbm'))} m³` : ''].filter(Boolean).join(' · '))}</div>`
@@ -326,46 +400,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
               ${ev.length ? html`<ul class="shp-tl">${ev.map(([d, i, t, s]) => html`<li><span class="sub">${sh(d)}</span><span>${i}</span><span><b>${t}</b>${s ? html` — ${s}` : ''}</span></li>`)}</ul>` : html`<p class="sub">Nothing yet.</p>`}
             </div>
             <div>
-              ${r.pd ? html`<h3>Documents by PO <span class="sub">each PO needs its own CI and PL</span></h3>
-              <div class="pd-t">${r.pd.pos.map((p, pi) => { const cell = (list, k) => (list.length ? list.map((x) => fileA(pf2(x))) : html`<span class="pd-miss ${r.pd.shipped ? '' : 'soft'}">${r.pd.shipped ? 'missing' : 'not yet'}</span>`); return html`<div class="pd-r ${p.missing.length ? '' : 'ok'}">
-                <div class="pd-po"><b>${p.po}</b><span class="sub">${p.supplier}</span></div>
-                <div class="pd-c"><span class="pd-k">CI</span>${cell(p.ci, 'CI')}${p.pi.length && !p.ci.length ? p.pi.map((x) => html`<span class="pd-pi" title="Proforma invoice — not accepted as a commercial invoice">PI · ${fileA(pf2(x))}</span>`) : ''}</div>
-                <div class="pd-c"><span class="pd-k">PL</span>${cell(p.pl, 'PL')}</div>
-                <div class="pd-a">${p.missing.length ? html`<button type="button" class="link small" data-open-dialog="${`pd-po-${pi}`}">${p.asked ? 'Request again' : 'Request'}</button>${p.asked ? html`<span class="sub">asked ${sh(p.asked)}</span>` : ''}` : html`<span class="pd-ok">✓</span><button type="button" class="link small pd-ask" data-open-dialog="${`pd-po-${pi}`}">Ask</button>`}</div></div>`; })}</div>
-              ${r.pd.pos.map((p, pi) => { const PD = require('../podocs'); const have = { CI: p.ci, PL: p.pl }; return html`<dialog id="${`pd-po-${pi}`}" class="rp-modal pd-dlg" aria-labelledby="${`pd-po-t-${pi}`}"><form method="post" action="${BASE}/${r.id}/request-docs">
-                <input type="hidden" name="one" value="${`${p.sid}|${p.po}`}">
-                <div class="rp-top"><h2 id="${`pd-po-t-${pi}`}">Request documents · PO ${p.po}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
-                <p class="sub">${p.supplier}${p.email ? ` · ${p.email}` : ''} — one email in English through this PO's shipping-document request; the reply is read by AI and filed to PO ${p.po}.</p>
-                <div class="pd-pick">${PD.KINDS.map(([k, l]) => { const files = have[k] || []; const miss = p.missing.includes(k);
-                  return html`<label class="pd-opt"><input type="checkbox" name="it" value="${`${p.sid}|${p.po}|${k}`}" ${miss ? raw('checked') : ''}><span><b>${l}</b>${k === 'CI' && p.pi.length && !files.length ? html` <span class="sub">— final invoice, not the PI</span>` : ''}</span>
-                    <span class="pd-st ${miss ? 'miss' : files.length ? 'ok' : ''}">${miss ? (r.pd.shipped ? 'missing' : 'not yet') : files.length ? `have ${files.length === 1 ? 'it' : files.length}` : ''}</span></label>`; })}
-                  <label class="pd-opt pd-oth"><span>Other</span><input name="other" placeholder="e.g. Certificate of origin, corrected invoice…" maxlength="300"></label></div>
-                <label class="pd-note"><span>Note to the supplier <span class="sub">(optional, added to the email)</span></span><textarea name="note" rows="2" maxlength="1000" placeholder="e.g. The packing list shows 335 cartons but the B/L says 330 — please check."></textarea></label>
-                <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send request</button></div></form></dialog>`; })}
-              <h3>Shipment documents</h3>` : html`<h3>Documents</h3>`}
-              <div class="shp-docs3">${docs.map((d) => { const ok = d.files.length > 0 || !!d.okIf; return html`<div class="shp-dr ${ok ? 'ok' : ''}">
-                <span class="shp-dr-i">${ok ? '✓' : ''}</span><span class="shp-dr-l">${d.l}</span>
-                <span class="shp-dr-f">${d.files.length ? d.files.map((x) => html`<span class="shp-dr-x">${fileA(x, d.gallery ? `g-${r.id}` : null)}${x.rm ? html`<form method="post" action="${BASE}/${r.id}/doc/remove" class="inline" data-confirm="${`Delete ${x.name}? It's removed from the portal.`}"><input type="hidden" name="src" value="${x.rm.src}"><input type="hidden" name="ref" value="${x.rm.ref}"><input type="hidden" name="i" value="${x.rm.i ?? ''}"><button class="shp-dr-rm" title="Delete this file" aria-label="${`Delete ${x.name}`}">×</button></form>` : ''}</span>`) : html`<span class="sub">${ok ? (d.note || 'no file') : d.optional ? 'optional' : 'waiting'}</span>`}${d.files.length && d.note ? html`<span class="sub cu-mono">${d.note}</span>` : ''}</span>
-              </div>${d.customs ? r.entries.map((e) => html`<a class="shp-cu" href="/admin/logistics/customs?review=${e.id}"><span><b class="cu-mono">${e.entry_no || 'Entry'}</b> · ${sh(e.entry_date || e.created_at)}${e.status === 'pending' ? html` <span class="shp-f amb">to review</span>` : ''} · duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}</span><span class="shp-cu-go">Customs record →</span></a>`) : ''}`; })}</div>
-              ${r.c && r.kind !== 'courier' ? await (async () => {
-                const PM = require('../payments');
-                const bd = await PM.brokerDocs(db, r.c); const to = await PM.brokerEmail(db);
-                const sent = r.c.broker_docs_sent_at; const eta = day(f.eta);
-                const name = `${r.title}${f.container_no ? ` (${f.container_no})` : ''}`;
-                const body = [`Hello,`, '', `Please find attached the documents for our shipment ${name}${f.hbl_no ? `, house B/L ${f.hbl_no}` : ''}${f.mbl_no ? `, master B/L ${f.mbl_no}` : ''}${eta ? `, ETA ${eta}` : ''}${f.pod ? ` at ${f.pod}` : ''}.`, '', `POs: ${[...new Set(r.lines.map((l) => l.po))].join(', ')}`, '', 'Please let us know if anything else is needed for the customs entry.', '', 'Thank you,', 'Lulyboo'].join('\n');
-                return html`<div class="shp-brk ${sent ? 'ok' : ''}" id="broker"><div class="shp-brk-h"><b>Docs to the customs broker</b>${sent ? html`<span class="shp-f grn">sent ${sh(sent)}</span>` : eta ? html`<span class="shp-f ${daysBetween(today, eta) <= 5 ? 'amb' : 'gry'}">send by ${sh(PL.addDays(eta, -5))}</span>` : ''}</div>
-                  <details ${sent ? '' : raw('open')}><summary class="sub">${sent ? 'Send again' : 'Email the broker'}</summary>
-                  <form method="post" action="${BASE}/${r.id}/broker" class="shp-brk-f">
-                    <label>To <input type="email" name="to" value="${to}" required placeholder="broker@…"></label>
-                    <label>Subject <input name="subject" value="${`Customs documents · ${name}${eta ? ` · ETA ${sh(eta)}` : ''}`}"></label>
-                    <div class="shp-brk-docs" data-hp-host>${bd.length ? bd.map((x, i) => { const see = canSee(x.type); const u = `${x.url}?inline=1`;
-                      return html`<div class="bd-r ${x.pi || x.away ? 'pi' : ''}" data-armbox><label class="bd-l"><input type="checkbox" name="doc" value="${i}" ${x.pi || x.away ? '' : raw('checked')}><span class="bd-po ${x.away ? 'away' : ''}" title="${x.away ? `PO ${x.po} is not in this container's plan — not sent unless you tick it` : x.po ? '' : 'No PO on this file (e.g. a forwarder document for the whole container)'}">${x.po ? `PO ${x.po}` : 'All POs'}</span><span class="bd-k" title="${x.pi ? 'Proforma — not sent by default' : ''}">${x.kind}</span></label>
-                        ${see ? html`<a class="bd-f" href="${u}" data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.url}" data-gallery="${`bd-${r.id}`}" data-hoverprev="${u}" title="${x.nice !== x.name ? `${x.name} — click to preview` : 'Click to preview'}">${x.nice}</a>` : html`<a class="bd-f" href="${x.url}" title="${`${x.name} — download (no preview for this file type)`}">${x.nice}</a>`}
-                        <span class="bd-x"><button type="button" class="bd-del" data-arm aria-label="${`Delete ${x.name}`}" title="Delete this file">×</button><button class="bd-yes" form="${`bd-rm-${i}`}" title="${`Delete ${x.name} from the portal`}">✓ Delete</button></span></div>`; }) : html`<span class="sub">No CI / PL / B/L files yet.</span>`}</div>
-                    <label>Message <textarea name="body" rows="7">${body}</textarea></label>
-                    <div class="shp-brk-a"><button class="btn small" name="go" value="send">Send email</button><button class="link small" name="go" value="mark">Already sent — mark it</button></div></form>
-                  ${bd.map((x, i) => html`<form id="${`bd-rm-${i}`}" method="post" action="${BASE}/${r.id}/doc/remove" hidden><input type="hidden" name="src" value="${x.src}"><input type="hidden" name="ref" value="${x.ref}"><input type="hidden" name="i" value="${x.i ?? ''}"><input type="hidden" name="back" value="broker"></form>`)}</details></div>`;
-              })() : ''}
+              ${docsPanel}
               <details class="shp-cost-d"><summary><b>Cost</b> <span class="sub">${cost ? usd(cost, 2) : 'nothing yet'}</span></summary>
               <table class="shp-ct"><tbody>
                 <tr><td>Freight${r.forwarder ? ` (${r.forwarder})` : ''}</td><td class="r">${r.freight ? usd(r.freight, 2) : html`<span class="sub">—</span>`}</td></tr>
@@ -377,7 +412,18 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             </div>
           </div>
         </section>
-        ${r.pd?.alert ? html`<dialog id="pd-req" class="rp-modal pd-dlg" aria-labelledby="pd-t"><form method="post" action="${BASE}/${r.id}/request-docs">
+        ${r.pd.pos.map((p, pi) => { const PD = require('../podocs'); const have = { CI: p.ci, PL: p.pl }; return html`<dialog id="${`pd-po-${pi}`}" class="rp-modal pd-dlg" aria-labelledby="${`pd-po-t-${pi}`}"><form method="post" action="${BASE}/${r.id}/request-docs">
+                <input type="hidden" name="one" value="${`${p.sid}|${p.po}`}">
+                <div class="rp-top"><h2 id="${`pd-po-t-${pi}`}">Request documents · PO ${p.po}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+                <p class="sub">${p.supplier}${p.email ? ` · ${p.email}` : ''} — one email in English through this PO's shipping-document request; the reply is read by AI and filed to PO ${p.po}.</p>
+                <div class="pd-pick">${PD.KINDS.map(([k, l]) => { const files = have[k] || []; const miss = p.missing.includes(k);
+                  return html`<label class="pd-opt"><input type="checkbox" name="it" value="${`${p.sid}|${p.po}|${k}`}" ${miss ? raw('checked') : ''}><span><b>${l}</b>${k === 'CI' && p.pi.length && !files.length ? html` <span class="sub">— final invoice, not the PI</span>` : ''}</span>
+                    <span class="pd-st ${miss ? 'miss' : files.length ? 'ok' : ''}">${miss ? (r.pd.shipped ? 'missing' : 'not yet') : files.length ? `have ${files.length === 1 ? 'it' : files.length}` : ''}</span></label>`; })}
+                  <label class="pd-opt pd-oth"><span>Other</span><input name="other" placeholder="e.g. Certificate of origin, corrected invoice…" maxlength="300"></label></div>
+                <label class="pd-note"><span>Note to the supplier <span class="sub">(optional, added to the email)</span></span><textarea name="note" rows="2" maxlength="1000" placeholder="e.g. The packing list shows 335 cartons but the B/L says 330 — please check."></textarea></label>
+                <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send request</button></div></form></dialog>`; })}
+        ${brokerDlg}${addDlg}
+        ${r.pd?.open.length ? html`<dialog id="pd-req" class="rp-modal pd-dlg" aria-labelledby="pd-t"><form method="post" action="${BASE}/${r.id}/request-docs">
           <div class="rp-top"><h2 id="pd-t">Request missing documents</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
           <p class="sub">One email per supplier, in English, sent from the portal through that PO's shipping-document request. Their reply is read by AI and filed to the right PO.</p>
           ${[...new Set(r.pd.open.map((p) => p.sid))].map((sid) => { const ps = r.pd.open.filter((p) => p.sid === sid); return html`<div class="pd-sup"><div class="pd-sup-h"><b>${ps[0].supplier}</b><span class="sub">${ps[0].email || 'email from the PO request'}</span></div>
@@ -445,7 +491,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       await db.docs.remove([f.path]).catch(() => null);
       await db.update(table, { id }, { delivery_files: list.filter((_, k) => k !== i), updated_at: now() }); name = f.name;
     } else throw new HttpError(400, 'This file can\'t be deleted here');
-    flash(res, 'ok', `Deleted ${name}`); res.redirect(`${BASE}/${r.id}${x.back === 'broker' ? '#broker' : ''}`);
+    flash(res, 'ok', `Deleted ${name}`); res.redirect(`${BASE}/${r.id}${x.back ? '#docs' : ''}`);
   }));
 
   router.post(`${BASE}/:id/delivered`, G(async (req, res) => {
@@ -474,6 +520,30 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     for (const l of r.lines) await db.update('plan_orders', { id: l.id }, { received_at: null, updated_at: now() }).catch(() => null);
     flash(res, 'ok', 'Reopened.'); res.redirect(`${BASE}/${r.id}`);
   }));
+  // a document received another way (WeChat, forwarder, download) → filed to the PO and, through its request, ticked off
+  router.post(`${BASE}/:id/upload`, G(async (req, res) => {
+    const { r } = await one(req.params.id); const { fields: f, files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    const [sid, po] = String(f.po || '').split('|');
+    if (!r.lines.some((l) => l.supplier_id === sid && PL.normPo(l.po) === PL.normPo(po))) throw new HttpError(400, 'Choose a PO of this shipment');
+    const ups = Object.values(files || {}).flat().filter((x) => x.buffer?.length);
+    if (!ups.length) throw new HttpError(400, 'Choose a file');
+    const sc = r.scs.find((s) => s.supplier_id === sid && (s.pos || []).some((p) => PL.normPo(p) === PL.normPo(po))) || null;
+    const kinds = ['Invoice', 'Packing list', 'Bill of lading', 'Warehouse receipt', 'Loading photos', 'Other'];
+    let n = 0;
+    for (const u of ups) {
+      const kind = kinds.includes(f.kind) ? f.kind : SD.kindOf(u.name, u.type);
+      const out = await PL.storeFiles(db, sid, [u], { pos: [po], kind, by: by(req), shipmentId: sc?.id || null });
+      n += out.saved?.length ?? 1;
+    }
+    if (sc) {
+      const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
+      const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
+      await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Added ${ups.map((u) => u.name).join(', ')} (${by(req)})` }].slice(-60), updated_at: now() }).catch(() => null);
+    }
+    flash(res, 'ok', `Added ${ups.length} file${ups.length === 1 ? '' : 's'} to PO ${PL.normPo(po)}`);
+    res.redirect(`${BASE}/${r.id}#docs`);
+  }));
+
   router.post(`${BASE}/:id/request-docs`, G(async (req, res) => {
     const { r } = await one(req.params.id); const { fields: f } = await parseForm(req);
     if (!r.c) throw new HttpError(400, 'Only for containers and LCL shipments');
@@ -489,7 +559,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
   router.post(`${BASE}/:id/broker`, G(async (req, res) => {
     const { r } = await one(req.params.id); const { fields: f } = await parseForm(req);
     if (!r.c) throw new HttpError(400, 'Only for containers and LCL shipments');
-    if (f.go === 'mark') { await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() }); flash(res, 'ok', 'Marked as sent to the broker'); return res.redirect(`${BASE}/${r.id}#broker`); }
+    if (f.go === 'mark') { await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() }); flash(res, 'ok', 'Marked as sent to the broker'); return res.redirect(`${BASE}/${r.id}#docs`); }
     const to = String(f.to || '').trim(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new HttpError(400, 'Enter the broker\'s email');
     const PM = require('../payments'); const docs = await PM.brokerDocs(db, r.c);
     const pick = [].concat(f.doc || []).map(Number).filter((i) => docs[i]);
@@ -499,7 +569,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     await sendEmail(config, { to, subject: String(f.subject || 'Customs documents').slice(0, 200), text: String(f.body || '').slice(0, 10000), attachments });
     await db.update('plan_containers', { id: r.c.id }, { broker_docs_sent_at: now() });
     const st = (await db.list('settings', { limit: 1 }).catch(() => []))[0]; if (st && !st.broker_email) await db.update('settings', { id: st.id ?? 1 }, { broker_email: to }).catch(() => null);
-    flash(res, 'ok', `Sent to ${to} with ${attachments.length} file${attachments.length === 1 ? '' : 's'}`); res.redirect(`${BASE}/${r.id}#broker`);
+    flash(res, 'ok', `Sent to ${to} with ${attachments.length} file${attachments.length === 1 ? '' : 's'}`); res.redirect(`${BASE}/${r.id}#docs`);
   }));
 
   router.post(`${BASE}/:id/cost`, G(async (req, res) => {
