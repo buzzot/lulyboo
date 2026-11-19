@@ -3604,7 +3604,7 @@ test('shipments: shipped containers and courier parcels, stages and flags, detai
   let pg = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
   assert.match(pg, /At port \/ customs/); assert.match(pg, /On the water/); assert.match(pg, /Courier/);
   assert.match(pg, /· 20′ GP · Yantian → LA/); assert.match(pg, /YN0012/);
-  assert.match(pg, /ETA \+3 days/); assert.match(pg, /Docs: Bill of lading \(500024\) missing/); assert.match(pg, /Arrives in 5 days/);
+  assert.match(pg, /ETA \+3 days/); assert.match(pg, />Missing: CI · PL · BL</); assert.match(pg, /BL: PO 500024/); assert.match(pg, /Arrives in 5 days/);
   assert.match(pg, /Free time over/); assert.match(pg, /7501 ✓ duty \$3,234/);
   assert.match(pg, /Courier · Shenzhen Kean/); assert.match(pg, /DHL · 4482119022/);
   assert.doesNotMatch(pg, /Container 3/);
@@ -4005,7 +4005,7 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   const det = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
   assert.match(det, /2 POs without a commercial invoice or a packing list/); assert.match(det, /id="docs"/); assert.match(det, /dx-chip pi[^>]*>PI only/); assert.match(det, /Request 3 missing…/);
   const list = (await req(base, 'GET', '/admin/orders/shipments', { cookie })).text;
-  assert.match(list, /Docs: 2 POs missing CI \/ PL/);
+  assert.match(list, /Missing: CI ×2 · PL</);
   const r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/request-docs`, { cookie, form: { it: [`${m.id}|400001|CI`, `${y.id}|500024|CI`, `${y.id}|500024|PL`] } });
   assert.equal(r.status, 303);
   assert.equal(mails.length, 2);

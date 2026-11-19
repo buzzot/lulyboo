@@ -3060,3 +3060,5 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .bd-dlg .rp-top{display:flex;align-items:center;gap:10px;padding:16px 0 4px}.bd-dlg .rp-top h2{margin:0;flex:1}
 .dx-addg{display:grid;grid-template-columns:1fr 1fr;gap:10px}.dx-addg label,.dx-file{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600}
 .dx-drop .mdrop-box{min-height:96px}
+.shp-row .shp-t>b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;vertical-align:bottom}.shp-row .shp-t{min-width:0}
+.cp-table .cp-po{white-space:nowrap;min-width:90px}.cp-table .cp-rd{white-space:nowrap;min-width:70px}.cp-table .cp-pr{min-width:260px}

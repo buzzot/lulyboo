@@ -64,9 +64,13 @@ async function load(db) {
     const flags = [];
     if (stage !== 'delivered') {
       if (f.eta_prev && f.eta && f.eta > f.eta_prev && stage === 'sailed') flags.push(['amb', `ETA +${daysBetween(f.eta_prev, f.eta)} days`]);
-      if (pd.alert) flags.push(['red', `Docs: ${pd.open.length} PO${pd.open.length === 1 ? '' : 's'} missing ${[...new Set(pd.open.flatMap((p) => p.missing))].join(' / ')}`]);
-      if (other.length) flags.push(['amb', `Docs: ${[...new Set(other.map((m) => `${m.kind}${m.po ? ` (${m.po})` : ''}`))].slice(0, 2).join(', ')} missing`]);
-      else if (!pd.alert && (docsOk || (pd.pos.length && !pd.open.length))) flags.push(['grn', 'Docs ✓']);
+      // one compact documents flag: "Missing: CI ×2 · BL ×2" — which POs in the tooltip
+      const SHORTK = { 'Bill of lading': 'BL', 'Warehouse receipt': 'WR', 'Loading photos': 'Photos' };
+      const miss = new Map(); const addM = (k, po) => { if (!miss.has(k)) miss.set(k, new Set()); miss.get(k).add(PL.normPo(po) || '—'); };
+      if (pd.alert) for (const p of pd.open) for (const k of p.missing) addM(k, p.po);
+      for (const m of other) addM(SHORTK[m.kind] || m.kind, m.po);
+      if (miss.size) flags.push([pd.alert ? 'red' : 'amb', `Missing: ${[...miss].map(([k, ps]) => `${k}${ps.size > 1 ? ` ×${ps.size}` : ''}`).join(' · ')}`, [...miss].map(([k, ps]) => `${k}: PO ${[...ps].join(', ')}`).join('\n')]);
+      else if (docsOk || (pd.pos.length && !pd.open.length)) flags.push(['grn', 'Docs ✓']);
       if ((stage === 'arrived') && !ce.length) flags.push(['red', 'No customs entry yet']);
       if (ce.length) { const e = ce[0]; flags.push(e.status === 'saved' ? ['grn', `7501 ✓ duty ${usd(e.duty)}`] : ['amb', '7501 to review']); }
       if (lfd && (stage === 'arrived' || stage === 'customs')) { const d = daysBetween(today, lfd); flags.push(d < 0 ? ['red', `Free time over (${sh(lfd)}) · book delivery`] : d <= 3 ? ['amb', `Free time ends ${sh(lfd)}`] : ['gry', `Free time to ${sh(lfd)}`]); }
@@ -122,10 +126,10 @@ function rowHTML(r, today) {
   const late = r.f.eta_prev && r.eta && r.eta > r.f.eta_prev && r.stage === 'sailed';
   const cost = (r.freight || 0) + (r.duty || 0) + (r.drayage || 0);
   return html`<a class="shp-row" href="${BASE}/${r.id}">
-    <div class="shp-t"><span class="shp-st ${cls}">${lab}</span><b>${r.title}</b><span class="sub">${r.sub || '—'}</span></div>
+    <div class="shp-t"><span class="shp-st ${cls}">${lab}</span><b title="${r.title}">${r.title}</b><span class="sub">${r.sub || '—'}</span></div>
     <div class="shp-pos">${r.pos.slice(0, 5).map((p) => html`<span>${p.po}</span>`)}${r.pos.length > 5 ? html`<span>+${r.pos.length - 5}</span>` : ''}<em class="sub">${r.suppliers.length > 2 ? `${r.suppliers.length} suppliers` : r.suppliers.join(' · ')}</em></div>
     <div class="shp-trk"><div class="shp-ln"><span>${left}</span><b class="${late ? 'late' : ''}">${right}${late ? html` <s>${sh(r.f.eta_prev)}</s>` : ''}</b></div><div class="shp-pb ${cls}"><i style="width:${pct}%"></i>${r.stage === 'sailed' ? html`<em style="left:${pct}%">🚢</em>` : ''}</div></div>
-    <div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}${r.c && r.stage !== 'delivered' ? html`<button type="button" class="shp-fwb ${r.fwdReview?.length ? 'on' : ''}" data-fwc="${r.c.id}" ${r.fwdReview?.length ? raw(`data-fwc-rev="${r.fwdReview[0]}"`) : ''} data-fwc-name="${r.title}" data-fwc-sub="${r.f.forwarder || ''}" title="Paste or drop an email from the forwarder">${r.fwdReview?.length ? `${r.fwdReview.length} to review` : '＋ Forwarder update'}</button>` : ''}</div>
+    <div class="shp-fl">${r.flags.map(([k, t, tip]) => html`<span class="shp-f ${k}" title="${tip || ''}">${t}</span>`)}${r.c && r.stage !== 'delivered' ? html`<button type="button" class="shp-fwb ${r.fwdReview?.length ? 'on' : ''}" data-fwc="${r.c.id}" ${r.fwdReview?.length ? raw(`data-fwc-rev="${r.fwdReview[0]}"`) : ''} data-fwc-name="${r.title}" data-fwc-sub="${r.f.forwarder || ''}" title="Paste or drop an email from the forwarder">${r.fwdReview?.length ? `${r.fwdReview.length} to review` : '＋ Forwarder update'}</button>` : ''}</div>
     <div class="shp-cost">${cost ? html`<b>${usd(cost)}</b><span class="sub">${[r.freight ? 'freight' : '', r.duty ? 'duty' : '', r.drayage ? 'delivery' : ''].filter(Boolean).join(' + ')}</span>` : html`<span class="sub">${r.cbm ? `${Math.round(r.cbm * 100) / 100} m³` : ''}</span>`}</div>
   </a>`;
 }
@@ -362,7 +366,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             ${editable ? html`<button type="button" class="btn small" data-open-dialog="shp-deliver">Mark delivered…</button>` : html`<form method="post" action="${BASE}/${r.id}/reopen" class="inline"><button class="link small">Reopen</button></form>`}</span></div>
           <p class="sub">${r.sub}</p>
           <div class="shp-steps">${steps.map(([k, l], i) => html`<div class="shp-s ${done(k) ? 'done' : i === cur ? 'now' : ''}"><b>${l}</b><small>${sDate[k] || ''}</small></div>`)}</div>
-          ${r.flags.length ? html`<div class="shp-fl">${r.flags.map(([k, t]) => html`<span class="shp-f ${k}">${t}</span>`)}</div>` : ''}
+          ${r.flags.length ? html`<div class="shp-fl">${r.flags.map(([k, t, tip]) => html`<span class="shp-f ${k}" title="${tip || ''}">${t}</span>`)}</div>` : ''}
           <div class="shp-two">
             <div>
               ${r.kind === 'courier' ? html`<h3>Parcel</h3><div class="shp-facts">${fact('Courier', r.forwarder)}${fact('Tracking no.', r.sub.split(' · ')[1] || '')}${fact('Picked up', sh(r.from))}${fact('Cartons · m³', [tot('cartons') ? `${int(tot('cartons'))} ctns` : '', tot('cbm') ? `${n2(tot('cbm'))} m³` : ''].filter(Boolean).join(' · '))}</div>`
