@@ -2927,3 +2927,14 @@
     if (c && navigator.clipboard) navigator.clipboard.writeText('Subject: ' + val('subject') + '\n\n' + val('body')).then(function () { c.textContent = 'Copied ✓'; setTimeout(function () { c.textContent = 'Copy'; }, 1500); });
   });
 })();
+
+// Custom value dropdown (<details data-ddsel>): a menu button sets the hidden input and the label.
+(function () {
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('details[data-ddsel] .dd-menu button[data-v]'); if (!b) return;
+    var d = b.closest('details[data-ddsel]'), inp = d.querySelector('input[type="hidden"]'), lab = d.querySelector('[data-ddsel-label]');
+    inp.value = b.getAttribute('data-v'); if (lab) lab.textContent = b.textContent;
+    d.querySelectorAll('.dd-menu button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    d.removeAttribute('open'); inp.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+})();

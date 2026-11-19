@@ -1141,3 +1141,8 @@ alter table products add column if not exists hts_declare_pct numeric;
 alter table products add column if not exists hts_checked_by text;
 alter table products add column if not exists hts_checked_at timestamptz;
 alter table products add column if not exists hts_rates_at timestamptz;
+
+-- ── freight-rates.sql ──
+-- Costs & rates: the last market check and a log of rate changes on each freight rate (logistics option).
+alter table logistics_options add column if not exists market jsonb;      -- { rate, low, high, at, as_of, basis, confidence, source }
+alter table logistics_options add column if not exists rate_log jsonb;    -- [{ at, by, from: manual|quote|market, old, new, note }]

@@ -212,6 +212,8 @@ function analyzeProduct(p, ctx) {
     || scenarios.find((s) => s.landed_cost !== null) || null;
   const cheapest = scenarios.filter((s) => s.landed_cost !== null).sort((a, b) => a.landed_cost - b.landed_cost)[0] || null;
 
+  const primaryOpt = primary ? options.find((o) => o.id === primary.option_id) : null;
+  if (primaryOpt?.valid_until && String(primaryOpt.valid_until).slice(0, 10) < new Date().toISOString().slice(0, 10)) issues.push(`Freight rate “${primaryOpt.name}” expired ${String(primaryOpt.valid_until).slice(0, 10)} — update it in Logistics → Costs & rates`);
   const landed = primary?.landed_cost ?? null;
   const pricing = { target_margin_pct: targetMarginPct };
   if (landed !== null) {

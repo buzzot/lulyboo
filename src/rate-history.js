@@ -136,4 +136,24 @@ function forwarderStats(rows, basis = 'allin') {
   }).sort((a, b) => (a.median ?? 1e12) - (b.median ?? 1e12));
 }
 
-module.exports = { recordBooking, sync, syncContainer, syncQuote, syncAll, priceOf, median, rounds, forwarderStats, laneOf, laneName, podName, missingTable };
+/**
+ * Your quotes for a saved freight rate (Costs & rates): same container type, to LA / Long Beach, last `days` days,
+ * ocean line only (local charges are the rate's "fees / shipment"). LCL per W/M. Returns null when there are none.
+ */
+const BOX_OF = { FCL_20GP: '20GP', FCL_40GP: '40GP', FCL_40HQ: '40HQ', LCL: 'LCL' };
+function quoteStats(rows, option, { days = 90, today = new Date().toISOString().slice(0, 10) } = {}) {
+  const box = BOX_OF[option.mode]; if (!box) return null;
+  const since = new Date(Date.parse(today) - days * 864e5).toISOString().slice(0, 10);
+  const pick = (rows || []).filter((r) => !r.excluded && r.box === box && (r.pod || 'LALB') === 'LALB' && String(r.quoted_on || '') >= since)
+    .map((r) => ({ r, v: box === 'LCL' ? (r.ocean_usd != null && r.wm ? r.ocean_usd / r.wm : null) : (r.ocean_usd ?? null) }))
+    .filter((x) => x.v != null && x.v > 0);
+  if (!pick.length) return null;
+  const vals = pick.map((x) => x.v);
+  const med = r2(median(vals));
+  const latest = pick.sort((a, b) => String(b.r.quoted_on).localeCompare(String(a.r.quoted_on)))[0].r;
+  const rate = Number(option.rate_usd) || 0;
+  return { n: pick.length, median: med, low: r2(Math.min(...vals)), high: r2(Math.max(...vals)), gap_pct: rate ? Math.round(((rate - med) / med) * 100) : null,
+    latest: { company: latest.company || '', on: latest.quoted_on, valid_until: latest.valid_until || null }, unit: box === 'LCL' ? '/W/M' : '/ctr' };
+}
+
+module.exports = { quoteStats, BOX_OF, recordBooking, sync, syncContainer, syncQuote, syncAll, priceOf, median, rounds, forwarderStats, laneOf, laneName, podName, missingTable };

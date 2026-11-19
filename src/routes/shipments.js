@@ -234,10 +234,37 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const sups = {}; for (const s of await db.list('suppliers').catch(() => [])) sups[s.id] = s;
     const ups = (await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
     const fileA = (name, url, type, extra = '') => html`<span class="rc-doc"><a href="${url}" ${/pdf|image/.test(type || '') ? raw(`data-preview="${url}?inline=1" data-type="${/image/.test(type) ? 'image' : 'doc'}" data-dl="${url}"`) : raw('download')}>📄 ${name}</a>${extra}</span>`;
-    const docs = [
-      ...(rec.files || []).map((x, i) => fileA(x.name, `${BASE}/${c.id}/record/files/${i}`, x.type, html`<form method="post" action="${BASE}/${c.id}/record/files/${i}/delete" class="inline" data-confirm="${`Delete ${x.name}?`}"><button class="rc-x" aria-label="${`Delete ${x.name}`}">×</button></form>`)),
-      ...ups.flatMap((u) => (u.files || []).map((x, i) => fileA(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type))),
-    ];
+    const fwdDocs = ups.flatMap((u) => (u.files || []).map((x, i) => fileA(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type)));
+    // AI-read documents: one row each (type, facts), the "Found in documents" review, cross-checks
+    const RD = require('../record-docs');
+    const sug = RD.suggest(c, r.entries);
+    const nRead = (rec.files || []).filter((x) => x.ai && !x.ai.skipped && !x.ai.error).length;
+    const ext = (n) => ((String(n).match(/\.([a-z0-9]+)$/i) || [])[1] || 'file').slice(0, 4).toUpperCase();
+    const docRow = (x, i) => {
+      const u = `${BASE}/${c.id}/record/files/${i}`; const e = x.ai?.entry_id ? r.entries.find((y) => y.id === x.ai.entry_id) : null;
+      const prev = /pdf|image/.test(x.type || '') ? raw(`data-preview="${u}?inline=1" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${u}"`) : raw('download');
+      return html`<div class="rd-row" data-armbox><span class="rd-ic">${ext(x.name)}</span><div class="rd-b"><div class="rd-n"><a href="${u}" ${prev}>${x.name}</a>
+          ${x.ai ? html`<span class="rd-t ${x.ai.type === 'customs_entry' ? 'v' : ''}">${x.ai.label}</span>${x.ai.error ? html`<span class="rd-t e">not read</span>` : x.ai.skipped ? '' : html`<span class="rd-t ok">read ✓</span>`}` : html`<span class="rd-t">not read</span>`}
+          ${e ? html`<a class="rd-t v" href="/admin/logistics/customs?review=${e.id}">${e.status === 'saved' ? 'in Customs ✓' : 'review in Customs →'}</a>` : ''}</div>
+        <div class="rd-f">${x.ai?.error ? `Couldn't read it: ${x.ai.error}` : x.ai?.note || RD.factsLine(x.ai, e)}</div></div>
+        <div class="rd-a"><a href="${u}" ${prev}>Open</a>
+          <details class="dd rd-dd" data-dd><summary class="lr-dots" aria-label="${`More for ${x.name}`}">⋯</summary><div class="dd-menu rd-menu">
+            ${AI.enabled() ? html`<form method="post" action="${u}/read" data-busy><button>${x.ai ? 'Re-read with AI' : 'Read with AI'}</button></form>` : ''}
+            ${x.ai ? html`<span class="rd-mh">Change type</span>${Object.entries(RD.TYPES).filter(([k]) => k !== x.ai.type && k !== 'customs_entry').map(([k, l]) => html`<form method="post" action="${u}/type"><input type="hidden" name="type" value="${k}"><button>${l}</button></form>`)}` : ''}
+            <button type="button" class="bd-del rd-del" data-arm>Delete</button></div></details>
+          <button class="bd-yes" form="rd-del-${i}">✓ Delete</button></div>
+        <form id="rd-del-${i}" method="post" action="${u}/delete" hidden></form></div>`;
+    };
+    const found = sug.items.length || sug.checks.length ? html`<form method="post" action="${BASE}/${c.id}/record/apply" class="rd-find">
+        <h4>✦ Found in documents ${sug.items.length ? html`<span class="rd-t v">${sug.items.length} to apply</span>` : ''}<span class="sub">nothing changes until you apply</span></h4>
+        ${sug.checks.map((t) => html`<div class="rd-al">⚠ <span>${t}</span></div>`)}
+        ${sug.items.length ? html`<div class="table-wrap"><table class="list rd-tb"><thead><tr><th></th><th>Field</th><th>Now</th><th>Found</th><th>From</th></tr></thead><tbody>
+          ${sug.items.map((s) => html`<tr class="${s.differs ? 'dif' : ''}"><td><input type="checkbox" name="k" value="${s.key}" ${s.differs ? '' : raw('checked')} aria-label="${`Apply ${s.label}`}"></td><td>${s.label}</td><td class="sub">${s.now ?? '—'}</td>
+            <td><b class="${s.differs ? 'rd-x' : ''}">${s.found}</b>${s.detail ? html` <span class="sub">${s.detail}</span>` : ''}</td><td class="sub">${s.from}${s.differs ? ' · differs — not ticked' : ''}</td></tr>`)}</tbody></table></div>
+        <div class="rd-acts">${sug.items.some((s) => s.key === 'pos') ? html`<label class="chk"><input type="checkbox" name="mark_shipped" value="1"> also mark these POs' lines as shipped</label>` : ''}
+          <span class="r"><button class="btn ghost small" formaction="${BASE}/${c.id}/record/dismiss">Dismiss</button><button class="btn small rd-go">Apply selected</button></span></div>` : ''}</form>` : '';
+    const srcChip = (k) => (rec.src || {})[k] ? html` <span class="rd-src" title="${`From ${rec.src[k]}`}">${((n) => (n.length <= 14 ? n : (n.split(/[\s_]+/).find((w) => /\d/.test(w) && w.length > 2) || n).slice(0, 16)))(String(rec.src[k]).replace(/\.[a-z0-9]+$/i, ''))}</span>` : '';
+    const hint = (k) => { const s = sug.items.find((x) => x.key === k && !x.differs); return s ? `found ${s.found} ↓` : null; };
     const v = { name: rec.name || '', entry_no: rec.entry_no || '', atd: day(f.atd) || '', ata: day(f.ata) || '', duty: rec.duty ?? '', fees: rec.fees ?? '', freight: rec.freight ?? '', pos: (rec.pos_text || rec.pos?.map((p) => p.po) || []).join(', '), notes: rec.notes || '' };
     const unknown = (rec.pos_text || []).filter((p) => !(rec.pos || []).some((x) => x.po === p));
     return page({
@@ -249,16 +276,20 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             <form method="post" action="${BASE}/${c.id}/record/delete" class="inline" data-confirm="Delete this record? Its customs entries stay in Customs, unlinked."><button class="btn ghost small danger">Delete</button></form></div></div>
         <div class="cp-kpis">
           <div class="cp-kpi"><span>Sailed → arrived</span><b>${r.from ? sh(r.from) : '—'} → ${r.arrivedOn ? sh(r.arrivedOn) : '—'}</b><small>${[f.pol, f.pod].filter(Boolean).join(' → ') || portName(c.port)}</small></div>
-          <div class="cp-kpi"><span>Customs duty</span><b>${usd(r.dutyOnly, 2)}</b><small>${r.entries.length ? `from ${r.entries.length} customs entr${r.entries.length === 1 ? 'y' : 'ies'}` : r.dutyOnly != null ? 'entered by hand' : 'not entered'}</small></div>
-          <div class="cp-kpi"><span>Fees</span><b>${usd(r.fees, 2)}</b><small>MPF, HMF…</small></div>
-          <div class="cp-kpi"><span>Freight</span><b>${usd(r.freight, 2)}</b><small>${r.freight == null ? 'add it with Edit' : ' '}</small></div>
+          <div class="cp-kpi"><span>Customs duty</span><b>${usd(r.dutyOnly, 2)}</b><small>${r.entries.some((e) => e.status === 'saved') ? `from ${r.entries.filter((e) => e.status === 'saved').length} saved customs entr${r.entries.filter((e) => e.status === 'saved').length === 1 ? 'y' : 'ies'}` : hint('duty') || (r.dutyOnly != null ? html`entered${srcChip('duty')}` : 'not entered')}</small></div>
+          <div class="cp-kpi"><span>Fees</span><b>${usd(r.fees, 2)}</b><small>${hint('fees') || html`MPF + HMF${srcChip('fees')}`}</small></div>
+          <div class="cp-kpi"><span>Freight</span><b>${usd(r.freight, 2)}</b><small>${hint('freight') || (r.freight == null ? 'drop a freight invoice or use Edit' : html`incl. local charges${srcChip('freight')}`)}</small></div>
         </div>
         <section class="card rc"><div class="rc-g">
           <div><h3>POs</h3>${r.pos.length || unknown.length ? html`<ul class="rc-pos">${r.pos.map((p) => html`<li><a href="/admin/orders/view?supplier=${p.supplier_id}&po=${encodeURIComponent(p.po)}">${p.po}</a> <span class="sub">${sups[p.supplier_id]?.name || ''}</span></li>`)}${unknown.map((p) => html`<li>${p} <span class="sub">not in the portal</span></li>`)}</ul>` : html`<p class="sub">None linked — add them with Edit.</p>`}</div>
           <div><h3>Customs entries</h3>${r.entries.length ? html`<ul class="rc-pos">${r.entries.map((e) => html`<li><a href="/admin/logistics/customs?review=${e.id}">${e.entry_no || 'Entry'}</a> <span class="sub">${e.status === 'saved' ? `duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}` : 'to review'}</span></li>`)}</ul>` : html`<p class="sub">${rec.entry_no ? `Entry ${rec.entry_no} (no 7501 file)` : 'None.'}</p>`}</div>
         </div>
-          <h3>Documents</h3><div class="rc-docs">${docs.length ? docs : html`<span class="sub">No files yet.</span>`}</div>
-          <form method="post" action="${BASE}/${c.id}/record/files" enctype="multipart/form-data" class="rc-add" data-busy><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop documents here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">7501, freight invoice, B/L…</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div><button class="btn small">Add</button></form>
+          <div class="rd-h" id="docs"><h3>Documents</h3><span class="sub">${(rec.files || []).length} file${(rec.files || []).length === 1 ? '' : 's'}${nRead ? ` · AI read ${nRead}` : ''}</span></div>
+          ${found}
+          <div class="rd-list">${(rec.files || []).length ? (rec.files || []).map(docRow) : html`<p class="sub">No files yet.</p>`}</div>
+          ${fwdDocs.length ? html`<div class="rc-docs"><span class="sub">From forwarder updates:</span> ${fwdDocs}</div>` : ''}
+          <form method="post" action="${BASE}/${c.id}/record/files" enctype="multipart/form-data" class="rc-add" data-busy><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop documents here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">7501, freight invoice, B/L, arrival notice, CI / PL${AI.enabled() ? ' — AI reads each one' : ''}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+            <div class="rd-up">${AI.enabled() ? html`<label class="tgl rd-tg"><input type="checkbox" name="ai" value="1" checked><i></i> Read with AI</label>` : ''}<button class="btn small">Add</button></div></form>
           ${rec.notes ? html`<p class="rc-notes">${rec.notes}</p>` : ''}
           <p class="rc-foot">Record only — no document checklist, reminders, supplier requests, broker email, Telegram or tracking. Duty and costs count in Customs and the landed-cost figures.</p>
         </section>
@@ -285,10 +316,44 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     flash(res, 'ok', 'Record saved'); res.redirect(`${BASE}/${c.id}`);
   }));
   router.post(`${BASE}/:id/record/files`, G(async (req, res) => {
-    const c = await recOf(req.params.id); const { files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
+    const c = await recOf(req.params.id); const { fields: fx, files } = await parseForm(req, { limitBytes: 40 * 1024 * 1024 });
     const ups = filesIn(files); if (!ups.length) throw new HttpError(400, 'Choose a file');
+    const before = ((c.record || {}).files || []).length;
     await REC.addFiles(db, c, ups, { by: by(req) });
-    flash(res, 'ok', `Added ${ups.length} file${ups.length === 1 ? '' : 's'}`); res.redirect(`${BASE}/${c.id}`);
+    let note = '';
+    if (fx.ai === '1' && AI.enabled()) {
+      const RD = require('../record-docs');
+      const o = await RD.readFiles(db, config, await recOf(c.id), ups.map((_, k) => before + k), { by: by(req) });
+      note = ` · AI read ${o.read}${o.entries ? ` · ${o.entries} customs entr${o.entries === 1 ? 'y' : 'ies'} to review` : ''}${o.failed.length ? ` · couldn't read ${o.failed.join(', ')}` : ''}`;
+    }
+    flash(res, 'ok', `Added ${ups.length} file${ups.length === 1 ? '' : 's'}${note}`); res.redirect(`${BASE}/${c.id}#docs`);
+  }));
+  router.post(`${BASE}/:id/record/files/:i/read`, G(async (req, res) => {
+    const c = await recOf(req.params.id); await parseForm(req).catch(() => null);
+    if (!AI.enabled()) throw new HttpError(400, 'AI is off — add ANTHROPIC_API_KEY');
+    const o = await require('../record-docs').readFiles(db, config, c, [Number(req.params.i)], { by: by(req) });
+    flash(res, o.failed.length ? 'error' : 'ok', o.failed.length ? `Couldn't read ${o.failed[0]}` : 'Read again'); res.redirect(`${BASE}/${c.id}#docs`);
+  }));
+  router.post(`${BASE}/:id/record/files/:i/type`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const { fields: f } = await parseForm(req);
+    const RD = require('../record-docs'); const list = [...((c.record || {}).files || [])]; const x = list[Number(req.params.i)];
+    if (x && RD.TYPES[f.type]) { list[Number(req.params.i)] = { ...x, ai: { ...(x.ai || { facts: {} }), type: f.type, label: RD.TYPES[f.type], typed_by: by(req) } }; await db.update('plan_containers', { id: c.id }, { record: { ...c.record, files: list }, updated_at: now() }); }
+    flash(res, 'ok', x ? `${x.name}: ${RD.TYPES[f.type] || 'unchanged'}` : 'File not found'); res.redirect(`${BASE}/${c.id}#docs`);
+  }));
+  router.post(`${BASE}/:id/record/apply`, G(async (req, res) => {
+    const c = await recOf(req.params.id); const { fields: f } = await parseForm(req);
+    const entries = await db.list('customs_entries', { filters: { container_id: c.id } }).catch(() => []);
+    const keys = [].concat(f.k || []).flatMap((x) => String(x).split(',')).filter(Boolean);
+    const n = await require('../record-docs').apply(db, c, keys, entries.filter((e) => ['saved', 'pending'].includes(e.status)), { by: by(req), markShipped: f.mark_shipped === '1' });
+    flash(res, 'ok', n ? `Applied ${n} value${n === 1 ? '' : 's'} from the documents` : 'Nothing selected'); res.redirect(`${BASE}/${c.id}`);
+  }));
+  router.post(`${BASE}/:id/record/dismiss`, G(async (req, res) => {
+    const c = await recOf(req.params.id); await parseForm(req).catch(() => null);
+    const entries = (await db.list('customs_entries', { filters: { container_id: c.id } }).catch(() => [])).filter((e) => ['saved', 'pending'].includes(e.status));
+    const { items } = require('../record-docs').suggest(c, entries);
+    const dis = [...new Set([...((c.record || {}).dismissed || []), ...items.map((s) => `${s.key}=${Array.isArray(s.value) ? s.value.join(',') : s.value}`)])].slice(-60);
+    await db.update('plan_containers', { id: c.id }, { record: { ...c.record, dismissed: dis }, updated_at: now() });
+    flash(res, 'ok', 'Dismissed — new documents can still suggest values'); res.redirect(`${BASE}/${c.id}#docs`);
   }));
   router.get(`${BASE}/:id/record/files/:i`, G(async (req, res) => {
     const c = await recOf(req.params.id); const x = ((c.record || {}).files || [])[Number(req.params.i)]; if (!x) throw new HttpError(404, 'File not found');

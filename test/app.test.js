@@ -4444,3 +4444,133 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   await req(base, 'POST', `/admin/products/${p.id}/hts/declare`, { cookie, form: { code: '9403200080', checked: '1' } });
   assert.equal((await db.get('products', p.id)).hts_declare_code, null);
 });
+
+test('costs & rates: compact table, one-rate dialog save with log, default star, use your quotes, delete, calculator, expired flag', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const hq = db.tables.logistics_options.find((o) => o.mode === 'FCL_40HQ');
+  const lcl = db.tables.logistics_options.find((o) => o.mode === 'LCL');
+  const d = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  for (const [v, n] of [[2700, 5], [2850, 12], [3100, 30], [2900, 200]]) await db.insert('freight_quotes', { box: '40HQ', pol: 'CNYTN', pod: 'LALB', ocean_usd: v, total_usd: v + 900, quoted_on: d(n), company: 'Xin Yuan', valid_until: d(-10) });
+  await db.insert('freight_quotes', { box: 'LCL', pol: 'CNNGB', pod: 'LALB', ocean_usd: 400, wm: 4, quoted_on: d(3) });
+  await db.update('logistics_options', { id: hq.id }, { rate_usd: 8000, valid_until: null });
+  require('../src/services').invalidate('ctx');
+
+  let r = await req(base, 'GET', '/admin/logistics', { cookie });
+  assert.equal(r.status, 200);
+  assert.match(r.text, /Costs &amp; rates/);
+  assert.match(r.text, /median <b>\$2,850<\/b> · 3 quotes/); // the 200-day-old quote is left out
+  assert.match(r.text, /rate is \+181%/);
+  assert.match(r.text, /far from your quotes/);
+  assert.match(r.text, /id="lr-new"/);
+  assert.match(r.text, /median <b>\$100<\/b>\/W\/M · 1 quote/); // LCL: ocean / W/M
+
+  // use your quotes → median, validity from the latest quote, logged
+  r = await req(base, 'POST', `/admin/logistics/rate/${hq.id}/use-quotes`, { cookie, form: {} });
+  let o = db.tables.logistics_options.find((x) => x.id === hq.id);
+  assert.equal(o.rate_usd, 2850); assert.equal(o.valid_until, d(-10));
+  assert.equal(o.rate_log.at(-1).from, 'quote'); assert.equal(o.rate_log.at(-1).old, 8000);
+
+  // one-rate save: only this rate changes; default switch
+  const lclBefore = lcl.rate_usd;
+  r = await req(base, 'POST', `/admin/logistics/rate/${hq.id}`, { cookie, form: { name: 'China → LA/LB · 40HQ', mode: 'FCL_40HQ', origin: 'Yantian', dest: 'LA/LB', rate: '3000', fees: '1500', days: '18', valid: d(-30), min: '0', active: '1', default: '1' } });
+  assert.equal(r.status, 303);
+  o = db.tables.logistics_options.find((x) => x.id === hq.id);
+  assert.equal(o.rate_usd, 3000); assert.equal(o.transit_days, 18); assert.equal(o.rate_log.at(-1).from, 'manual');
+  assert.equal(db.tables.logistics_options.find((x) => x.id === lcl.id).rate_usd, lclBefore);
+  assert.equal(db.tables.settings[0].default_logistics_option_id, hq.id);
+  await req(base, 'POST', `/admin/logistics/rate/${lcl.id}/default`, { cookie, form: {} });
+  assert.equal(db.tables.settings[0].default_logistics_option_id, lcl.id);
+
+  // add + delete
+  await req(base, 'POST', '/admin/logistics/rate/new', { cookie, form: { name: 'Test air', mode: 'AIR', rate: '6.5', fees: '300', active: '1' } });
+  const air = db.tables.logistics_options.find((x) => x.name === 'Test air');
+  assert.ok(air && air.active);
+  await req(base, 'POST', `/admin/logistics/rate/${air.id}/delete`, { cookie, form: {} });
+  assert.ok(!db.tables.logistics_options.some((x) => x.id === air.id));
+
+  // calculator: one carton field
+  r = await req(base, 'GET', '/admin/logistics?dims=50x35x30&gw=10.6&upc=24&qty=1000&price=3.2', { cookie });
+  assert.match(r.text, /28,800 units/);
+
+  // an expired default rate is flagged on products
+  await db.update('logistics_options', { id: lcl.id }, { valid_until: '2020-01-01' });
+  require('../src/services').invalidate('ctx');
+  const ctx = await require('../src/services').getCtx(db);
+  const a = calc.analyzeProduct({ id: 'x', units_per_carton: 24, carton_l_cm: 50, carton_w_cm: 35, carton_h_cm: 30, carton_gw_kg: 10, unit_price: 3, currency: 'USD', moq: 500 }, ctx);
+  assert.ok(a.issues.some((i) => /expired 2020-01-01/.test(i)), a.issues.join('|'));
+});
+
+test('record documents: AI reads each upload, 7501 → customs entry, found values applied, cross-checks, change type, re-read, dismiss', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; const calls = [];
+  const docs = {
+    'TELEX RELEASE - SNAL2610035B.pdf': { doc_type: 'telex_release', hbl_no: 'SNAL2610035B', mbl_no: 'ONEYSZPGX1565502', carrier: 'ONE', vessel: 'ONE FORWARD', voyage: '011E', pol: 'Yantian', pod: 'Long Beach', release_date: '2026-11-18', summary: 'Telex release' },
+    'INV-8812.pdf': { doc_type: 'invoice', doc_no: 'INV-8812', hbl_no: 'SNAL2610035B', ocean_usd: 2150, charges: [{ name: 'THC', usd: 210 }, { name: 'Doc fee', usd: 75 }, { name: 'ISF', usd: 125 }], ata: '2026-11-20', summary: 'Freight invoice' },
+    '7501.pdf': { doc_type: 'customs_entry', summary: '7501' },
+  };
+  const entry = { is_entry_summary: true, entry_no: '9T2-0090981-5', entry_date: '2026-11-21', hbls: ['RSLC SNAL2610035A', 'RSLC SNAL2610035B'], entered_value: 18729, duty: 3234.43, mpf: 64.88, hmf: 23.41, total: 3322.72, pos: ['PO#310002'],
+    lines: [{ line_no: '001', description: 'Toys', hts: '9503.00.0073', rate: 'FREE', duty: 3234.43, extras: [], qty: 100, qty_unit: 'NO', value: 18729, product_codes: [] }] };
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.anthropic.com')) {
+      const b = JSON.parse(opts.body); const name = b.tool_choice.name; calls.push(name);
+      let input = {};
+      if (name === 'read_shipping_document') { const fn = /File name: ([^\n]+?)\. Read/.exec(b.messages[0].content.at(-1).text)[1]; input = docs[fn]; }
+      else if (name === 'record_customs_entry') input = entry;
+      else if (name === 'review_hts') input = { lines: [] };
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Kean' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '310002', product: 'Toy', qty: 100, port: 'CNYTN', shipped: false });
+  await req(base, 'POST', '/admin/orders/shipments/records/new', { cookie, form: { name: 'YN0009', atd: '2026-11-04', ata: '2026-11-21' } });
+  const c = db.tables.plan_containers.find((x) => x.record_only);
+  const fd = new FormData();
+  for (const n of Object.keys(docs)) fd.append('file', new Blob([Buffer.from('%PDF-1.4 x')], { type: 'application/pdf' }), n);
+  fd.append('ai', '1');
+  let r = await fetch(`${base}/admin/orders/shipments/${c.id}/record/files`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' });
+  assert.equal(r.status, 303);
+  let rec = db.tables.plan_containers.find((x) => x.id === c.id).record;
+  assert.deepEqual(rec.files.map((x) => x.ai.type), ['telex_release', 'invoice', 'customs_entry']);
+  const e = db.tables.customs_entries.find((x) => x.entry_no === '9T2-0090981-5');
+  assert.ok(e && e.status === 'pending' && e.container_id === c.id); assert.equal(rec.files[2].ai.entry_id, e.id);
+
+  let page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(page, /Found in documents/);
+  assert.match(page, /HBL SNAL2610035B · MBL ONEYSZPGX1565502/);
+  assert.match(page, /freight \$2,560\.00 \(incl\. 3 charges\)/);   // local charges count as freight
+  assert.match(page, /Several house B\/Ls/);
+  assert.match(page, /review in Customs/);
+  // the arrival date on the invoice differs from the record → not ticked
+  assert.match(page, /value="ata"\s+aria-label="Apply Arrived">/);
+  assert.match(page, /value="freight" checked/);
+
+  // apply: freight, duty, fees, entry no, POs, HBL; not the differing arrival date
+  r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/apply`, { cookie, form: { k: 'freight,duty,fees,entry_no,pos,hbl_no', mark_shipped: '1' } });
+  const after = db.tables.plan_containers.find((x) => x.id === c.id);
+  rec = after.record;
+  assert.equal(rec.freight, 2560); assert.equal(rec.duty, 3234.43); assert.equal(rec.fees, 88.29); assert.equal(rec.entry_no, '9T2-0090981-5');
+  assert.deepEqual(rec.pos.map((p) => p.po), ['310002']); assert.equal(after.fwd.hbl_no, 'SNAL2610035B'); assert.equal(after.fwd.ata, '2026-11-21');
+  assert.equal(rec.src.freight, 'INV-8812.pdf');
+  assert.ok(db.tables.plan_orders.every((l) => l.shipped));
+  page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(page, /rd-src[^>]*>INV-8812</);
+
+  // dismiss what's left; change a type; re-read uses the AI again but keeps the same customs entry
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/dismiss`, { cookie, form: {} });
+  page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.doesNotMatch(page, /to apply/);
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/files/0/type`, { cookie, form: { type: 'bill_of_lading' } });
+  assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).record.files[0].ai.label, 'Bill of lading');
+  const n = calls.length;
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/files/2/read`, { cookie, form: {} });
+  assert.equal(calls.length, n + 1);   // read only — no second customs entry
+  assert.equal(db.tables.customs_entries.filter((x) => x.entry_no === '9T2-0090981-5').length, 1);
+});

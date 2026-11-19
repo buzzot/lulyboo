@@ -44,6 +44,10 @@ async function update(db, c, f) {
   const atd = day(f.atd); const ata = day(f.ata);
   const fwd = { ...(c.fwd || {}), atd: atd || null, ...(ata ? { ata, eta: ata, arrived: true } : { ata: null }) };
   const rec = { ...(c.record || {}), name: String(f.name || '').trim().slice(0, 120) || null, pos: found, pos_text: all, duty: money(f.duty), fees: money(f.fees), freight: money(f.freight), entry_no: String(f.entry_no || '').trim().slice(0, 40) || null, notes: String(f.notes || '').trim().slice(0, 1000) || null };
+  // a figure edited by hand no longer comes from its document
+  const src = { ...((c.record || {}).src || {}) };
+  for (const k of ['duty', 'fees', 'freight', 'entry_no']) if (String((c.record || {})[k] ?? '') !== String(rec[k] ?? '')) delete src[k];
+  rec.src = src;
   await db.update('plan_containers', { id: c.id }, { fwd, record: rec, delivered_at: `${ata || atd || day(c.delivered_at) || PL.today()}T12:00:00Z`, updated_at: now() });
   if (f.mark_shipped) await markShipped(db, found);
 }
