@@ -3932,7 +3932,7 @@ test('payments: terms → installments, dates follow the shipment, mark paid, re
   const longF = await db.insert('plan_files', { supplier_id: s.id, name: 'Invoice - PI_MTY-MG-0919_PO_TBD (1)_20261008222136.pdf', kind: 'Invoice', path: 'x/pi.pdf', content_type: 'application/pdf', pos: ['800018', 'PO800018'], created_at: '2026-11-18T10:00:00Z' });
   db.files.set('docs/x/pi.pdf', Buffer.from('%PDF pi'));
   const det2 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
-  assert.match(det2, />PO800018-PI-2026-11-18\.pdf</); assert.match(det2, /class="bd-po away"[^>]*>PO 777777</); assert.match(det2, /data-hoverprev=/); assert.match(det2, /data-arm/); assert.match(det2, /class="bd-po "[^>]*>PO 800018</);
+  assert.match(det2, />PO800018-PI-2026-11-18\.pdf</); assert.match(det2, /value="\d+" ><span class="bd-po away"[^>]*>PO 777777</); assert.match(det2, /data-hoverprev=/); assert.match(det2, /data-arm/); assert.match(det2, /class="bd-po "[^>]*>PO 800018</);
   const docs = await PM.brokerDocs(db, db.tables.plan_containers.find((x) => x.id === c.id));
   const k = docs.findIndex((x) => x.id === longF.id);
   r = await req(base, 'POST', `/admin/orders/shipments/${c.id}/broker`, { cookie, form: { to: 'ops@broker.com', subject: 'Docs', body: 'Hi', doc: String(k), go: 'send' } });
