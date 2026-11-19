@@ -3059,3 +3059,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .bd-dlg{width:min(640px,calc(100vw - 32px))}.bd-dlg .bd-in{padding:0 22px 18px}.bd-dlg form.shp-brk-f{padding:0}.rp-modal form[hidden]{display:none}
 .bd-dlg .rp-top{display:flex;align-items:center;gap:10px;padding:16px 0 4px}.bd-dlg .rp-top h2{margin:0;flex:1}
 .dx-addg{display:grid;grid-template-columns:1fr 1fr;gap:10px}.dx-addg label,.dx-file{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600}
+.dx-drop .mdrop-box{min-height:96px}

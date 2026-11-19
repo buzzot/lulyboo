@@ -46,7 +46,7 @@ async function containerIndex(db) {
   const labelFor = (line) => {
     const c = line?.container_id && byId[line.container_id];
     if (!c) return null;
-    return { c, text: [`${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no}`, c.box === 'LCL' ? null : BOX[c.box]?.name || c.box, c.sailing ? `ETD ${PL.short(c.sailing.etd)}` : null, c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Quotes requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
+    return { c, text: [require('../shipname').shipName(c, { sailing: c.sailing }), c.status === 'booked' ? 'Booked' : c.status === 'requested' ? 'Quotes requested' : c.status === 'shipped' ? 'Shipped' : 'Planned'].filter(Boolean).join(' · '), url: `${BASE}/load?port=${c.port}` };
   };
   return { byId, labelFor };
 }
@@ -106,7 +106,7 @@ function loadPlanRoutes(router, { db, config }) {
         st: PL.state(o, day), container: cIds.has(o.container_id) ? o.container_id : null, pk: pkOf(o), color: COLORS[pkeys.indexOf(pkOf(o)) % COLORS.length],
         upc: Number(o.units_per_carton) || 0, urgent: !!o.urgent, part: o.split_no || 0, root: o.split_of || o.id,
       })),
-      containers: portCs.map((c) => ({ id: c.id, no: c.no, box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), ...fwdOf(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
+      containers: portCs.map((c) => ({ id: c.id, no: c.no, ref: require('../shipname').shipRef(c), box: BOX[c.box] ? c.box : '40GP', sailing: c.sailing_id || '', loading: c.loading_date ? String(c.loading_date).slice(0, 10) : '', containerNo: c.container_no || '', status: c.status || 'planned', fwd: FR.summary(c), ...fwdOf(c), requestTo: c.request_to || '', requestedAt: c.requested_at ? PL.short(String(c.requested_at).slice(0, 10)) : '', quotes: qOf(c) })),
       sailings: sail.map((s) => ({ id: s.id, label: sailLabel(s), etd: s.etd })),
       states: Object.fromEntries(Object.entries(PL.STATE).map(([k, v]) => [k, { label: v.label, tag: v.tag }])),
     };

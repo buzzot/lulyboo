@@ -370,7 +370,7 @@
     document.addEventListener('paste', function (e) {
       var cd = e.clipboardData; if (!cd || !cd.files || !cd.files.length) return; // plain text pastes are left alone
       var form = e.target && e.target.closest && e.target.closest('form');
-      var zone = (form && form.querySelector('[data-filebox]')) || document.querySelector('[data-filebox]:hover') || (document.querySelector('[data-filedrop]') ? null : last || (zones.length === 1 ? zones[0] : null));
+      var zone = (form && form.querySelector('[data-filebox]')) || document.querySelector('dialog[open] [data-filebox]') || document.querySelector('[data-filebox]:hover') || (document.querySelector('[data-filedrop]') ? null : last || (zones.length === 1 ? zones[0] : null));
       if (!zone) return;
       e.preventDefault(); zone._add(cd.files);
     });
@@ -1302,7 +1302,7 @@
   var cById = function (id) { for (var i = 0; i < D.containers.length; i++) if (D.containers[i].id === id) return D.containers[i]; return null; };
   var sById = function (id) { for (var i = 0; i < D.sailings.length; i++) if (D.sailings[i].id === id) return D.sailings[i]; return null; };
   var itemsOf = function (c) { return D.orders.filter(function (o) { return o.container === c.id; }); };
-  var cName = function (c) { return (D.box[c.box] && D.box[c.box].lcl ? 'LCL shipment ' : 'Container ') + c.no; };
+  var cName = function (c) { return c.ref || ((D.box[c.box] && D.box[c.box].lcl ? 'LCL shipment ' : 'Container ') + c.no); }; // a real identifier once known
   var sumOf = function (c, k) { return itemsOf(c).reduce(function (a, o) { return a + (o[k] || 0); }, 0); };
   var LCLC = (D.box.LCL || { cap: 15 }).cap, ZONE = (D.box.LCL && D.box.LCL.zone) || [12, 20];
   var usedOf = function (c) { return itemsOf(c).reduce(function (a, o) { return a + (o.cbm || 0); }, 0); };

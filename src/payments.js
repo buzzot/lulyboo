@@ -288,7 +288,7 @@ async function runReminders({ db, config }) {
       const n = between(today, eta); if (n > bd || n < -3) continue;
       const docs = await brokerDocs(db, c);
       const have = (re) => docs.some((x) => re.test(x.kind));
-      if (st.broker_telegram !== false) await telegram(db, `📄 <b>Send docs to the broker</b>\n${E(c.name || `${c.box === 'LCL' ? 'LCL shipment' : 'Container'}`)}${f.container_no ? ` · ${E(f.container_no)}` : ''} · ETA <b>${E(PL.short(eta))}</b> (${n >= 0 ? `${n} day${n === 1 ? '' : 's'}` : `${-n} days ago`})\nCI ${have(/invoice/i) ? '✓' : '✗'} · PL ${have(/packing/i) ? '✓' : '✗'} · B/L ${have(/bill|b\/l/i) ? '✓' : '✗'} · Arrival notice ${have(/arrival/i) ? '✓' : '✗'}`,
+      if (st.broker_telegram !== false) await telegram(db, `📄 <b>Send docs to the broker</b>\n${E(require('./shipname').shipName(c))} · ETA <b>${E(PL.short(eta))}</b> (${n >= 0 ? `${n} day${n === 1 ? '' : 's'}` : `${-n} days ago`})\nCI ${have(/invoice/i) ? '✓' : '✗'} · PL ${have(/packing/i) ? '✓' : '✗'} · B/L ${have(/bill|b\/l/i) ? '✓' : '✗'} · Arrival notice ${have(/arrival/i) ? '✓' : '✗'}`,
         [[{ text: '✉ Email broker', url: `${url}/admin/orders/shipments/${c.id}#broker` }, { text: '✓ Already sent', data: `bs:${c.id}` }]]);
     }
   }
@@ -301,7 +301,7 @@ async function runReminders({ db, config }) {
     for (const c of await db.list('plan_containers').catch(() => [])) {
       const chk = await D.check(db, c, pre); if (!chk.alert) continue;
       const f = c.fwd || {};
-      await telegram(db, `📄 <b>Documents missing</b> — ${E(c.name || (c.box === 'LCL' ? 'LCL shipment' : 'Container'))}${f.atd ? ` (sailed ${E(PL.short(day(f.atd)))})` : ' (shipped)'}${f.eta ? ` · ETA ${E(PL.short(day(f.ata || f.eta)))}` : ''}\n${chk.open.map((p) => `${E(p.po)} ${E(p.supplier)}: ${p.missing.join(', ')}`).join('\n')}`,
+      await telegram(db, `📄 <b>Documents missing</b> — ${E(require('./shipname').shipName(c))}${f.atd ? ` (sailed ${E(PL.short(day(f.atd)))})` : ' (shipped)'}${f.eta ? ` · ETA ${E(PL.short(day(f.ata || f.eta)))}` : ''}\n${chk.open.map((p) => `${E(p.po)} ${E(p.supplier)}: ${p.missing.join(', ')}`).join('\n')}`,
         [[{ text: '✉ Request from suppliers', data: `rd:${c.id}` }, { text: 'Open shipment ↗', url: `${url}/admin/orders/shipments/${c.id}` }]]);
     }
   }

@@ -81,8 +81,8 @@ async function load(db) {
       pd,
       id: c.id, kind: c.box === 'LCL' ? 'lcl' : 'fcl', c, f, stage,
       fwdReview: fwdUps.filter((u) => u.container_id === c.id && u.status === 'pending').map((u) => u.id), fwdLog: fwdUps.filter((u) => u.container_id === c.id && ['accepted', 'logged'].includes(u.status)).length, lines: ls, scs: cs, entries: ce, chosen, flags, lfd, arrivedOn, freight, duty, drayage: Number(c.drayage_usd) || null,
-      title: `${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no}${c.box !== 'LCL' ? ` · ${BOXN[c.box] || c.box}` : ''}`,
-      sub: [f.forwarder || chosen?.company, f.booking_no, f.hbl_no ? `HBL ${f.hbl_no}` : '', [f.carrier, f.vessel, f.voyage].filter(Boolean).join(' '), fmtCont(f.container_no || c.container_no)].filter(Boolean).join(' · '),
+      title: require('../shipname').shipName(c, { sailing: c._sailing || null }),
+      sub: [f.forwarder || chosen?.company, f.booking_no, f.hbl_no ? `HBL ${f.hbl_no}` : '', [f.carrier, f.vessel, f.voyage].filter(Boolean).join(' '), fmtCont(f.container_no || c.container_no)].filter((x) => x && !require('../shipname').shipName(c).includes(String(x).trim())).join(' · '),
       pos, suppliers: [...new Set(pos.map((p) => sups[p.supplier_id]?.name).filter(Boolean))], port: c.port, forwarder: f.forwarder || chosen?.company || '',
       from: day(f.atd) || (fs === 'on_water' || fs === 'arrived' || fs === 'arrived_due' ? day(f.etd) : null) || day(c.updated_at), eta: day(f.eta), delivered: day(c.delivered_at),
       cbm: ls.reduce((a, l) => a + (Number(l.cbm) || 0), 0), cartons: ls.reduce((a, l) => a + (Number(l.cartons) || 0), 0),
@@ -328,7 +328,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       <p class="sub">A file you got another way — WeChat, the forwarder, a download. It's filed to the PO and ticks it off.</p>
       <div class="dx-addg"><label>PO<select name="po" required>${addPos.map((l) => html`<option value="${`${l.supplier_id}|${l.po}`}">${PL.normPo(l.po)} · ${(r.pd?.pos || []).find((p) => p.sid === l.supplier_id)?.supplier || ''}</option>`)}</select></label>
         <label>Document<select name="kind"><option value="">Detect from the name</option>${['Invoice', 'Packing list', 'Bill of lading', 'Warehouse receipt', 'Loading photos', 'Other'].map((k) => html`<option>${k}</option>`)}</select></label></div>
-      <label class="dx-file">File<input type="file" name="file" multiple required></label>
+      <div class="mdrop small dx-drop" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop files here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">PDF, Excel, photos · several at once</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
       <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Add</button></div></form></dialog>` : '';
     const brokerDlg = r.c && r.kind !== 'courier' ? await (async () => {
                 const PM = require('../payments');

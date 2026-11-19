@@ -18,7 +18,7 @@ const LP = require('./loadplan');
 const PM = require('../portmap');
 const cleanItem = (o) => PL.cleanName(o.product, o.sku);
 const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
-const BOXN = (c) => `Container ${c.no} · ${({ '20GP': '20GP', '40GP': '40GP', '40HQ': '40HQ' })[c.box] || c.box}`;
+const BOXN = (c) => require('../shipname').shipName(c);
 
 const PALETTE = ['#3b6fb6', '#d07a1e', '#2f8a63', '#7a5bb0', '#b4473b', '#1f8a9a', '#a5682a', '#5b6c8f', '#c0507e', '#4e7d2f'];
 const portName = (code) => SC.PORT[code]?.name || null;

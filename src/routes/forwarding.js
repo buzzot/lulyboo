@@ -14,7 +14,7 @@ const portName = (c) => SC.PORT[c]?.name || c || '';
 const BOXN = { '20GP': "20' GP", '40GP': "40' GP", '40HQ': "40' HQ", LCL: 'LCL' };
 const sd = (ts) => (ts ? PL.short(String(ts).slice(0, 10)) : '');
 const missingTable = (e) => /fwd_updates|fwd\b|PGRST20[45]|relation|column/i.test(e?.message || '');
-const cName = (c) => (c ? `${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no || ''}${c.box === 'LCL' ? '' : ` · ${BOXN[c.box] || c.box}`}` : '');
+const cName = (c) => (c ? require('../shipname').shipName(c) : '');
 const fmtCont = (v) => (/^[A-Z]{4}\d{7}$/.test(v || '') ? `${v.slice(0, 4)} ${v.slice(4)}` : v || '');
 
 /** Containers numbered per port (same numbers as Load containers). */
@@ -79,7 +79,7 @@ async function fwdBox(db, containerId, back, { supplierBl = null } = {}) {
 }
 /** Buttons that open the forwarder check window (public/app.js FwdCheck): new update, ones waiting for review, the log. */
 function fwdActions(c, fwd, nReview = 0, nLog = 0, firstReview = null) {
-  const name = `${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no || ''}`.trim();
+  const name = require('../shipname').shipName(c);
   const sub = [c.box === 'LCL' ? 'LCL' : c.box, fwd?.forwarder].filter(Boolean).join(' · ');
   return html`<div class="fw-acts">
     <button type="button" class="btn ghost small" data-fwc="${c.id}" data-fwc-name="${name}" data-fwc-sub="${sub}" title="Paste or drop an email, PDF or screenshot from the forwarder — AI compares it with this shipment">＋ Forwarder update</button>

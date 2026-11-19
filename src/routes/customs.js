@@ -33,7 +33,7 @@ async function brokerEmail(db, e) {
 async function viewOf(db, e) {
   const c = e.container_id ? await db.get('plan_containers', e.container_id).catch(() => null) : null;
   let cname = null;
-  if (c) { const same = (await db.list('plan_containers', { filters: { port: c.port }, order: 'created_at.asc' }).catch(() => [])); const no = same.findIndex((x) => x.id === c.id) + 1; cname = `${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${no || ''}`.trim(); }
+  if (c) cname = require('../shipname').shipName(c);
   const f = e.facts || {};
   const lines = (e.lines || []).map((l) => ({ ...l, rate_total: CU.lineRate(l), value_pc: l.value && l.qty ? Math.round((l.value / l.qty) * 100) / 100 : null }));
   const suggestions = lines.filter((l) => l.suggestion && l.suggestion.verdict === 'suggest' && l.suggestion.hts).length;

@@ -28,7 +28,7 @@ const fileIcon = (f) => (/pdf/.test(f.content_type) ? 'PDF' : /image/.test(f.con
 function shipLabel(sc, cs) {
   const c = sc.container_id && cs[sc.container_id];
   if (!c) return 'No container plan';
-  return `${portName(c.port)} · ${c.box === 'LCL' ? 'LCL shipment' : 'Container'} ${c.no || ''}${c.box === 'LCL' ? '' : ` · ${BOXN[c.box] || c.box}`}`;
+  return require('../shipname').shipName(c);
 }
 
 /** Containers numbered per port (same numbers as Load containers). */
