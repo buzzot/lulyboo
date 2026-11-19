@@ -537,7 +537,8 @@
     if (alt && alt.type !== 'hidden') alt.addEventListener('input', function () {
       if (alt.value.trim()) { val.value = ''; label.textContent = 'Choose a supplier…'; rows.forEach(function (x) { x.classList.remove('on'); }); box.classList.remove('invalid'); }
     });
-    if (form) form.addEventListener('submit', function (e) { if (!val.value && !(alt && alt.value.trim())) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
+    // only a required picker blocks the form ("All suppliers" on a filter is a valid choice)
+    if (form && val.hasAttribute('required')) form.addEventListener('submit', function (e) { if (!val.value && !(alt && alt.value.trim())) { e.preventDefault(); box.classList.add('invalid'); box.querySelector('[data-pick-open]').click(); } });
   });
 
   // New sample: switch between "Request a sample" and "Already shipped".
@@ -2796,5 +2797,24 @@
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return; var x = e.target.closest && e.target.closest('.dx-chip[data-popcard]'); if (!x) return;
     e.preventDefault(); x.click();
+  });
+})();
+
+// Live search: input[data-live-q="<row selector>"] hides rows that don't contain the text as you type; Enter still
+// searches on the server (and across tabs). "PO900018" and "900018" both match.
+(function () {
+  var inputs = document.querySelectorAll('input[data-live-q]');
+  Array.prototype.forEach.call(inputs, function (inp) {
+    var norm = function (s) { return String(s || '').toLowerCase().replace(/\s+/g, ' '); };
+    var run = function () {
+      var q = norm(inp.value).trim().replace(/^po\s*#?\s*(?=\d)/, '');
+      var rows = document.querySelectorAll(inp.getAttribute('data-live-q')), shown = 0;
+      Array.prototype.forEach.call(rows, function (r) { var ok = !q || norm(r.textContent).indexOf(q) >= 0; r.hidden = !ok; if (ok) shown++; });
+      var empty = document.getElementById(inp.getAttribute('data-live-empty') || ''); if (empty) empty.hidden = !(q && rows.length && !shown);
+    };
+    var t = null;
+    inp.addEventListener('input', function () { clearTimeout(t); t = setTimeout(run, 120); });
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && inp.form) { e.preventDefault(); if (inp.form.requestSubmit) inp.form.requestSubmit(); else inp.form.submit(); } });
+    inp.addEventListener('search', function () { if (!inp.value && inp.form && /[?&]q=/.test(location.search)) inp.form.submit(); else run(); });   // the × clears
   });
 })();

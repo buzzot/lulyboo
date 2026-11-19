@@ -54,6 +54,7 @@ module.exports = function orderRoutes(router, { db, config }) {
     let changed = 0;
     for (const sid of noVol) changed += await PL.fillVolumes(db, sid).catch(() => 0);
     if (changed) lines = await db.list('plan_orders', { order: 'ready_date.asc' });
+    await require('../forwarding').healShipped(db, lines, await db.list('plan_containers').catch(() => []));   // a line in a shipped container is shipped
     const files = await db.list('plan_files', { order: 'created_at.desc' }).catch(() => []);
     const ids = [...new Set([...lines.map((l) => l.supplier_id), ...files.map((f) => f.supplier_id)])];
     const sups = Object.fromEntries((await Promise.all(ids.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
@@ -71,8 +72,11 @@ module.exports = function orderRoutes(router, { db, config }) {
     const TABS = [['open', 'Open'], ['overdue', 'Late'], ['waiting', 'Waiting on us'], ['shipped', 'Shipped'], ['all', 'All']];
     const tab = TABS.some(([k]) => k === req.query.status) ? req.query.status : 'open';
     const inTab = (p) => (tab === 'all' ? true : tab === 'open' ? p.st !== 'shipped' : p.st === tab);
-    const list = all.filter((p) => inTab(p) && (!fSup || p.supplier_id === fSup)
-      && (!q || [p.po, p.supplier?.name, ...p.products].filter(Boolean).join(' ').toLowerCase().includes(q)))
+    const hit = (p) => (!fSup || p.supplier_id === fSup) && (!q || [p.po, PL.normPo(p.po), p.supplier?.name, ...p.products].filter(Boolean).join(' ').toLowerCase().includes(q.replace(/^po\s*#?\s*(?=\d)/, '')));
+    let list = all.filter((p) => inTab(p) && hit(p));
+    const wider = q && !list.length && all.some(hit);   // nothing in this tab: show matches from every status
+    if (wider) list = all.filter(hit);
+    list = list
       .sort((a, b) => (RANK[b.st] - RANK[a.st]) || String(a.first || '9').localeCompare(String(b.first || '9')));
     const openPos = all.filter((p) => p.st !== 'shipped');
     const count = (k) => all.filter((p) => (k === 'all' ? true : k === 'open' ? p.st !== 'shipped' : p.st === k)).length;
@@ -93,7 +97,7 @@ module.exports = function orderRoutes(router, { db, config }) {
           <nav class="cp-views" aria-label="Status">${TABS.map(([k, l]) => html`<a href="${link({ status: k })}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l} <span class="or-n">${count(k)}</span></a>`)}</nav>
           <form method="get" action="/admin/orders" class="or-search"><input type="hidden" name="status" value="${tab}">
             ${require('./samples').supplierPicker(Object.values(sups).sort((a, b) => a.name.localeCompare(b.name)), fSup, { name: 'supplier', required: false, all: 'All suppliers', submit: true, cls: 'pick1-filter pick1-nolbl' })}
-            <input type="search" name="q" value="${req.query.q || ''}" placeholder="Search PO, product or supplier" aria-label="Search"></form>
+            <input type="search" name="q" value="${req.query.q || ''}" placeholder="Search PO, product or supplier" aria-label="Search" data-live-q=".or-table tbody tr" data-live-empty="or-none"><button type="submit" class="sr-only" tabindex="-1">Search</button></form>
         </div>
         <div class="card flush"><div class="table-wrap"><table class="list or-table"><thead><tr><th>PO</th><th>Supplier</th><th>Products</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Port</th><th>Status</th><th>Docs</th></tr></thead>
           <tbody>${list.map((p) => html`<tr class="${p.st === 'shipped' ? 'done' : ''}">
@@ -106,6 +110,8 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td>${p.ports.map(portName).filter(Boolean).join(', ') || html`<span class="sub">To confirm</span>`}</td>
             <td>${tag(p.st)}${p.pending.length ? html`<div class="sub or-needs" title="${`Needs: ${p.pending.join(', ')}`}">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? ctn(ci, p.lines).map((x) => html`<div><a class="or-ctn" href="${x.url}">📦 ${x.text}</a></div>`) : ''}</td>
             <td>${p.docs.length ? html`<a href="${poUrl(p.supplier_id, p.po)}#docs">📎 ${p.docs.length}</a>` : '—'}</td></tr>`)}</tbody></table></div>
+          ${wider ? html`<p class="sub or-empty">Not in "${(TABS.find(([k]) => k === tab) || [])[1]}" — showing matches from every status.</p>` : ''}
+          <p class="muted or-empty" id="or-none" hidden>No match on this page — press Enter to search every status.</p>
           ${list.length ? '' : html`<p class="muted or-empty">${all.length ? 'No purchase orders match.' : 'No purchase orders yet. Import a supplier report or upload a PO to start.'}</p>`}</div>`,
     }));
   }));
