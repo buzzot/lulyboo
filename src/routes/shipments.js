@@ -233,8 +233,16 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const c = r.c; const rec = r.rec; const f = r.f;
     const sups = {}; for (const s of await db.list('suppliers').catch(() => [])) sups[s.id] = s;
     const ups = (await db.list('fwd_updates', { filters: { container_id: c.id } }).catch(() => [])).filter((u) => ['accepted', 'logged'].includes(u.status));
-    const fileA = (name, url, type, extra = '') => html`<span class="rc-doc"><a href="${url}" ${/pdf|image/.test(type || '') ? raw(`data-preview="${url}?inline=1" data-type="${/image/.test(type) ? 'image' : 'doc'}" data-dl="${url}"`) : raw('download')}>📄 ${name}</a>${extra}</span>`;
-    const fwdDocs = ups.flatMap((u) => (u.files || []).map((x, i) => fileA(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type)));
+    // forwarder-update files: same rows as uploads; type and facts come from the update (read when the email came in)
+    const FWDT = require('../forwarding').DOC_TYPES;
+    const fwdRow = (u, x, i) => {
+      const url = `/admin/orders/shipping/fwd/${u.id}/files/${i}`; const fx = u.facts || {};
+      const prev = /pdf|image/.test(x.type || '') ? raw(`data-preview="${url}?inline=1" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${url}"`) : raw('download');
+      const ai = { type: fx.doc_type || 'other', label: FWDT[fx.doc_type] || FWDT.other, facts: fx, summary: fx.summary || '' };
+      return html`<div class="rd-row"><span class="rd-ic">${((String(x.name).match(/\.([a-z0-9]+)$/i) || [])[1] || 'file').slice(0, 4).toUpperCase()}</span><div class="rd-b"><div class="rd-n"><a href="${url}" ${prev}>${x.name}</a><span class="rd-t">${ai.label}</span><span class="rd-t rd-fwd">from forwarder${u.created_at ? ` · ${sh(day(u.created_at))}` : ''}</span></div>
+        <div class="rd-f">${require('../record-docs').factsLine(ai, null)}</div></div><div class="rd-a"><a href="${url}" ${prev}>Open</a></div></div>`;
+    };
+    const fwdDocs = ups.flatMap((u) => (u.files || []).map((x, i) => fwdRow(u, x, i)));
     // AI-read documents: one row each (type, facts), the "Found in documents" review, cross-checks
     const RD = require('../record-docs');
     const sug = RD.suggest(c, r.entries);
@@ -284,11 +292,10 @@ module.exports = function shipmentRoutes(router, { db, config }) {
           <div><h3>POs</h3>${r.pos.length || unknown.length ? html`<ul class="rc-pos">${r.pos.map((p) => html`<li><a href="/admin/orders/view?supplier=${p.supplier_id}&po=${encodeURIComponent(p.po)}">${p.po}</a> <span class="sub">${sups[p.supplier_id]?.name || ''}</span></li>`)}${unknown.map((p) => html`<li>${p} <span class="sub">not in the portal</span></li>`)}</ul>` : html`<p class="sub">None linked — add them with Edit.</p>`}</div>
           <div><h3>Customs entries</h3>${r.entries.length ? html`<ul class="rc-pos">${r.entries.map((e) => html`<li><a href="/admin/logistics/customs?review=${e.id}">${e.entry_no || 'Entry'}</a> <span class="sub">${e.status === 'saved' ? `duty ${usd(e.duty, 2)} + fees ${usd(e.fees, 2)}` : 'to review'}</span></li>`)}</ul>` : html`<p class="sub">${rec.entry_no ? `Entry ${rec.entry_no} (no 7501 file)` : 'None.'}</p>`}</div>
         </div>
-          <div class="rd-h" id="docs"><h3>Documents</h3><span class="sub">${(rec.files || []).length} file${(rec.files || []).length === 1 ? '' : 's'}${nRead ? ` · AI read ${nRead}` : ''}</span></div>
+          <div class="rd-h" id="docs"><h3>Documents</h3><span class="sub">${(rec.files || []).length + fwdDocs.length} file${(rec.files || []).length + fwdDocs.length === 1 ? '' : 's'}${nRead ? ` · AI read ${nRead}` : ''}${fwdDocs.length ? ` · ${fwdDocs.length} from forwarder` : ''}</span></div>
           ${found}
-          <div class="rd-list">${(rec.files || []).length ? (rec.files || []).map(docRow) : html`<p class="sub">No files yet.</p>`}</div>
-          ${fwdDocs.length ? html`<div class="rc-docs"><span class="sub">From forwarder updates:</span> ${fwdDocs}</div>` : ''}
-          <form method="post" action="${BASE}/${c.id}/record/files" enctype="multipart/form-data" class="rc-add" data-busy><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents"><span class="dz-main" data-main>Drop documents here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">7501, freight invoice, B/L, arrival notice, CI / PL${AI.enabled() ? ' — AI reads each one' : ''}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+          <div class="rd-list">${(rec.files || []).map(docRow)}${fwdDocs}${!(rec.files || []).length && !fwdDocs.length ? html`<p class="sub">No files yet.</p>` : ''}</div>
+          <form method="post" action="${BASE}/${c.id}/record/files" enctype="multipart/form-data" class="rc-add" data-busy><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required aria-label="Add documents" title=""><span class="dz-main" data-main>Drop documents here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">7501, freight invoice, B/L, arrival notice, CI / PL${AI.enabled() ? ' — AI reads each one' : ''}</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
             <div class="rd-up">${AI.enabled() ? html`<label class="tgl rd-tg"><input type="checkbox" name="ai" value="1" checked><i></i> Read with AI</label>` : ''}<button class="btn small">Add</button></div></form>
           ${rec.notes ? html`<p class="rc-notes">${rec.notes}</p>` : ''}
           <p class="rc-foot">Record only — no document checklist, reminders, supplier requests, broker email, Telegram or tracking. Duty and costs count in Customs and the landed-cost figures.</p>

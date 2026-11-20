@@ -4563,6 +4563,12 @@ test('record documents: AI reads each upload, 7501 → customs entry, found valu
   page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
   assert.match(page, /rd-src[^>]*>INV-8812</);
 
+  // a forwarder-update file shows as a row too, with its type and facts from the update
+  await db.insert('fwd_updates', { container_id: c.id, status: 'accepted', facts: { doc_type: 'arrival_notice', hbl_no: 'NBAF2610333A', vessel: 'EVER FRANK', voyage: '1245E', atd: '2026-11-12' }, files: [{ name: 'HBL-NBAF2610333A.pdf', type: 'application/pdf', path: 'fwd/x.pdf' }] });
+  page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(page, /HBL-NBAF2610333A\.pdf<\/a><span class="rd-t">Arrival notice<\/span><span class="rd-t rd-fwd">from forwarder/);
+  assert.match(page, /HBL NBAF2610333A · EVER FRANK 1245E · sailed Nov 12/);
+  assert.match(page, /4 files · AI read 3 · 1 from forwarder/);
   // dismiss what's left; change a type; re-read uses the AI again but keeps the same customs entry
   await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/dismiss`, { cookie, form: {} });
   page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
