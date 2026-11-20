@@ -208,6 +208,43 @@ ${detail.label ? `<p style="margin:0 0 6px;font-size:12px;line-height:18px;color
   };
 }
 
+/**
+ * Weekly supplier-payments digest: summary tiles, then one table per section (Overdue / Due this week),
+ * rows grouped by supplier. sections: [{ title, tone, total, rows: [{ supplier, po, what, when, amount, href }] }].
+ */
+function paymentsDigest({ title, intro, tiles = [], sections = [], button, link, preheader }) {
+  const money = (v) => `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const tile = (t) => { const [bg, fg] = TONES[t.tone] || TONES.grey; return `<td width="${Math.floor(100 / tiles.length)}%" valign="top" style="padding:0 4px;"><div style="padding:12px 14px;border-radius:8px;background:${bg};">
+<div style="font-size:12px;line-height:16px;color:${fg};font-weight:700;text-transform:uppercase;letter-spacing:.04em;">${esc(t.label)}</div>
+<div style="margin-top:4px;font-size:21px;line-height:27px;font-weight:700;color:#292c30;">${esc(t.value)}</div>
+<div style="font-size:12px;line-height:17px;color:#73777d;">${esc(t.sub || '')}</div></div></td>`; };
+  const td = 'padding:8px 10px;border-top:1px solid #f0e6e4;font-size:14px;line-height:20px;vertical-align:top;';
+  const section = (sec) => {
+    const [bg, fg] = TONES[sec.tone] || TONES.grey;
+    const bySup = new Map(); for (const r of sec.rows) bySup.set(r.supplier, [...(bySup.get(r.supplier) || []), r]);
+    const body = [...bySup].map(([sup, rows]) => `<tr><td colspan="3" style="padding:10px 10px 4px;font-size:13px;line-height:18px;font-weight:700;color:#292c30;background:#fbf8f7;border-top:1px solid #f0e6e4;">${esc(sup)}${rows.length > 1 ? `<span style="font-weight:400;color:#73777d;"> · ${rows.length} payments · ${money(rows.reduce((a, r) => a + r.amount, 0))}</span>` : ''}</td></tr>
+${rows.map((r) => `<tr><td width="58%" style="${td}">${r.href ? `<a href="${esc(r.href)}" style="color:#292c30;text-decoration:none;font-weight:600;">PO ${esc(r.po)}</a>` : `<b>PO ${esc(r.po)}</b>`}<div style="font-size:12px;line-height:17px;color:#73777d;">${esc(r.what || '')}</div></td>
+<td width="22%" style="${td}white-space:nowrap;"><span style="display:inline-block;padding:1px 8px;border-radius:999px;background:${bg};color:${fg};font-size:12px;line-height:18px;font-weight:700;">${esc(r.when)}</span></td>
+<td width="20%" align="right" style="${td}white-space:nowrap;font-weight:700;">${money(r.amount)}</td></tr>`).join('')}`).join('');
+    return `<tr><td style="padding:22px 0 0;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+<td style="font-size:16px;line-height:22px;font-weight:700;">${esc(sec.title)} <span style="font-weight:400;color:#73777d;font-size:14px;">· ${sec.rows.length}</span></td><td align="right" style="font-size:16px;line-height:22px;font-weight:700;color:${fg};">${money(sec.total)}</td></tr></table>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border:1px solid #f0e6e4;border-radius:8px;border-collapse:separate;overflow:hidden;table-layout:fixed;">${body.replace('border-top:1px solid #f0e6e4;', '')}</table></td></tr>`;
+  };
+  const text = `${title}\n${intro ? `\n${intro}\n` : ''}${tiles.map((t) => `${t.label}: ${t.value}${t.sub ? ` (${t.sub})` : ''}`).join(' · ')}\n${sections.map((sec) => `\n${sec.title.toUpperCase()} — ${money(sec.total)}\n${sec.rows.map((r) => `  ${r.when.padEnd(12)} ${r.supplier} · PO ${r.po} · ${r.what || ''} · ${money(r.amount)}`).join('\n')}`).join('\n')}\n\n${button}: ${link}`;
+  return {
+    text,
+    html: layout({
+      admin: true, preheader: preheader || title,
+      body: `<tr><td style="padding:30px 0 0;"><h1 style="margin:0;font-size:25px;line-height:33px;font-weight:600;">${esc(title)}</h1>
+${intro ? `<p style="margin:8px 0 0;font-size:15px;line-height:24px;color:#62676e;">${esc(intro)}</p>` : ''}</td></tr>
+${tiles.length ? `<tr><td style="padding:18px 0 0;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 -4px;"><tr>${tiles.map(tile).join('')}</tr></table></td></tr>` : ''}
+${sections.filter((x) => x.rows.length).map(section).join('')}
+<tr><td style="padding:24px 0 30px;"><table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" bgcolor="#de7367" style="border-radius:6px;">
+<a href="${esc(link)}" target="_blank" style="display:inline-block;padding:13px 22px;border:1px solid #de7367;border-radius:6px;font-size:15px;line-height:22px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(button)}</a></td></tr></table></td></tr>`,
+    }),
+  };
+}
+
 /** Plain bilingual notice with a button (holiday schedule reminder etc.). en / zh are the editable message bodies. */
 function noticeEmail({ title, companyName, en, zh, button, link }) {
   const paras = (t) => esc(t).split(/\n{2,}/).map((x) => x.replace(/\n/g, '<br>')).join('<br><br>');
@@ -254,4 +291,4 @@ ${received.length ? `<tr><td style="padding:16px 0 0;">${label('Already received
   };
 }
 
-module.exports = { shipmentEmail, noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+module.exports = { paymentsDigest, shipmentEmail, noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };

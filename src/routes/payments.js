@@ -152,12 +152,12 @@ module.exports = function paymentRoutes(router, { db, config }) {
               <span></span><label class="cp-chk"><input type="checkbox" name="report_to_accountant" value="1" ${st.report_to_accountant ? raw('checked') : ''}> Email the weekly PDF</label></div>
             <fieldset class="pm-ch"><legend>Send to</legend>
               <div class="pm-ch-h"><span></span><b>Telegram</b><b>Email</b></div>
-              <div><span>Payment reminders</span><input type="checkbox" name="payment_telegram" value="1" ${st.payment_telegram !== false ? raw('checked') : ''} aria-label="Payment reminders on Telegram"><input type="checkbox" name="payment_email" value="1" ${st.payment_email !== false ? raw('checked') : ''} aria-label="Payment reminders by email"></div>
+              <div><span>Payment reminders</span><input type="checkbox" name="payment_telegram" value="1" ${st.payment_telegram !== false ? raw('checked') : ''} aria-label="Payment reminders on Telegram"><input type="checkbox" name="payment_email" value="1" ${st.payment_email !== false ? raw('checked') : ''} aria-label="Weekly payments email (Mondays)" title="Weekly summary, Mondays"></div>
               <div><span>Docs to the broker</span><input type="checkbox" name="broker_telegram" value="1" ${st.broker_telegram !== false ? raw('checked') : ''} aria-label="Broker reminders on Telegram"><span class="sub">—</span></div>
               <div><span title="After the goods shipped">Missing CI / PL</span><input type="checkbox" name="docs_telegram" value="1" ${st.docs_telegram !== false ? raw('checked') : ''} aria-label="Missing documents on Telegram"><span class="sub">—</span></div>
               <div><span>Weekly report ready</span><input type="checkbox" name="report_telegram" value="1" ${st.report_telegram !== false ? raw('checked') : ''} aria-label="Weekly report on Telegram"><span class="sub">—</span></div>
             </fieldset>
-            <p class="sub">${require('../telegram').enabled() && st.telegram_chat_id ? 'Telegram goes to the portal bot, with Mark paid / Snooze buttons.' : 'Telegram is not connected — connect the bot on the CRM page (Reminders).'} Email reminders go to you.</p>
+            <p class="sub">${require('../telegram').enabled() && st.telegram_chat_id ? 'Telegram goes to the portal bot, with Mark paid / Snooze buttons.' : 'Telegram is not connected — connect the bot on the CRM page (Reminders).'} Payments: one weekly summary every Monday (overdue + due this week) on Telegram and by email.</p>
             <button class="btn small">Save</button></form>
         </section></aside></div>
         ${paidDialog()}`,

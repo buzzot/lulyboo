@@ -280,7 +280,8 @@ function loadPlanRoutes(router, { db, config }) {
   router.get(`${BASE}/containers/:id/request`, json(async (req) => {
     const c = await getContainer(req.params.id);
     const facts = await containerFacts(c);
-    const draft = Q.rfqText({ container: c, ...facts, contacts: req.query.contacts === '1', both: req.query.both === '1', by: req.staff?.name || '' });
+    const stg = (await db.list('settings', { limit: 1 }).catch(() => []))[0] || {};
+    const draft = Q.rfqText({ container: c, ...facts, contacts: req.query.contacts === '1', both: req.query.both === '1', by: req.staff?.name || '', deliverTo: facts.box?.lcl ? '' : (stg.delivery_address || require('../freight-costs').DEFAULT_ADDRESS) });
     const sent = await db.list('plan_quotes', { filters: { container_id: c.id } }).catch(() => []);
     const fws = (await fwList()).map((f) => ({ id: f.id, company: f.company, contact: f.contact_name || '', email: f.email, sent: sent.some((q) => q.forwarder_id === f.id) }));
     return { draft: { ...draft, cc: c.request_cc || '' }, forwarders: fws };

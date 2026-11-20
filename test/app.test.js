@@ -3895,9 +3895,12 @@ test('payments: terms → installments, dates follow the shipment, mark paid, re
   const C = require('../src/crm');
   if (C.localNow().hour >= 9) {
     await PM.runReminders({ db, config: { publicUrl: 'https://x' } });
-    const m = tgSent.find((x) => /Payment due in 3 days/.test(x.text));
-    assert.ok(m); assert.equal(m.reply_markup.inline_keyboard[0][0].callback_data, `pp:${bal.id}`);
-    assert.ok(mails.some((x) => /\[Payments\]/.test(x.subject)));
+    // Telegram and email are weekly: one summary on Mondays only
+    const monday = new Date(C.localNow().date + 'T00:00:00Z').getUTCDay() === 1;
+    const m = tgSent.find((x) => /Supplier payments this week/.test(x.text));
+    assert.equal(!!m, monday); if (m) assert.match(m.text, /PO 800018 · \$3,200\.00/);
+    assert.equal(tgSent.filter((x) => /Payment due|Overdue \d+ day/.test(x.text)).length, 0, 'no per-payment messages');
+    assert.equal(mails.some((x) => /\[Payments\]/.test(x.subject)), monday);
   }
   // Telegram "Mark paid" button
   assert.match(await PM.handleCallback(db, `pp:${bal.id}`), /Paid \$3,200\.00/);
@@ -4587,4 +4590,119 @@ test('record documents: AI reads each upload, 7501 → customs entry, found valu
   await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/files/2/read`, { cookie, form: {} });
   assert.equal(calls.length, n + 1);   // read only — no second customs entry
   assert.equal(db.tables.customs_entries.filter((x) => x.entry_no === '9T2-0090981-5').length, 1);
+});
+
+test('weekly payments email: overdue + due this week, grouped by supplier, tables; nothing to send → null', () => {
+  const PM = require('../src/payments');
+  const r = (id, supplier, po, due, left, extra = {}) => ({ id, supplier, supplier_id: 's-' + supplier, po, describe: 'Balance 70%', due, fixed: true, left, status: 'due', ...extra });
+  const rows = [r(1, 'Level 10 Fashion', '310002', '2026-10-01', 4762.75), r(2, 'MGTT', '400002', '2026-10-12', 24062.4), r(3, 'MGTT', '400001', '2026-11-16', 3859.2),
+    r(4, 'Huanger', '800019', '2026-11-23', 2914.33), r(5, 'Paid Co', '1', '2026-11-01', 0, { status: 'paid' }), r(6, 'Later', '2', '2026-12-30', 999)];
+  const m = PM.weeklyDigest(rows, '2026-11-20', 'https://x');
+  assert.match(m.subject, /\$32,684\.35 overdue · \$2,914\.33 due this week/);
+  assert.match(m.html, /Supplier payments this week/);
+  assert.match(m.html, /MGTT<span[^>]*> · 2 payments · \$27,921\.60/);  // grouped by supplier with subtotal
+  assert.match(m.html, /50 days late/);
+  assert.match(m.html, /3 · oldest 50 days/);
+  assert.doesNotMatch(m.html, /Later|Paid Co/);
+  assert.match(m.text, /OVERDUE — \$32,684\.35/);
+  assert.equal(PM.weeklyDigest([rows[5]], '2026-11-20'), null);
+  const tg = PM.weeklyTelegram(rows, '2026-11-20');
+  assert.match(tg, /Overdue <b>\$32,684\.35<\/b> \(3\)/);
+  assert.match(tg, /<b>MGTT<\/b> · \$27,921\.60\n  PO 400002 · \$24,062\.40 · 39d late/);
+  assert.match(tg, /Due this week<\/b>\n<b>Huanger<\/b>\n  PO 800019 · \$2,914\.33 · Nov 23/);
+  assert.equal(PM.weeklyTelegram([rows[5]], '2026-11-20'), null);
+});
+
+test('freight costs: offers read from PDF / email, all-in compare with estimates, choose, charges catalog, actual invoices, overview', async (t) => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch;
+  const affinity = { company: 'Affinity Shipping (USA), Inc.', ref: 'REF261120-01', quoted_on: '2026-11-20', valid_until: '2099-11-30', pol: 'Ningbo', pod: 'Los Angeles', box: '40HQ', ocean_usd: 6200, carrier: 'Various', delivery_to: '15041 Bake Parkway Suite K, Irvine, CA 92618',
+    charges: [{ name: 'Documentation', amount: 75, unit: 'bl', when: 'always' }, { name: 'Pier Pass', amount: 81.26, unit: 'container', when: 'always' }, { name: 'Clean Truck Fee', amount: 20, unit: 'container', when: 'always' },
+      { name: 'ISF', amount: 35, unit: 'entry', when: 'always' }, { name: 'Customs Entry', amount: 85, unit: 'entry', when: 'always', note: 'first 5 lines incl.' }, { name: 'CPSC Fee', amount: 35, unit: 'line', when: 'always' },
+      { name: 'Drayage', amount: 650, unit: 'container', when: 'always' }, { name: 'Fuel Surcharge', amount: 20, unit: 'pct_drayage', when: 'always' }, { name: 'Chassis', amount: 55, unit: 'day', min: 2, when: 'always' },
+      { name: 'Prepull', amount: 135, unit: 'container', when: 'if_needed' }, { name: 'Chassis Split', amount: 100, unit: 'each', when: 'if_needed' }, { name: 'Driver Detention', amount: 85, unit: 'hour', free: 2, when: 'if_needed' }, { name: 'Drop Fee', amount: 400, unit: 'container', when: 'if_needed' }],
+    notes: 'Rate for reference only, subject to space' };
+  const fwdB = { company: 'Pacific Link Logistics', box: '40HQ', pol: 'Ningbo', ocean_usd: 5850, carrier: 'ONE', etd: '2099-12-04', eta: '2099-12-18', transit_days: 13, cutoff: '2099-12-01',
+    charges: [{ name: 'Pre-pull', amount: 150, unit: 'container', when: 'if_needed' }, { name: 'ISF', amount: 50, unit: 'entry', when: 'always' }, { name: 'Customs clearance', amount: 125, unit: 'entry', when: 'always' }, { name: 'CPSC', unit: 'line', when: 'at_cost' }, { name: 'Documentation', amount: 75, unit: 'bl', when: 'always' }] };
+  global.fetch = async (url, opts = {}) => {
+    if (String(url).includes('api.anthropic.com')) {
+      const b = JSON.parse(opts.body); const name = b.tool_choice?.name; const txt = JSON.stringify(b.messages);
+      let input = {};
+      if (name === 'read_freight_offer') input = /Carrier: ONE/.test(txt) ? fwdB : affinity;
+      else if (name === 'read_shipping_document') input = { doc_type: 'invoice', issuer: 'Affinity Shipping', doc_no: 'AF-7781', ocean_usd: 6100, charges: [{ name: 'Documentation', usd: 75 }, { name: 'Chassis usage 4 days', usd: 220 }, { name: 'Pre-pull', usd: 135 }, { name: 'Yard storage', usd: 110 }, { name: 'Weird fee', usd: 12 }], summary: 'invoice' };
+      else if (name === 'charge_note') input = { note: 'Trailer frame for the container. Per day.', aliases: ['chassis rental'] };
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'planned' });
+  const s = await db.insert('suppliers', { name: 'Kean' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '900001', product: 'Seat', qty: 1000, cbm: 68.4, ready_date: '2099-11-29', container_id: c.id });
+
+  // the charge list is created on first view, with internal notes
+  let r = await req(base, 'GET', '/admin/logistics/freight?tab=charges', { cookie });
+  assert.equal(r.status, 200);
+  assert.ok(db.tables.charge_types.length >= 18);
+  assert.match(r.text, /Chassis[\s\S]*min 2/);
+
+  // offers: a PDF and a pasted email
+  const fd = new FormData(); fd.append('file', new Blob([Buffer.from('%PDF-1.4 x')], { type: 'application/pdf' }), 'LULYBOO_OCEAN_FREIGHT.pdf'); fd.append('c', c.id); fd.append('box', '40HQ');
+  r = await fetch(`${base}/admin/logistics/freight/offers`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' });
+  assert.equal(r.status, 303);
+  await req(base, 'POST', '/admin/logistics/freight/offers', { cookie, form: { text: 'Carrier: ONE - $5850 ETD Dec 4 ETA Dec 18', c: c.id, box: '40HQ' } });
+  const offers = db.tables.freight_quotes;
+  assert.equal(offers.length, 2);
+  const A = offers.find((o) => /Affinity/.test(o.company)); const B = offers.find((o) => /Pacific/.test(o.company));
+  assert.equal(A.pol, 'CNNGB'); assert.equal(A.source, 'pdf'); assert.equal((A.files || []).length, 1); assert.equal(B.source, 'email');
+
+  // all-in: Affinity fully quoted; Pacific's missing charges estimated from your typical
+  const FC = require('../src/freight-costs');
+  const types = db.tables.charge_types.sort((a, b) => a.sort - b.sort);
+  const typ = FC.typicals(types, offers, []);
+  const aA = FC.allIn(A, types, typ, { lines: 3 }); const aB = FC.allIn(B, types, typ, { lines: 3 });
+  assert.equal(aA.total, 7491.26);   // 6200 + 75 + 35 + 85 + 105 + 81.26 + 20 + 650 + 130 + 110
+  assert.deepEqual(aA.missing, []);
+  assert.equal(aB.total, 7196.26);   // 5850 + 75 + 50 + 125 + 105 est + 81.26 est + 20 est + 650 est + 130 est + 110 est
+  assert.deepEqual(aB.missing.sort(), ['CPSC fee', 'Chassis', 'Clean Truck Fee', 'Drayage', 'Fuel surcharge', 'Pier Pass (TMF)'].sort());
+
+  let page = (await req(base, 'GET', `/admin/logistics/freight?c=${c.id}`, { cookie })).text;
+  assert.match(page, /Compare offers/);
+  assert.match(page, /\$7,196\.26/); assert.match(page, /\$7,491\.26/);
+  assert.match(page, /Pacific Link Logistics<\/b> <span class="lr-c ok">best all-in/);
+  assert.match(page, /is \$295 cheaper all-in<\/b> with a dated sailing \(ONE, Dec 4 → Dec 18\)/);
+  assert.match(page, /2 days after ready ✓/);
+  assert.match(page, /Ask for 6 missing/);
+  assert.match(page, /fc-mail-[^"]+" class="rp-modal hc-dlg" data-mail/);
+
+  // choose Pacific for this container
+  await req(base, 'POST', `/admin/logistics/freight/offers/${B.id}/choose`, { cookie, form: { c: c.id } });
+  assert.ok(db.tables.freight_quotes.find((o) => o.id === B.id).chosen);
+
+  // charges: edit, AI note, add a new one
+  const ch = types.find((x) => x.code === 'chassis');
+  await req(base, 'POST', `/admin/logistics/freight/charges/${ch.id}/note`, { cookie, form: {} });
+  assert.match(db.tables.charge_types.find((x) => x.id === ch.id).note, /Trailer frame/);
+  await req(base, 'POST', '/admin/logistics/freight/charges/new', { cookie, form: { name: 'Weird fee', grp: 'extra', unit: 'container', when: 'if_needed', aliases: 'weird fee' } });
+  assert.ok(db.tables.charge_types.some((x) => x.name === 'Weird fee'));
+
+  // an actual invoice: lines matched to charges, extras counted
+  const fd2 = new FormData(); fd2.append('file', new Blob([Buffer.from('%PDF-1.4 y')], { type: 'application/pdf' }), 'AF-7781.pdf'); fd2.append('c', c.id);
+  r = await fetch(`${base}/admin/logistics/freight/actuals`, { method: 'POST', headers: { cookie }, body: fd2, redirect: 'manual' });
+  assert.equal(db.tables.freight_actuals.length, 1);
+  const acts = await FC.actuals(db, db.tables.charge_types);
+  assert.deepEqual(acts[0].lines.map((l) => l.type || (l.ocean ? 'ocean' : null)), ['ocean', 'docs', 'chassis', 'prepull', 'storage', db.tables.charge_types.find((x) => x.name === 'Weird fee').code]);
+  page = (await req(base, 'GET', '/admin/logistics/freight?tab=actuals', { cookie })).text;
+  assert.match(page, /Affinity Shipping · Invoice AF-7781/); assert.match(page, /\$6,652\.00/);
+
+  // overview renders charts and the forwarder table
+  page = (await req(base, 'GET', '/admin/logistics/freight?tab=overview', { cookie })).text;
+  assert.match(page, /<svg viewBox/); assert.match(page, /Pacific Link Logistics/); assert.match(page, /Extras, last 6 months/);
+  // the Logistics tab and the RFQ carry the delivery address
+  assert.match(page, /href="\/admin\/logistics\/freight" class="lg-tab is-on"/);
+  const Q = require('../src/quotes');
+  assert.match(Q.rfqText({ container: c, box: { name: "40' HQ" }, lines: [], sups: {}, deliverTo: '15041 Bake Parkway' }).body, /Final delivery: +15041 Bake Parkway — please quote drayage/);
 });

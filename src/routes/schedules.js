@@ -20,7 +20,7 @@ const logisticsTabs = (active) => html`<div class="lg-top"><h1>Logistics</h1><na
   <a href="/admin/logistics/schedules" class="lg-tab${active === 'schedules' ? ' is-on' : ''}" ${active === 'schedules' ? raw('aria-current="page"') : ''}>Sailing schedules</a>
   <a href="/admin/logistics/forwarders" class="lg-tab${active === 'forwarders' ? ' is-on' : ''}" ${active === 'forwarders' ? raw('aria-current="page"') : ''}>Forwarders</a>
   <a href="/admin/logistics/customs" class="lg-tab${active === 'customs' ? ' is-on' : ''}" ${active === 'customs' ? raw('aria-current="page"') : ''}>Customs</a>
-  <a href="/admin/logistics/rates" class="lg-tab${active === 'rates' ? ' is-on' : ''}" ${active === 'rates' ? raw('aria-current="page"') : ''}>Rate history</a>
+  <a href="/admin/logistics/freight" class="lg-tab${active === 'rates' ? ' is-on' : ''}" ${active === 'rates' ? raw('aria-current="page"') : ''}>Freight costs</a>
   <a href="/admin/logistics" class="lg-tab${active === 'costs' ? ' is-on' : ''}" ${active === 'costs' ? raw('aria-current="page"') : ''}>Costs &amp; rates</a></nav></div>`;
 
 /** Compact "next departures" strip for the Logistics costs page. */

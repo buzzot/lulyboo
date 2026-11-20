@@ -31,7 +31,7 @@ const greetName = (f) => (f?.contact_name ? f.contact_name.trim() : `${f?.compan
  * Formal request-for-quotation text for one container. `{contact}` in the body is replaced per forwarder.
  * Returns { subject, body } — the code is appended to the subject when sending.
  */
-function rfqText({ container, box, lines, sups, sailing, contacts = false, both = false, by = '' }) {
+function rfqText({ container, box, lines, sups, sailing, contacts = false, both = false, by = '', deliverTo = '' }) {
   if (box && box.lcl) return lclText({ container, lines, sups, sailing, contacts, both, by });
   const sum = (k) => lines.reduce((a, l) => a + (Number(l[k]) || 0), 0);
   const has = (k) => lines.some((l) => Number(l[k]) > 0);
@@ -54,6 +54,7 @@ function rfqText({ container, box, lines, sups, sailing, contacts = false, both 
     `Equipment:          1 × ${box.name} (planned load ${n2(sum('cbm'))} m³)`,
     `Port of loading:    ${portName(container.port)} (${container.port}), China`,
     `Port of discharge:  ${dest}, USA`,
+    ...(deliverTo ? [`Final delivery:     ${deliverTo} — please quote drayage and every destination charge separately (documentation, ISF, customs entry, CPSC, Pier Pass, Clean Truck Fee, drayage, fuel surcharge, chassis per day, and charges that apply only if needed)`] : []),
     `Preferred sailing:  ${sailing ? [sailing.carrier, sailing.vessel ? `${sailing.vessel}${sailing.voyage ? ` ${sailing.voyage}` : ''}` : null, `ETD ${longDate(sailing.etd)}`].filter(Boolean).join(' · ') + ' — alternatives welcome' : 'first available sailing after the cargo-ready date'}`,
     `Cargo ready:        ${ready ? longDate(ready) : 'to be confirmed'}`,
     `Shippers:           ${nSup} supplier${nSup > 1 ? 's (cargo from more than one factory — please advise on CFS delivery or pick-ups)' : ''}`, '',

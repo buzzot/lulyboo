@@ -264,4 +264,5 @@ module.exports = function logisticsCosts(router, { db, G, AIG, needAi, friendlyA
   }));
 };
 module.exports.logRate = logRate;
+module.exports.ddSel = ddSel;
 module.exports.validity = validity;

@@ -27,6 +27,7 @@ const TOOL = {
     properties: {
       doc_type: { type: 'string', enum: Object.keys(TYPES), description: 'customs_entry = US Customs entry summary, CBP Form 7501. invoice = a freight forwarder / carrier invoice for transport charges. commercial_invoice = the supplier\'s invoice for the goods.' },
       doc_no: { type: 'string', description: 'The document\'s own number (invoice no., B/L no., entry no.)' },
+      issuer: { type: 'string', description: 'Company that issued the document (for invoices: the forwarder / trucker billing us)' },
       hbl_no: { type: 'string', description: 'House B/L number' }, mbl_no: { type: 'string', description: 'Master / ocean B/L number' },
       container_no: { type: 'string', description: '4 letters + 7 digits' }, container_type: { type: 'string' },
       carrier: { type: 'string' }, vessel: { type: 'string', description: 'Vessel name without voyage' }, voyage: { type: 'string' },
@@ -57,7 +58,7 @@ async function readFile(f) {
   const { result: r = {} } = await AI.callTool({ tool: TOOL, maxTokens: 1500, content: [block, { type: 'text', text: `Today is ${PL.today()}. File name: ${f.name}. Read this shipping document for an importer (goods from China to the US). Record only what it states; never guess numbers. Dates like 11/04/26 are US format (month/day/year).` }] });
   const type = TYPES[r.doc_type] ? r.doc_type : 'other';
   const facts = {};
-  for (const k of ['doc_no', 'hbl_no', 'mbl_no', 'container_no', 'container_type', 'carrier', 'vessel', 'voyage', 'pol', 'pod']) if (r[k] && String(r[k]).trim()) facts[k] = String(r[k]).trim().slice(0, 80);
+  for (const k of ['doc_no', 'issuer', 'hbl_no', 'mbl_no', 'container_no', 'container_type', 'carrier', 'vessel', 'voyage', 'pol', 'pod']) if (r[k] && String(r[k]).trim()) facts[k] = String(r[k]).trim().slice(0, 80);
   for (const k of ['hbl_no', 'mbl_no', 'container_no']) if (facts[k]) facts[k] = code(facts[k]);
   for (const k of ['atd', 'ata', 'eta', 'release_date', 'due_date']) { const d = r[k] ? PL.isoDay(r[k]) : null; if (d) facts[k] = d; }
   for (const k of ['ocean_usd', 'invoice_total_usd', 'goods_value_usd', 'cartons', 'pieces', 'gross_kg', 'volume_cbm']) { const n = num(r[k]); if (n != null && n > 0) facts[k] = n; }

@@ -246,6 +246,52 @@ async function makeReport(db, config, { from = null, send = false, by = 'schedul
 }
 
 // ── Reminders ───────────────────────────────────────────────────────────────
+const WEEKLY_EMAIL_DAY = 1; // Monday
+
+/** The weekly payments email (to the owner): overdue and due this week, grouped by supplier. Returns the email or null. */
+function weeklyDigest(rows, today, url = '') {
+  const E = require('./email');
+  const all = rows.filter((r) => r.status !== 'paid' && r.left > 0 && effectiveDue(r)).map((r) => ({ r, n: between(today, effectiveDue(r)) }));
+  const over = all.filter((x) => x.n < 0).sort((a, b) => a.n - b.n);
+  const week = all.filter((x) => x.n >= 0 && x.n <= 7).sort((a, b) => a.n - b.n);
+  if (!over.length && !week.length) return null;
+  const sum = (xs) => Math.round(xs.reduce((a, x) => a + x.r.left, 0) * 100) / 100;
+  const row = ({ r, n }) => ({ supplier: r.supplier, po: r.po, what: `${r.describe}${r.fixed ? '' : ' · est. date'}`, when: n < 0 ? `${-n} day${n === -1 ? '' : 's'} late` : n === 0 ? 'today' : `${PL.short(effectiveDue(r))}`, amount: r.left, href: `${url}/admin/orders/view?supplier=${r.supplier_id}&po=${encodeURIComponent(r.po)}` });
+  const oldest = over[0] ? -over[0].n : 0;
+  const tiles = [
+    { label: 'Overdue', value: usd(sum(over)), sub: over.length ? `${over.length} · oldest ${oldest} days` : 'nothing overdue', tone: over.length ? 'red' : 'green' },
+    { label: 'Due this week', value: usd(sum(week)), sub: `${week.length} payment${week.length === 1 ? '' : 's'} · to ${PL.short(PL.addDays(today, 7))}`, tone: 'amber' },
+    { label: 'Total', value: usd(sum([...over, ...week])), sub: `${over.length + week.length} payments`, tone: 'grey' },
+  ];
+  const subject = `[Payments] Week of ${PL.short(today)}: ${usd(sum(over))} overdue · ${usd(sum(week))} due this week`;
+  return { subject, ...E.paymentsDigest({ title: 'Supplier payments this week', intro: `Monday summary — all USD. Daily reminders with Mark paid stay on Telegram.`, tiles,
+    sections: [{ title: 'Overdue', tone: 'red', total: sum(over), rows: over.map(row) }, { title: 'Due this week', tone: 'amber', total: sum(week), rows: week.map(row) }],
+    button: 'Open Payments', link: `${url}/admin/orders/payments`, preheader: subject }) };
+}
+/** The weekly Telegram summary (HTML): totals, then overdue and due this week grouped by supplier. Null when nothing is due. */
+function weeklyTelegram(rows, today) {
+  const E = require('./telegram').escapeHtml;
+  const all = rows.filter((r) => r.status !== 'paid' && r.left > 0 && effectiveDue(r)).map((r) => ({ r, n: between(today, effectiveDue(r)) }));
+  const over = all.filter((x) => x.n < 0).sort((a, b) => a.n - b.n);
+  const week = all.filter((x) => x.n >= 0 && x.n <= 7).sort((a, b) => a.n - b.n);
+  if (!over.length && !week.length) return null;
+  const sum = (xs) => xs.reduce((a, x) => a + x.r.left, 0);
+  const block = (xs, late) => {
+    const by = new Map(); for (const x of xs) by.set(x.r.supplier, [...(by.get(x.r.supplier) || []), x]);
+    return [...by].map(([sup, list]) => `<b>${E(sup)}</b>${list.length > 1 ? ` · ${usd(sum(list))}` : ''}\n${list.map(({ r, n }) => `  PO ${E(r.po)} · ${usd(r.left)} · ${late ? `${-n}d late` : n === 0 ? 'today' : E(PL.short(effectiveDue(r)))}`).join('\n')}`).join('\n');
+  };
+  let t = `💵 <b>Supplier payments this week</b>\n${over.length ? `⚠️ Overdue <b>${usd(sum(over))}</b> (${over.length}) · ` : ''}Due this week <b>${usd(sum(week))}</b> (${week.length})`;
+  if (over.length) t += `\n\n⚠️ <b>Overdue</b>\n${block(over, true)}`;
+  if (week.length) t += `\n\n📅 <b>Due this week</b>\n${block(week, false)}`;
+  return t.length > 3900 ? `${t.slice(0, 3850).replace(/\n[^\n]*$/, '')}\n… and more in the portal` : t;
+}
+async function weeklyEmail(config, rows, today, url) {
+  const m = weeklyDigest(rows, today, url); if (!m) return false;
+  const P = require('./projects'); const E = require('./email');
+  const to = P.ownerEmails ? P.ownerEmails() : []; if (!to.length) return false;
+  await E.sendEmail(config, { to, subject: m.subject, text: m.text, html: m.html }).catch((e) => console.error('Weekly payments email failed:', e.message));
+  return true;
+}
 async function telegram(db, text, buttons) {
   const tg = require('./telegram');
   const st = (await db.list('settings', { limit: 1 }).catch(() => []))[0];
@@ -268,17 +314,10 @@ async function runReminders({ db, config }) {
       const days = st.payment_remind_days ?? DEF.remind_days;
       const due = rows.filter((r) => r.status !== 'paid' && r.left > 0 && effectiveDue(r)).map((r) => ({ r, d: effectiveDue(r), n: between(today, effectiveDue(r)) }))
         .filter((x) => x.n < 0 || x.n === 0 || x.n === days).sort((a, b) => a.n - b.n);
-      for (const { r, n } of due) {
-        const head = n < 0 ? `⚠️ <b>Overdue ${-n} day${n === -1 ? '' : 's'}</b>` : n === 0 ? '💵 <b>Payment due today</b>' : `💵 <b>Payment due in ${n} days</b>`;
-        if (st.payment_telegram !== false) await telegram(db, `${head}\n${E(r.supplier)} · PO ${E(r.po)}\n${E(r.describe)} — <b>${usd(r.left)}</b> · due ${E(PL.short(effectiveDue(r)))}${r.fixed ? '' : ' (est.)'}`,
-          [[{ text: '✓ Mark paid', data: `pp:${r.id}` }, { text: 'Snooze 1 day', data: `pz:${r.id}` }], [{ text: 'Open PO ↗', url: `${url}/admin/orders/view?supplier=${r.supplier_id}&po=${encodeURIComponent(r.po)}` }]]);
-      }
-      if (due.length && st.payment_email !== false) {
-        const P = require('./projects');
-        await P.notifyOwner(config, `[Payments] ${due.length} supplier payment${due.length === 1 ? '' : 's'} to make — ${usd(due.reduce((a, x) => a + x.r.left, 0))}`,
-          due.map(({ r, n }) => `${n < 0 ? `OVERDUE ${-n}d` : n === 0 ? 'TODAY' : `in ${n}d`} · ${r.supplier} · PO ${r.po} · ${r.describe} · ${usd(r.left)}`).join('\n'),
-          { title: 'Supplier payments', intro: due.map(({ r, n }) => `${n < 0 ? `Overdue ${-n} days` : n === 0 ? 'Due today' : `Due in ${n} days`}: ${r.supplier}, PO ${r.po}, ${usd(r.left)}`).join(' · '), button: 'Open Payments', link: `${url}/admin/orders/payments` }).catch(() => null);
-      }
+      // Telegram: one summary a week (Monday), same day as the email
+      if (st.payment_telegram !== false && new Date(today + 'T00:00:00Z').getUTCDay() === WEEKLY_EMAIL_DAY) { const t = weeklyTelegram(rows, today); if (t) await telegram(db, t, [[{ text: 'Open Payments ↗', url: `${url}/admin/orders/payments` }]]); }
+      // email: once a week (Monday) — everything overdue + due in the next 7 days, as tables
+      if (st.payment_email !== false && new Date(today + 'T00:00:00Z').getUTCDay() === WEEKLY_EMAIL_DAY) await weeklyEmail(config, rows, today, url);
     }
     // docs to the broker: N days before the ETA, until sent
     const bd = st.broker_remind_days ?? DEF.broker_days;
@@ -373,4 +412,4 @@ async function brokerEmail(db) {
   return e ? String(e.from_email).replace(/^.*<([^>]+)>.*$/, '$1').trim() : '';
 }
 
-module.exports = { TRIGGERS, DEF, parseTerms, readTerms, termsText, describe, load, sync, resolve, list, setTerms, markPaid, effectiveDue, weekOf, reportPdf, makeReport, runReminders, handleCallback, brokerDocs, brokerEmail, usd, between, milestones };
+module.exports = { weeklyDigest, weeklyEmail, weeklyTelegram, TRIGGERS, DEF, parseTerms, readTerms, termsText, describe, load, sync, resolve, list, setTerms, markPaid, effectiveDue, weekOf, reportPdf, makeReport, runReminders, handleCallback, brokerDocs, brokerEmail, usd, between, milestones };

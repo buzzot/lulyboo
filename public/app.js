@@ -2919,12 +2919,14 @@
     dlg.addEventListener('change', function (e) { if (e.target.name === 'code') label(); }); label();
     if (dlg.hasAttribute('data-autoopen') && dlg.showModal) { try { dlg.showModal(); } catch (e) { /* ignore */ } }
   }
-  var m = document.getElementById('hts-mail'); if (!m) return;
-  var val = function (k) { var x = m.querySelector('[data-hm="' + k + '"]'); return x ? x.value : ''; };
-  m.addEventListener('click', function (e) {
-    if (e.target.closest('[data-hm-open]')) location.href = 'mailto:' + encodeURIComponent(val('to')) + '?subject=' + encodeURIComponent(val('subject')) + '&body=' + encodeURIComponent(val('body'));
-    var c = e.target.closest('[data-hm-copy]');
-    if (c && navigator.clipboard) navigator.clipboard.writeText('Subject: ' + val('subject') + '\n\n' + val('body')).then(function () { c.textContent = 'Copied ✓'; setTimeout(function () { c.textContent = 'Copy'; }, 1500); });
+  // email drafts (HTS broker email, freight "ask for missing charges"): open in the mail app or copy
+  document.querySelectorAll('#hts-mail, dialog[data-mail]').forEach(function (m) {
+    var val = function (k) { var x = m.querySelector('[data-hm="' + k + '"]'); return x ? x.value : ''; };
+    m.addEventListener('click', function (e) {
+      if (e.target.closest('[data-hm-open]')) location.href = 'mailto:' + encodeURIComponent(val('to')) + '?subject=' + encodeURIComponent(val('subject')) + '&body=' + encodeURIComponent(val('body'));
+      var c = e.target.closest('[data-hm-copy]');
+      if (c && navigator.clipboard) navigator.clipboard.writeText('Subject: ' + val('subject') + '\n\n' + val('body')).then(function () { c.textContent = 'Copied ✓'; setTimeout(function () { c.textContent = 'Copy'; }, 1500); });
+    });
   });
 })();
 
