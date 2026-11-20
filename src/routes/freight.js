@@ -183,7 +183,7 @@ module.exports = function freightRoutes(router, { db, config }) {
         <tr class="tot"><td>All-in per container</td>${cols.map((x) => cell(x, (y) => html`<span class="m">${usd(y.a.total)}</span>${y.a.unknown.length ? html`<div class="fc-miss">+ ${y.a.unknown.length} unknown</div>` : ''}`))}</tr>
         ${ci.cbm ? html`<tr><td class="k">per CBM · vs typical</td>${cols.map((x) => cell(x, (y) => html`${usd(y.a.total / ci.cbm)}${!y.typical && tyA.total ? html` · <span class="${y.a.total <= tyA.total ? 'fc-dn' : 'fc-up'}">${y.a.total <= tyA.total ? '−' : '+'}${Math.abs(Math.round(((y.a.total - tyA.total) / tyA.total) * 1000) / 10)}%</span>` : ''}`))}</tr>`
           : html`<tr><td class="k">vs typical</td>${cols.map((x) => cell(x, (y) => (y.typical || !tyA.total ? '' : html`<span class="${y.a.total <= tyA.total ? 'fc-dn' : 'fc-up'}">${y.a.total <= tyA.total ? '−' : '+'}${usd(Math.abs(y.a.total - tyA.total), 0)}</span>`)))}</tr>`}
-        <tr class="fc-acts"><td></td>${cols.map((x) => cell(x, (y) => (y.typical ? '' : html`${(y.o.files || []).length ? html`<a class="btn ghost small" href="${BASE}/offers/${y.o.id}/files/0" data-preview="${BASE}/offers/${y.o.id}/files/0?inline=1" data-type="doc">Open</a>` : ''}
+        <tr class="fc-acts"><td></td>${cols.map((x) => cell(x, (y) => (y.typical ? '' : html`${(y.o.files || []).length ? html`<a class="btn ghost small" href="${BASE}/offers/${y.o.id}/files/0" data-preview="${BASE}/offers/${y.o.id}/files/0?inline=1" data-type="${/image\//.test(y.o.files[0].type || '') ? 'image' : 'doc'}" data-dl="${BASE}/offers/${y.o.id}/files/0">Open</a>` : ''}
           ${y.a.missing.length ? html`<button type="button" class="btn ghost small" data-open-dialog="fc-mail-${y.o.id}">Ask for ${y.a.missing.length} missing</button>` : ''}
           <form method="post" action="${BASE}/offers/${y.o.id}/choose" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><button class="btn small ${y.o.chosen ? 'ghost' : ''}" ${y.o.chosen ? raw('disabled') : ''}>${y.o.chosen ? 'Chosen' : 'Choose'}</button></form>
           <form method="post" action="${BASE}/offers/${y.o.id}/exclude" class="inline"><button class="link small" title="Leave this offer out of comparisons">Hide</button></form>`)))}</tr>
@@ -251,7 +251,7 @@ module.exports = function freightRoutes(router, { db, config }) {
     return html`<section class="card fc"><div class="fc-h"><h2>Actual costs</h2><span class="sub">freight invoices, split into your charges · from record documents and invoices added here</span>
         <span class="r"><button type="button" class="btn small" data-open-dialog="fa-add">+ Add invoice</button></span></div>
       ${groups.length ? groups.map((g) => html`<div class="fa-c"><div class="fa-h"><b>${g.c ? html`<a href="/admin/orders/shipments/${g.cid}">${SN.shipName(g.c)}</a>` : 'Shipment'}</b>${g.c?.box ? html` <span class="lr-m">${g.c.box}</span>` : ''}<span class="sub">${short(g.date)}</span><span class="r fa-t">${usd(g.total)}</span></div>
-          ${g.list.map((a) => html`<div class="fa-i"><div class="sub">${[a.company, a.invoice_no ? `Invoice ${a.invoice_no}` : '', a.src === 'record' ? 'from the record' : 'added here'].filter(Boolean).join(' · ')}${a.id ? html` · <form method="post" action="${BASE}/actuals/${a.id}/delete" class="inline" data-confirm="Remove this invoice?"><button class="link small">remove</button></form>` : ''}</div>
+          ${g.list.map((a) => html`<div class="fa-i"><div class="sub">${[a.company, a.invoice_no ? `Invoice ${a.invoice_no}` : '', a.src === 'record' ? 'from the record' : 'added here'].filter(Boolean).join(' · ')}${a.id && a.file ? html` · <a href="${BASE}/actuals/${a.id}/files/0" data-preview="${BASE}/actuals/${a.id}/files/0?inline=1" data-type="${/image\//.test(a.file.type || '') ? 'image' : 'doc'}" data-dl="${BASE}/actuals/${a.id}/files/0">Open</a>` : a.src === 'record' && a.container_id ? html` · <a href="/admin/orders/shipments/${a.container_id}#docs">Open in record</a>` : ''}${a.id ? html` · <form method="post" action="${BASE}/actuals/${a.id}/delete" class="inline" data-confirm="Remove this invoice?"><button class="link small">remove</button></form>` : ''}</div>
             <div class="fa-ls">${a.lines.map((l) => html`<span class="fa-l ${l.ocean ? 'oc' : l.type ? '' : 'un'}" title="${l.type ? tName(l.type) : l.ocean ? 'Ocean freight' : 'Not in your charges'}">${l.name} <b>${usd(l.usd)}</b>${!l.ocean && !l.type ? html` <a href="${BASE}?tab=charges&add=${encodeURIComponent(l.name)}#new">+ add</a>` : ''}</span>`)}</div></div>`)}</div>`)
         : html`<p class="sub fc-empty">No freight invoices yet. Invoices dropped on a record-only shipment are read automatically; add others here.</p>`}
     </section>
@@ -323,13 +323,24 @@ module.exports = function freightRoutes(router, { db, config }) {
     res.redirect(`${BASE}${c ? `?c=${c.id}` : `?box=${row.box}`}`);
   }));
 
-  router.get(`${BASE}/offers/:id/files/:i`, G(async (req, res) => {
-    const o = await db.get('freight_quotes', req.params.id).catch(() => null); const x = (o?.files || [])[Number(req.params.i)];
+  // a stored file, shown in the page's preview (same-origin frame allowed, like the other document links) or downloaded
+  async function sendFile(req, res, x) {
     if (!x) throw new HttpError(404, 'File not found');
     const buf = await db.docs.download(x.path);
-    res.setHeader('Content-Type', x.type || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `${req.query.inline ? 'inline' : 'attachment'}; filename="${String(x.name).replace(/[^\w.\- ]+/g, '_')}"`);
+    const type = x.type || (/\.pdf$/i.test(x.name) ? 'application/pdf' : 'application/octet-stream');
+    const inline = !!req.query.inline && /pdf|image\//.test(type);
+    const head = { 'Content-Type': type, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${String(x.name).replace(/[^\w.\- ]+/g, '_')}"`, 'Cache-Control': 'private, max-age=300' };
+    if (inline) Object.assign(head, { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': type === 'application/pdf' ? "frame-ancestors 'self'" : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'" });
+    for (const [k, v] of Object.entries(head)) res.setHeader(k, v);
     res.end(buf);
+  }
+  router.get(`${BASE}/offers/:id/files/:i`, G(async (req, res) => {
+    const o = await db.get('freight_quotes', req.params.id).catch(() => null);
+    await sendFile(req, res, (o?.files || [])[Number(req.params.i)]);
+  }));
+  router.get(`${BASE}/actuals/:id/files/:i`, G(async (req, res) => {
+    const a = await db.get('freight_actuals', req.params.id).catch(() => null);
+    await sendFile(req, res, (a?.files || [])[Number(req.params.i)]);
   }));
 
   router.post(`${BASE}/offers/:id/choose`, G(async (req, res) => {

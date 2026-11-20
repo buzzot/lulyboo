@@ -4697,6 +4697,12 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   assert.deepEqual(acts[0].lines.map((l) => l.type || (l.ocean ? 'ocean' : null)), ['ocean', 'docs', 'chassis', 'prepull', 'storage', db.tables.charge_types.find((x) => x.name === 'Weird fee').code]);
   page = (await req(base, 'GET', '/admin/logistics/freight?tab=actuals', { cookie })).text;
   assert.match(page, /Affinity Shipping · Invoice AF-7781/); assert.match(page, /\$6,652\.00/);
+  // file previews may be shown inside the page (same origin), like the other document links
+  for (const u of [`/admin/logistics/freight/offers/${A.id}/files/0?inline=1`, `/admin/logistics/freight/actuals/${db.tables.freight_actuals[0].id}/files/0?inline=1`]) {
+    const fr = await fetch(base + u, { headers: { cookie } });
+    assert.equal(fr.status, 200, u); assert.equal(fr.headers.get('x-frame-options'), 'SAMEORIGIN'); assert.match(fr.headers.get('content-security-policy'), /frame-ancestors 'self'/);
+  }
+  assert.match(page, /actuals\/[^/]+\/files\/0\?inline=1/);
 
   // overview renders charts and the forwarder table
   page = (await req(base, 'GET', '/admin/logistics/freight?tab=overview', { cookie })).text;

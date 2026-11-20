@@ -180,7 +180,7 @@ async function actuals(db, types) {
   }
   for (const a of await db.list('freight_actuals', { order: 'invoice_date.desc' }).catch(() => [])) {
     const c = conts.find((y) => y.id === a.container_id);
-    out.push({ id: a.id, container_id: a.container_id, box: a.box || c?.box || null, label: c ? SN.shipName(c) : (a.label || 'Shipment'), company: a.company, invoice_no: a.invoice_no, date: a.invoice_date, lines: a.lines || [], src: 'upload', name: (a.files || [])[0]?.name || '' });
+    out.push({ id: a.id, container_id: a.container_id, box: a.box || c?.box || null, label: c ? SN.shipName(c) : (a.label || 'Shipment'), company: a.company, invoice_no: a.invoice_no, date: a.invoice_date, lines: a.lines || [], src: 'upload', name: (a.files || [])[0]?.name || '', file: (a.files || [])[0] || null });
   }
   for (const a of out) {
     for (const l of a.lines) { if (l.ocean || /^ocean|freight charge|^o f\b|sea freight/i.test(l.name)) { l.ocean = true; l.type = null; } else l.type = matchType(types, l.name)?.code || null; }
