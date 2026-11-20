@@ -343,7 +343,8 @@
         Array.prototype.forEach.call(MAXN === 1 ? Array.prototype.slice.call(files, 0, 1) : files, function (f) {
           if (/^image\/(png|jpeg)$/.test(f.type) && /^image\.(png|jpe?g)$/i.test(f.name)) f = new File([f], 'pasted-image-' + stamp() + (f.type === 'image/png' ? '.png' : '.jpg'), { type: f.type, lastModified: Date.now() });
           var ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-          if (allowed.length && allowed.indexOf(ext) < 0) { skipped.push(f.name + ' (type not allowed)'); return; }
+          var typeOk = allowed.some(function (a) { return a.indexOf('/') > 0 && (a === f.type || (/\/\*$/.test(a) && f.type.indexOf(a.slice(0, -1)) === 0)); });
+          if (allowed.length && allowed.indexOf(ext) < 0 && !typeOk) { skipped.push(f.name + ' (type not allowed)'); return; }
           if (f.size > MAXB) { skipped.push(f.name + ' (over 20 MB)'); return; }
           if (have[key(f)]) return;
           if (dt.files.length >= MAXN) { skipped.push(f.name + ' (limit ' + MAXN + ' files)'); return; }

@@ -201,7 +201,7 @@ module.exports = function freightRoutes(router, { db, config }) {
     ${shown.map(mailDlg)}
     <dialog id="fc-add" class="rp-modal lr-dlg" aria-labelledby="fc-add-t"><form method="post" action="${BASE}/offers" enctype="multipart/form-data" data-busy>
       <h2 id="fc-add-t">Add an offer</h2><p class="sub">AI reads the ocean rate, schedule, validity and every charge line. Nothing is sent.</p>
-      <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple accept=".pdf,image/*" title="" aria-label="Offer file"><span class="dz-main" data-main>Drop the PDF or screenshot here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">quotation PDF · email screenshot</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+      <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" title="" aria-label="Offer file"><span class="dz-main" data-main>Drop the PDF or screenshot here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">quotation PDF · email screenshot</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
       <label class="fc-f"><span class="lbl">…or paste the email text</span><textarea name="text" rows="5" placeholder="Carrier: ONE - $5850 · ETD Dec 4 · ETA Dec 18 · ISF $50 …"></textarea></label>
       <div class="lr-g"><label><span class="lbl">Forwarder</span>${ddSel('forwarder', '', fwOpts)}</label><label><span class="lbl">For</span>${ddSel('c', c?.id || '', contOpts)}</label></div>
       <input type="hidden" name="box" value="${box}">
@@ -262,7 +262,7 @@ module.exports = function freightRoutes(router, { db, config }) {
     </section>
     <dialog id="fa-add" class="rp-modal lr-dlg" aria-labelledby="fa-add-t"><form method="post" action="${BASE}/actuals" enctype="multipart/form-data" data-busy><h2 id="fa-add-t">Add a freight invoice</h2><p class="sub">AI reads the charge lines and matches them to your charges.</p>
       <label><span class="lbl">Shipment</span>${ddSel('c', '', contOpts)}</label>
-      <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" accept=".pdf,image/*" required title="" aria-label="Invoice file"><span class="dz-main" data-main>Drop the invoice here, paste (⌘V) or <u>choose</u></span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+      <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp" required title="" aria-label="Invoice file"><span class="dz-main" data-main>Drop the invoice here, paste (⌘V) or <u>choose</u></span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
       <div class="lr-acts"><span class="r"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn" ${AI.enabled() ? '' : raw('disabled')}>Read invoice</button></span></div></form></dialog>`;
   }
 
