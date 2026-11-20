@@ -38,7 +38,7 @@ function deny(role, method, path) {
   if (/^\/admin\/(users|settings|api-log)(\/|$)/.test(path) || /^\/admin\/crm\/telegram\//.test(path)) return 'Only an Admin can open this page.';
   if (/^\/admin\/audit(\/|$)/.test(path)) return can(role, 'audit') ? null : 'Only an Admin or Director can view the audit log.';
   if (/^\/admin\/(suppliers|products|requests|documents|projects|samples)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
-  if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) && !/^\/admin\/logistics\/(schedules|planning|forwarders)(\/|\.|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
+  if (!get && role === 'manager' && (/^\/admin\/(pricing|logistics)(\/|$)/.test(path) && !/^\/admin\/logistics\/(schedules|planning|forwarders|freight\/charges\/[^/]+\/explain)(\/|\.|$)/.test(path) || /^\/admin\/products\/[^/]+\/duty\//.test(path))) return 'Managers can view pricing and logistics but not change them.';
   return null;
 }
 
@@ -99,7 +99,7 @@ const LABELS = [
   [/^\/admin\/suppliers\/([^/]+)\/bank$/, 'Changed bank details'],
   [/^\/admin\/categories/, 'Changed categories'], [/^\/admin\/documents\/([^/]+)\/delete$/, 'Deleted document'],
 ];
-const NOISY = /^\/admin\/view-as|\/import\/(image|source|ai-describe|cancel)$|\/ai-|^\/admin\/(login|logout|forgot)|^\/admin\/invite\/|^\/admin\/users|^\/admin\/profile|\/ai\//;
+const NOISY = /\/explain$|^\/admin\/view-as|\/import\/(image|source|ai-describe|cancel)$|\/ai-|^\/admin\/(login|logout|forgot)|^\/admin\/invite\/|^\/admin\/users|^\/admin\/profile|\/ai\//;
 function autoLabel(path) {
   if (NOISY.test(path)) return null;
   for (const [re, label] of LABELS) if (re.test(path)) return label;

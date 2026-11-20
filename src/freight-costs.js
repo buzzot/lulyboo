@@ -160,6 +160,52 @@ async function readOffer({ files = [], text = '', box = null }) {
   };
 }
 
+/** Store one read offer (from the page or an email) in freight_quotes. Returns the row. */
+async function saveOffer(db, o, { files = [], container = null, forwarder = null, source = 'email', types = null } = {}) {
+  const stored = [];
+  for (const u of files) {
+    if (!u.buffer?.length || u.buffer.length > 25 * 1024 * 1024) continue;
+    const name = String(u.name || 'offer').slice(0, 200);
+    const path = `freight-offers/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${name.replace(/[^\w.\-]+/g, '_').slice(-80)}`;
+    try { await db.docs.upload(path, u.buffer, u.type || 'application/octet-stream'); stored.push({ name, path, type: u.type || '' }); } catch { /* keep going */ }
+  }
+  const ty = types || (await catalog(db)).rows;
+  const quoted = allIn(o, ty, {}, { lines: 3 }).rows.filter((r) => r.how === 'quoted').reduce((a, r) => a + (r.amount || 0), 0);
+  const box = container?.box || o.box;
+  return db.insert('freight_quotes', {
+    quote_id: null, container_id: container?.id || null, forwarder_id: forwarder?.id || null, company: forwarder?.company || o.company || 'Forwarder', code: o.ref, quoted_on: o.quoted_on,
+    pol: o.pol || container?.port || 'CNNGB', pod: 'LALB', box, currency: 'USD', ocean_usd: o.ocean_usd, total_usd: o.ocean_usd != null ? r2(o.ocean_usd + quoted) : null,
+    charges: o.charges, carrier: o.carrier, etd: o.etd, eta: o.eta, transit_days: o.transit_days, valid_until: o.valid_until,
+    source, ref: o.ref, cutoff: o.cutoff, delivery_to: o.delivery_to,
+    notes: [o.notes, !o.pol && o.pol_text ? `Port of loading: ${o.pol_text}` : ''].filter(Boolean).join(' · ') || null, files: stored, created_at: now(), updated_at: now(),
+  });
+}
+
+/**
+ * A quote forwarded (or sent) to the quotes address without an LBQ code: read it as an offer.
+ * The forwarder is matched by an email address in the message (the original sender of a forwarded email too).
+ */
+async function handleOfferEmail({ db, config, from, subject, text, files = [] }) {
+  if (!AI.enabled()) return { offer: false, reason: 'AI off' };
+  const body = [subject ? `Subject: ${subject}` : '', String(text || '')].filter(Boolean).join('\n\n');
+  const readable = files.filter((f) => blockOf(f));
+  const o = await readOffer({ files: readable, text: body });
+  if (o.ocean_usd == null && !(o.charges || []).length) return { offer: false, reason: 'no rate found' };
+  const fwds = await db.list('forwarders').catch(() => []);
+  const addrs = [...new Set(`${from} ${text}`.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) || [])].filter((a) => !/lulyboo/.test(a));
+  const dom = (a) => a.split('@')[1];
+  const fw = fwds.find((f) => addrs.includes(String(f.email || '').toLowerCase())) || fwds.find((f) => f.email && addrs.some((a) => dom(a) === dom(String(f.email).toLowerCase())))
+    || fwds.find((f) => o.company && String(f.company).toLowerCase().split(/\s+/)[0] === String(o.company).toLowerCase().split(/\s+/)[0]) || null;
+  const row = await saveOffer(db, o, { files, forwarder: fw, source: 'email' });
+  try {
+    const P = require('./projects');
+    const link = `${config.publicUrl || ''}/admin/logistics/freight?box=${row.box}`;
+    const what = `${row.company}: ${row.ocean_usd != null ? `$${Number(row.ocean_usd).toLocaleString('en-US')}` : 'no ocean rate'} ${row.box} · ${(o.charges || []).length} charge lines${o.valid_until ? ` · valid to ${o.valid_until}` : ''}`;
+    await P.notifyOwner(config, `[Freight offer] ${what}`, `${what}\n\nCompare: ${link}`, { title: 'New freight offer', intro: what, button: 'Compare offers', link }).catch(() => null);
+  } catch { /* best effort */ }
+  return { offer: true, id: row.id, company: row.company };
+}
+
 // ── Actual costs (freight invoices) ─────────────────────────────────────────
 /**
  * Actual cost lines per container: freight invoices read on record-only shipments + invoices added on the
@@ -259,7 +305,7 @@ function typicalOffer(offers, box) {
 }
 
 // ── AI: internal note draft and market price ──────────────────────────────────
-const NOTE_TOOL = { name: 'charge_note', description: 'Explain a US import logistics charge for an internal team.', input_schema: { type: 'object', properties: { note: { type: 'string', description: '3–5 short sentences: what it is, who charges it, when it applies, how to keep it low. Plain English, no marketing.' }, aliases: { type: 'array', items: { type: 'string' }, description: 'Other names it appears under on quotes and invoices' } }, required: ['note'] } };
+const NOTE_TOOL = { name: 'charge_note', description: 'Explain a US import logistics charge for an internal team.', input_schema: { type: 'object', properties: { note: { type: 'string', description: '3–4 short sentences in simple everyday English for someone new to importing: what it actually is, who charges it, when it applies (always or only in some situations), and how to keep it low. No jargon without explaining it, no marketing.' }, aliases: { type: 'array', items: { type: 'string' }, description: 'Other names it appears under on quotes and invoices' } }, required: ['note'] } };
 async function draftNote(t) {
   const { result } = await AI.callTool({ tool: NOTE_TOOL, maxTokens: 600, content: `Charge: ${t.name} (${UNITS[t.unit] || t.unit}, ${WHEN[t.when_applies] || ''}). Context: Lulyboo imports baby / home products in 20' / 40' containers from China to Los Angeles / Long Beach, trucked to a warehouse in Irvine, CA.` });
   return { note: String(result.note || '').slice(0, 1200), aliases: (result.aliases || []).map((a) => String(a).toLowerCase().slice(0, 40)).slice(0, 8) };
@@ -349,4 +395,4 @@ function forwarderTable(offers, acts, types, typ, conts, box) {
     replyMed: median(f.reply) })).sort((a, b) => b.quotes - a.quotes);
 }
 
-module.exports = { GROUPS, UNITS, WHEN, DEFAULTS, DEFAULT_ADDRESS, DOOR_DAYS, OFFER_TOOL, NOTE_TOOL, catalog, matchType, normCharge, readOffer, portCode, actuals, typicals, allIn, typicalOffer, draftNote, marketCheck, lastMonths, monthlyAllIn, oceanByForwarder, extrasTop, forwarderTable, median, usd, r2, missingTable };
+module.exports = { saveOffer, handleOfferEmail, GROUPS, UNITS, WHEN, DEFAULTS, DEFAULT_ADDRESS, DOOR_DAYS, OFFER_TOOL, NOTE_TOOL, catalog, matchType, normCharge, readOffer, portCode, actuals, typicals, allIn, typicalOffer, draftNote, marketCheck, lastMonths, monthlyAllIn, oceanByForwarder, extrasTop, forwarderTable, median, usd, r2, missingTable };

@@ -492,6 +492,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     if (toList.some((x) => /^quotes@/i.test(x.trim())) || QT.CODE_RE.test(subject)) {
       const out = await QT.handleQuoteEmail({ db, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() });
       if (out.matched) return res.json({ ok: true, quote: true, ...out });
+      // any other quote sent / forwarded to quotes@… → a freight offer (Logistics → Freight costs → Compare offers)
+      if (toList.some((x) => /^quotes@/i.test(x.trim()))) {
+        try { const o = await require('../freight-costs').handleOfferEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() }); return res.json({ ok: true, ...o }); }
+        catch (err) { const P = require('../projects'); await P.notifyOwner(config, `[Freight offer] Could not read an email from ${from}`, `${subject}\n${err.message}`).catch(() => null); return res.json({ ok: true, offer: false, error: err.message }); }
+      }
     }
     // Development threads: matched by the code in the subject, e.g. [Lulyboo DP-1001-9D6A].
     const DE = require('../dev-email');

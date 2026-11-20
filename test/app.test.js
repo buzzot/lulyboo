@@ -4700,6 +4700,14 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   assert.match(db.tables.charge_types.find((x) => x.id === ch.id).note, /Trailer frame/);
   await req(base, 'POST', '/admin/logistics/freight/charges/new', { cookie, form: { name: 'Weird fee', grp: 'extra', unit: 'container', when: 'if_needed', aliases: 'weird fee' } });
   assert.ok(db.tables.charge_types.some((x) => x.name === 'Weird fee'));
+  // hover explanation: a charge without a note gets one from AI on first hover, saved for next time
+  const wf = db.tables.charge_types.find((x) => x.name === 'Weird fee');
+  const ex = await (await fetch(`${base}/admin/logistics/freight/charges/${wf.id}/explain`, { method: 'POST', headers: { cookie } })).json();
+  assert.equal(ex.saved, true); assert.match(db.tables.charge_types.find((x) => x.id === wf.id).note, /Trailer frame/);
+  const ex2 = await (await fetch(`${base}/admin/logistics/freight/charges/${wf.id}/explain`, { method: 'POST', headers: { cookie } })).json();
+  assert.equal(ex2.ai, undefined); // saved note, no second AI call
+  page = (await req(base, 'GET', `/admin/logistics/freight?c=${c.id}`, { cookie })).text;
+  assert.match(page, /class="fc-tip" tabindex="0" data-fc-tip="[^"]+"\s*>Documentation<span class="fc-tip-box" hidden><b>Documentation<\/b>[\s\S]*?bill of lading/);
 
   // an actual invoice: lines matched to charges, extras counted
   const fd2 = new FormData(); fd2.append('file', new Blob([Buffer.from('%PDF-1.4 y')], { type: 'application/pdf' }), 'AF-7781.pdf'); fd2.append('c', c.id);
@@ -4723,4 +4731,16 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   assert.match(page, /href="\/admin\/logistics\/freight" class="lg-tab is-on"/);
   const Q = require('../src/quotes');
   assert.match(Q.rfqText({ container: c, box: { name: "40' HQ" }, lines: [], sups: {}, deliverTo: '15041 Bake Parkway' }).body, /Final delivery: +15041 Bake Parkway — please quote drayage/);
+  // a quote forwarded to quotes@… (no LBQ code) becomes an offer, matched to the forwarder by the original sender
+  await db.insert('forwarders', { company: 'Pacific Link Logistics', email: 'ops@pacificlink.test' });
+  const prevKey = process.env.MAILGUN_SIGNING_KEY; process.env.MAILGUN_SIGNING_KEY = 'mg-key';
+  t.after(() => { if (prevKey === undefined) delete process.env.MAILGUN_SIGNING_KEY; else process.env.MAILGUN_SIGNING_KEY = prevKey; });
+  const ts = String(Math.floor(Date.now() / 1000)); const token = 'tok' + Math.random();
+  const before = db.tables.freight_quotes.length;
+  const out = await (await fetch(`${base}/hooks/mailgun-inbound`, { method: 'POST', body: new URLSearchParams({ timestamp: ts, token, signature: require('node:crypto').createHmac('sha256', 'mg-key').update(ts + token).digest('hex'),
+    recipient: 'quotes@in.lulyboo.space', from: 'Marsel <marsel@lulyboo.com>', subject: 'Fwd: Ningbo to LA quote', 'body-plain': '---------- Forwarded message ---------\nFrom: Ops <ops@pacificlink.test>\nCarrier: ONE - $5850 ETD Dec 4 ETA Dec 18', 'Message-Id': '<q1@x>' }) })).json();
+  assert.equal(out.offer, true);
+  assert.equal(db.tables.freight_quotes.length, before + 1);
+  const em = db.tables.freight_quotes.at(-1);
+  assert.equal(em.company, 'Pacific Link Logistics'); assert.ok(em.forwarder_id); assert.equal(em.source, 'email'); assert.equal(em.ocean_usd, 5850);
 });

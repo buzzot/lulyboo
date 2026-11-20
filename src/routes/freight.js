@@ -93,6 +93,9 @@ module.exports = function freightRoutes(router, { db, config }) {
     res.html(page({ title: 'Freight costs', nav: adminNav('logistics'), flash: takeFlash(req, res), wide: true, body: html`${SCR.logisticsTabs('rates')}${subTabs(tab)}${data.missing ? missingNote : ''}${body}` }));
   }));
 
+  /** A charge name that explains itself on hover / focus: the saved note, or AI writes one on first hover and saves it. */
+  const tipName = (t) => html`<span class="fc-tip" tabindex="0" data-fc-tip="${t.id}" ${t.note ? '' : raw('data-fc-fetch')}>${t.name}<span class="fc-tip-box" hidden><b>${t.name}</b> <span class="sub">${FC.UNITS[t.unit] || ''} · ${FC.WHEN[t.when_applies] || 'always'}</span><span class="fc-tip-t">${t.note || ''}</span></span></span>`;
+
   // ── Compare offers ────────────────────────────────────────────────────────
   async function compare(req, { types, offers, typ, st }) {
     const q = req.query;
@@ -179,10 +182,10 @@ module.exports = function freightRoutes(router, { db, config }) {
         <tr class="grp"><td colspan="${cols.length + 1}">Ocean</td></tr>
         <tr><td class="k">Ocean freight</td>${cols.map((x) => cell(x, (y) => html`<span class="m">${usd(y.a.ocean)}</span>`))}</tr>
         <tr class="grp"><td colspan="${cols.length + 1}">Destination — always</td></tr>
-        ${always.map((t) => html`<tr><td class="k">${t.name}${t.unit === 'line' ? html` <span class="sub">× ${nLines}</span>` : t.unit === 'pct_drayage' ? html` <span class="sub">% of drayage</span>` : t.unit === 'day' && t.min_qty ? html` <span class="sub">min ${t.min_qty} days</span>` : ''}</td>${cols.map((x) => cell(x, (y) => amt(y.a.rows.find((r) => r.code === t.code))))}</tr>`)}
+        ${always.map((t) => html`<tr><td class="k">${tipName(t)}${t.unit === 'line' ? html` <span class="sub">× ${nLines}</span>` : t.unit === 'pct_drayage' ? html` <span class="sub">% of drayage</span>` : t.unit === 'day' && t.min_qty ? html` <span class="sub">min ${t.min_qty} days</span>` : ''}</td>${cols.map((x) => cell(x, (y) => amt(y.a.rows.find((r) => r.code === t.code))))}</tr>`)}
         ${others.length ? html`<tr class="grp"><td colspan="${cols.length + 1}">Other quoted charges</td></tr>${others.map((n) => html`<tr><td class="k">${n} <a class="sub" href="${BASE}?tab=charges&add=${encodeURIComponent(n)}#new">add to charges</a></td>${cols.map((x) => cell(x, (y) => { const v = y.a.other.find((z) => z.name === n); return v ? usd(v.amount) : html`<span class="sub">—</span>`; }))}</tr>`)}` : ''}
         ${ifs.length ? html`<tr class="grp"><td colspan="${cols.length + 1}">If needed${Object.values(typ).some((v) => v.freq != null) ? ' — expected from your invoices' : ' — not in the total until you have 3+ invoiced containers'}</td></tr>
-          ${ifs.map((t) => html`<tr><td class="k">${t.name}${typ[t.code]?.freq != null ? html` <span class="sub">on ${Math.round(typ[t.code].freq * 100)}% of containers</span>` : ''}</td>${cols.map((x) => cell(x, (y) => { const r = y.a.rows.find((z) => z.code === t.code); return !r ? html`<span class="sub">—</span>` : r.how === 'expected' ? html`<span title="${r.detail}">${usd(r.amount)}</span> <span class="sub">${r.detail}</span>` : html`<span class="sub">${r.detail}</span>`; }))}</tr>`)}` : ''}
+          ${ifs.map((t) => html`<tr><td class="k">${tipName(t)}${typ[t.code]?.freq != null ? html` <span class="sub">on ${Math.round(typ[t.code].freq * 100)}% of containers</span>` : ''}</td>${cols.map((x) => cell(x, (y) => { const r = y.a.rows.find((z) => z.code === t.code); return !r ? html`<span class="sub">—</span>` : r.how === 'expected' ? html`<span title="${r.detail}">${usd(r.amount)}</span> <span class="sub">${r.detail}</span>` : html`<span class="sub">${r.detail}</span>`; }))}</tr>`)}` : ''}
         <tr class="tot"><td>All-in per container</td>${cols.map((x) => cell(x, (y) => html`<span class="m">${usd(y.a.total)}</span>${y.a.unknown.length ? html`<div class="fc-miss">+ ${y.a.unknown.length} unknown</div>` : ''}`))}</tr>
         ${ci.cbm ? html`<tr><td class="k">per CBM · vs typical</td>${cols.map((x) => cell(x, (y) => html`${usd(y.a.total / ci.cbm)}${!y.typical && tyA.total ? html` · <span class="${y.a.total <= tyA.total ? 'fc-dn' : 'fc-up'}">${y.a.total <= tyA.total ? '−' : '+'}${Math.abs(Math.round(((y.a.total - tyA.total) / tyA.total) * 1000) / 10)}%</span>` : ''}`))}</tr>`
           : html`<tr><td class="k">vs typical</td>${cols.map((x) => cell(x, (y) => (y.typical || !tyA.total ? '' : html`<span class="${y.a.total <= tyA.total ? 'fc-dn' : 'fc-up'}">${y.a.total <= tyA.total ? '−' : '+'}${usd(Math.abs(y.a.total - tyA.total), 0)}</span>`)))}</tr>`}
@@ -201,6 +204,7 @@ module.exports = function freightRoutes(router, { db, config }) {
     ${shown.map(mailDlg)}
     <dialog id="fc-add" class="rp-modal lr-dlg" aria-labelledby="fc-add-t"><form method="post" action="${BASE}/offers" enctype="multipart/form-data" data-busy>
       <h2 id="fc-add-t">Add an offer</h2><p class="sub">AI reads the ocean rate, schedule, validity and every charge line. Nothing is sent.</p>
+      <div class="fc-mailin">✉ Or forward the quote email to <b>${require('../quotes').quoteAddress()}</b> <button type="button" class="link small" data-copy-text="${require('../quotes').quoteAddress()}">copy</button> — it appears here as an offer (attachments and the email text are read).</div>
       <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" title="" aria-label="Offer file"><span class="dz-main" data-main>Drop the PDF or screenshot here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">quotation PDF · email screenshot</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
       <label class="fc-f"><span class="lbl">…or paste the email text</span><textarea name="text" rows="5" placeholder="Carrier: ONE - $5850 · ETD Dec 4 · ETA Dec 18 · ISF $50 …"></textarea></label>
       <div class="lr-g"><label><span class="lbl">Forwarder</span>${ddSel('forwarder', '', fwOpts)}</label><label><span class="lbl">For</span>${ddSel('c', c?.id || '', contOpts)}</label></div>
@@ -312,18 +316,10 @@ module.exports = function freightRoutes(router, { db, config }) {
     try { o = await FC.readOffer({ files: ups.map((u) => ({ name: u.filename || u.name, type: u.contentType || u.type, buffer: u.buffer })), text: f.text, box: c?.box || f.box }); }
     catch (e) { flash(res, 'error', `Couldn't read the offer: ${String(e.message).slice(0, 160)}`); return back(res, f.c, f.box); }
     const fw = f.forwarder ? await db.get('forwarders', f.forwarder).catch(() => null) : null;
-    const stored = [];
-    for (const u of ups) { const name = u.filename || u.name || 'offer'; const path = `freight-offers/${Date.now().toString(36)}-${String(name).replace(/[^\w.\-]+/g, '_').slice(-80)}`; try { await db.docs.upload(path, u.buffer, u.contentType || u.type || 'application/octet-stream'); stored.push({ name, path, type: u.contentType || u.type || '' }); } catch { /* keep going */ } }
-    const total = FC.allIn(o, (await FC.catalog(db)).rows, {}, { lines: 3 }).rows.filter((r) => r.how === 'quoted').reduce((s, r) => s + (r.amount || 0), 0);
-    const row = {
-      quote_id: null, container_id: c?.id || null, forwarder_id: fw?.id || null, company: fw?.company || o.company || 'Forwarder', code: o.ref, quoted_on: o.quoted_on,
-      pol: o.pol || c?.port || 'CNNGB', pod: 'LALB', box: o.box === 'LCL' && c?.box !== 'LCL' ? (c?.box || 'LCL') : (c?.box || o.box), currency: 'USD', ocean_usd: o.ocean_usd, total_usd: o.ocean_usd != null ? r2(o.ocean_usd + total) : null,
-      charges: o.charges, carrier: o.carrier, etd: o.etd, eta: o.eta, transit_days: o.transit_days, valid_until: o.valid_until,
-      source: ups.length ? (ups.some((u) => /pdf/i.test(`${u.type || ''} ${u.name || ''}`)) ? 'pdf' : 'image') : 'email', ref: o.ref, cutoff: o.cutoff, delivery_to: o.delivery_to,
-      notes: [o.notes, !o.pol && o.pol_text ? `Port of loading: ${o.pol_text}` : ''].filter(Boolean).join(' · ') || null, files: stored, created_at: now(), updated_at: now(),
-    };
-    try { await db.insert('freight_quotes', row); }
-    catch (e) { flash(res, 'error', FC.missingTable(e) ? 'Run supabase/freight-costs.sql in Supabase first.' : `Couldn't save: ${e.message}`); return back(res, f.c, row.box); }
+    let row;
+    const src = ups.length ? (ups.some((u) => /pdf/i.test(`${u.type || ''} ${u.name || ''}`)) ? 'pdf' : 'image') : 'email';
+    try { row = await FC.saveOffer(db, o, { files: ups.map((u) => ({ name: u.filename || u.name, type: u.contentType || u.type, buffer: u.buffer })), container: c, forwarder: fw, source: src }); }
+    catch (e) { flash(res, 'error', FC.missingTable(e) ? 'Run supabase/freight-costs.sql in Supabase first.' : `Couldn't save: ${e.message}`); return back(res, f.c, c?.box || o.box); }
     flash(res, 'ok', `${row.company}: ${o.ocean_usd != null ? usd(o.ocean_usd, 0) : 'no ocean rate found'} ocean + ${o.charges.length} charge line${o.charges.length === 1 ? '' : 's'} read`);
     res.redirect(`${BASE}${c ? `?c=${c.id}` : `?box=${row.box}`}`);
   }));
@@ -414,6 +410,16 @@ module.exports = function freightRoutes(router, { db, config }) {
     try { const m = await FC.marketCheck(t); await db.update('charge_types', { id: t.id }, { market: m }); flash(res, 'ok', `${t.name}: ${m.summary}`); }
     catch (e) { flash(res, 'error', `Market check failed: ${String(e.message).slice(0, 140)}`); }
     res.redirect(`${BASE}?tab=charges`);
+  }));
+  router.post(`${BASE}/charges/:id/explain`, G(async (req, res) => {
+    const t = await getT(req.params.id);
+    if (t.note) return res.json({ note: t.note, saved: true });
+    if (!AI.enabled()) return res.json({ note: 'No explanation yet — add one under Charges.', saved: false });
+    try {
+      const d = await FC.draftNote(t);
+      await db.update('charge_types', { id: t.id }, { note: d.note, note_draft: true, aliases: [...new Set([...(t.aliases || []), ...d.aliases])].slice(0, 12) });
+      return res.json({ note: d.note, saved: true, ai: true });
+    } catch (e) { return res.json({ note: `Couldn't get an explanation right now (${String(e.message).slice(0, 80)}).`, saved: false }); }
   }));
   router.post(`${BASE}/charges/:id/delete`, G(async (req, res) => {
     const t = await getT(req.params.id); await db.remove('charge_types', { id: t.id });

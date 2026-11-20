@@ -2941,3 +2941,35 @@
     d.removeAttribute('open'); inp.dispatchEvent(new Event('change', { bubbles: true }));
   });
 })();
+
+// Freight charge names: explanation on hover / focus (a saved note; first time without one, AI writes it and it is saved).
+(function () {
+  var tips = document.querySelectorAll('[data-fc-tip]'); if (!tips.length) return;
+  var pop = document.createElement('div'); pop.className = 'fc-pop'; pop.setAttribute('role', 'tooltip'); pop.hidden = true; document.body.appendChild(pop);
+  var cur = null, hideT = null;
+  var place = function (el) { var r = el.getBoundingClientRect(); pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left)) + 'px'; var below = r.bottom + 6; pop.style.top = (below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, r.top - pop.offsetHeight - 6) : below) + 'px'; };
+  var show = function (el) {
+    clearTimeout(hideT); cur = el;
+    var box = el.querySelector('.fc-tip-box'); pop.innerHTML = box.innerHTML; pop.hidden = false; place(el);
+    if (el.hasAttribute('data-fc-fetch') && !el.dataset.loading) {
+      el.dataset.loading = '1';
+      var t = pop.querySelector('.fc-tip-t'); if (t) t.textContent = 'Getting a short explanation…';
+      fetch('/admin/logistics/freight/charges/' + encodeURIComponent(el.getAttribute('data-fc-tip')) + '/explain', { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          document.querySelectorAll('[data-fc-tip="' + el.getAttribute('data-fc-tip') + '"]').forEach(function (x) { var bt = x.querySelector('.fc-tip-t'); if (bt) bt.textContent = d.note || ''; if (d.saved) x.removeAttribute('data-fc-fetch'); });
+          if (cur === el) { var pt = pop.querySelector('.fc-tip-t'); if (pt) pt.textContent = d.note || ''; place(el); }
+        })
+        .catch(function () { var pt = pop.querySelector('.fc-tip-t'); if (pt) pt.textContent = 'Could not load the explanation.'; })
+        .then(function () { delete el.dataset.loading; });
+    }
+  };
+  var hide = function () { hideT = setTimeout(function () { pop.hidden = true; cur = null; }, 120); };
+  tips.forEach(function (el) {
+    el.addEventListener('mouseenter', function () { show(el); }); el.addEventListener('mouseleave', hide);
+    el.addEventListener('focus', function () { show(el); }); el.addEventListener('blur', hide);
+  });
+  pop.addEventListener('mouseenter', function () { clearTimeout(hideT); }); pop.addEventListener('mouseleave', hide);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { pop.hidden = true; cur = null; } });
+  window.addEventListener('scroll', function () { if (cur && !pop.hidden) place(cur); }, true);
+})();
