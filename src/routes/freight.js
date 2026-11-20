@@ -120,7 +120,13 @@ module.exports = function freightRoutes(router, { db, config }) {
     const tyO = FC.typicalOffer(offers.filter((o) => !o.excluded), box);
     const tyA = FC.allIn(tyO, types, typ, { lines: nLines });
     const best = shown.length ? shown.reduce((b, x) => (x.a.total < b.a.total ? x : b), shown[0]) : null;
-    const contOpts = [['', `Any ${BOXN[box]} (no container)`], ...conts.filter((x) => x.box !== 'LCL').map((x) => [x.id, `${SN.shipName(x)}`])];
+    // a planned container is named by what is in it: type · port · ready date · CBM · POs (+ booking / sailing once known)
+    const planName = (x) => {
+      const i = info(x); const pos = [...new Set(lines.filter((l) => l.container_id === x.id).map((l) => PL.cleanPo ? PL.cleanPo(l.po) : l.po))];
+      const f = x.fwd || {}; const booked = f.booking_no || f.hbl_no || f.mbl_no;
+      return [BOXN[x.box] || x.box, portN(x.port), booked ? booked : null, i.ready ? `ready ${short(i.ready)}` : 'no ready date', i.cbm ? `${i.cbm} CBM` : null, pos.length ? `PO ${pos.slice(0, 3).join(', ')}${pos.length > 3 ? ` +${pos.length - 3}` : ''}` : 'no POs yet'].filter(Boolean).join(' · ');
+    };
+    const contOpts = [['', `No container — all valid ${BOXN[box]} offers`], ...conts.filter((x) => x.box !== 'LCL').map((x) => [x.id, planName(x)])];
     const cols = [...shown, { o: tyO, a: tyA, typical: true }];
     const at = (o) => (o.eta ? PL.addDays(o.eta, FC.DOOR_DAYS) : null);
     const cut = (o) => { if (!ci.ready) return o.cutoff ? short(o.cutoff) : '—'; if (!o.cutoff) return o.etd ? html`<span class="lr-c w">no cut-off given</span>` : html`<span class="lr-c w">sailing not given</span>`; const d = Math.round((Date.parse(o.cutoff) - Date.parse(ci.ready)) / 864e5); return html`${short(o.cutoff)} · ${d >= 0 ? html`<span class="lr-c ok">${d} day${d === 1 ? '' : 's'} after ready ✓</span>` : html`<span class="lr-c e">${-d} days before ready ✗</span>`}`; };
@@ -167,7 +173,7 @@ module.exports = function freightRoutes(router, { db, config }) {
         <label class="w2"><span class="lbl">Deliver to <em>drayage</em></span><input name="to" value="${to}"></label>
         <button class="btn ghost small">Update</button>
       </form>
-      <div class="fc-h"><h2>Compare offers</h2><span class="lr-m">${box}</span><span class="sub">${c ? `${SN.shipName(c)}${ci.ready ? ` · cargo ready ${short(ci.ready)}` : ''}${ci.cbm ? ` · ${ci.cbm} CBM` : ''}` : `valid ${BOXN[box]} offers to LA/LB`} · ${nLines} HTS line${nLines === 1 ? '' : 's'}</span>
+      <div class="fc-h"><h2>Compare offers</h2><span class="lr-m">${box}</span><span class="sub">${c ? `${planName(c).replace(/ · ready [^·]+| · no ready date| · [\d.]+ CBM/g, '')}${ci.ready ? ` · cargo ready ${short(ci.ready)}` : ''}${ci.cbm ? ` · ${ci.cbm} CBM` : ''}` : `valid ${BOXN[box]} offers to LA/LB`} · ${nLines} HTS line${nLines === 1 ? '' : 's'}</span>
         <span class="r"><button type="button" class="btn small" data-open-dialog="fc-add">+ Add offer</button></span></div>
       ${(st.delivery_address || FC.DEFAULT_ADDRESS) !== to ? html`<form method="post" action="${BASE}/address" class="fc-addr"><input type="hidden" name="address" value="${to}"><span class="sub">Delivering to a different address than your default (${st.delivery_address || FC.DEFAULT_ADDRESS}).</span> <button class="link small">Make it the default</button></form>` : ''}
       ${shown.length ? html`<div class="table-wrap"><table class="fc-cmp"><thead><tr><th></th>${cols.map((x) => (x.typical ? html`<th class="fc-ty"><b>Your typical</b><div class="sub">median of ${x.o.n} quote${x.o.n === 1 ? '' : 's'} (90 days) · your charges</div></th>`

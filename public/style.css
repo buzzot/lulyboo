@@ -3226,3 +3226,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .fc-tip{cursor:help;border-bottom:1px dotted #b9b3ab;outline:none}.fc-tip:focus-visible{border-bottom-color:#5b4bb5;box-shadow:0 2px 0 #5b4bb5}
 .fc-pop{position:fixed;z-index:200;max-width:340px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.16);padding:10px 12px;font-size:12.8px;line-height:1.45;color:var(--ink-soft);text-align:left}
 .fc-pop b{color:var(--ink);font-size:13.5px}.fc-pop .fc-tip-t{display:block;margin-top:5px;white-space:normal}
+.rh-acts{white-space:nowrap;display:flex;gap:10px;align-items:center;justify-content:flex-end}.rh-acts form.inline{display:inline;margin:0}.rh-del{font-size:13px;color:var(--err);font-weight:600}

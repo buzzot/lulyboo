@@ -27,6 +27,7 @@ module.exports = function rateRoutes(router, { db, config }) {
 
   router.get(BASE, G(async (req, res) => {
     const { rows, missing } = await load();
+    const canDel = require('../staff').can(require('../staff').current()?.role || 'admin', 'delete');
     const q = req.query;
     const basis = q.basis === 'ocean' ? 'ocean' : 'allin';
     const lanes = [...new Set(rows.map(RH.laneOf))];
@@ -88,7 +89,9 @@ module.exports = function rateRoutes(router, { db, config }) {
             <td>${r.carrier || '—'}</td><td class="r">${r.transit_days ?? '—'}</td><td>${r.valid_until ? PL.short(r.valid_until) : '—'}</td>
             <td>${r.chosen ? html`<span class="cp-tag ok">Chosen</span>` : ''}${r.excluded ? html`<span class="cp-tag">Left out</span>` : ''}</td>
             <td class="sub">${r.code || ''}</td>
-            <td><form method="post" action="${BASE}/${r.id}/exclude"><input type="hidden" name="back" value="${link({ round: rd?.key || '' })}"><input type="hidden" name="excluded" value="${r.excluded ? '' : '1'}"><button class="link small">${r.excluded ? 'Include' : 'Leave out'}</button></form></td></tr>`)}
+            <td class="rh-acts" data-armbox><form method="post" action="${BASE}/${r.id}/exclude" class="inline"><input type="hidden" name="back" value="${link({ round: rd?.key || '' })}"><input type="hidden" name="excluded" value="${r.excluded ? '' : '1'}"><button class="link small">${r.excluded ? 'Include' : 'Leave out'}</button></form>
+              ${canDel ? html`<button type="button" class="bd-del rh-del" data-arm title="${r.quote_id ? 'Also removes this reply from the container on Load containers' : 'Delete this quote'}">Delete</button><button type="submit" class="bd-yes" form="${`rh-del-${r.id}`}">✓ Delete</button>
+              <form id="${`rh-del-${r.id}`}" method="post" action="${BASE}/${r.id}/delete" hidden><input type="hidden" name="back" value="${link({ round: rd?.key || '' })}"></form>` : ''}</td></tr>`)}
           </tbody></table></div></section>`}`,
     }));
   }));
@@ -99,6 +102,20 @@ module.exports = function rateRoutes(router, { db, config }) {
     if (!r) throw new HttpError(404, 'Record not found');
     await db.update('freight_quotes', { id: r.id }, { excluded: !!fields.excluded, updated_at: new Date().toISOString() });
     flash(res, 'ok', fields.excluded ? 'Left out of the comparison.' : 'Included again.');
+    res.redirect(String(fields.back || '').startsWith(BASE) ? fields.back : BASE);
+  }));
+
+  // Delete a quote for good. A reply to a quote request is the same quote as on Load containers: both go.
+  router.post(`${BASE}/:id/delete`, G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const ST = require('../staff');
+    if (!ST.can(ST.current()?.role || 'admin', 'delete')) throw new HttpError(403, 'Only an Admin can delete. Use Leave out instead.');
+    const r = await db.get('freight_quotes', req.params.id).catch(() => null);
+    if (!r) throw new HttpError(404, 'Record not found');
+    if ((r.files || []).length) await db.docs.remove(r.files.map((x) => x.path)).catch(() => null);
+    if (r.quote_id) await db.remove('plan_quotes', { id: r.quote_id }).catch(() => null);
+    await db.remove('freight_quotes', { id: r.id });
+    flash(res, 'ok', `Deleted: ${r.company || 'quote'} ${PL.short(r.quoted_on)}${r.ocean_usd != null ? ` · ${usd(r.ocean_usd)}` : ''}`);
     res.redirect(String(fields.back || '').startsWith(BASE) ? fields.back : BASE);
   }));
 

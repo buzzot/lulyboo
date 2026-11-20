@@ -4692,6 +4692,19 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   assert.match(page, /Hidden:<\/span>[\s\S]*Affinity Shipping \(USA\), Inc\. · Nov 20 · \$6,200/);
   await req(base, 'POST', `/admin/logistics/freight/offers/${A.id}/include`, { cookie, form: { c: c.id } });
   assert.ok(!db.tables.freight_quotes.find((o) => o.id === A.id).excluded);
+  // delete a quote line on the Quotes list (files go too); an RFQ reply goes from Load containers as well
+  const extra = await db.insert('freight_quotes', { company: 'Old quote', quoted_on: '2026-10-01', pol: 'CNNGB', pod: 'LALB', box: '40HQ', ocean_usd: 6000 });
+  const pq = await db.insert('plan_quotes', { container_id: c.id, company: 'RFQ Co', code: 'LBQ-ABCDE', status: 'replied', ocean_usd: 5900, total_usd: 7000, replied_at: '2026-11-18T10:00:00Z' });
+  let rq = (await req(base, 'GET', '/admin/logistics/rates?lane=CNNGB>LALB&box=40HQ', { cookie })).text;
+  assert.match(rq, /rh-del-/);
+  const rfqRow = db.tables.freight_quotes.find((x) => x.quote_id === pq.id);
+  assert.ok(rfqRow);
+  await req(base, 'POST', `/admin/logistics/rates/${extra.id}/delete`, { cookie, form: {} });
+  await req(base, 'POST', `/admin/logistics/rates/${rfqRow.id}/delete`, { cookie, form: {} });
+  assert.ok(!db.tables.freight_quotes.some((x) => x.id === extra.id || x.id === rfqRow.id));
+  assert.ok(!db.tables.plan_quotes.some((x) => x.id === pq.id));
+  await req(base, 'GET', '/admin/logistics/rates', { cookie });
+  assert.ok(!db.tables.freight_quotes.some((x) => x.quote_id === pq.id), 'not copied back');
   await req(base, 'POST', `/admin/logistics/freight/offers/${B.id}/choose`, { cookie, form: { c: c.id } });
 
   // charges: edit, AI note, add a new one
