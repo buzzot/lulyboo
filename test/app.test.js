@@ -4569,6 +4569,14 @@ test('record documents: AI reads each upload, 7501 → customs entry, found valu
   assert.match(page, /HBL-NBAF2610333A\.pdf<\/a><span class="rd-t">Arrival notice<\/span><span class="rd-t rd-fwd">from forwarder/);
   assert.match(page, /HBL NBAF2610333A · EVER FRANK 1245E · sailed Nov 12/);
   assert.match(page, /4 files · AI read 3 · 1 from forwarder/);
+  // an arrival notice's ETA that has passed is offered as the arrival date; "V.1245E" = "1245E"
+  const RD = require('../src/record-docs');
+  const c2 = { record: { files: [{ name: 'AN.pdf', ai: { type: 'arrival_notice', label: 'Arrival notice', facts: { eta: '2026-11-01', voyage: '1245E', charges: [], pos: [] } } }] }, fwd: { atd: '2026-10-12', voyage: 'V.1245E' } };
+  const s2 = RD.suggest(c2, []).items;
+  assert.deepEqual(s2.map((x) => [x.key, x.value, x.differs]), [['ata', '2026-11-01', false]]);
+  assert.match(RD.factsLine(c2.record.files[0].ai), /ETA Nov 1/);
+  const c3 = { record: { files: [{ name: 'AN.pdf', ai: { type: 'arrival_notice', label: 'Arrival notice', facts: { eta: '2099-01-05', charges: [], pos: [] } } }] }, fwd: {} };
+  assert.deepEqual(RD.suggest(c3, []).items.map((x) => x.key), ['eta']);
   // dismiss what's left; change a type; re-read uses the AI again but keeps the same customs entry
   await req(base, 'POST', `/admin/orders/shipments/${c.id}/record/dismiss`, { cookie, form: {} });
   page = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;

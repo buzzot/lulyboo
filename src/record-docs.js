@@ -31,8 +31,8 @@ const TOOL = {
       container_no: { type: 'string', description: '4 letters + 7 digits' }, container_type: { type: 'string' },
       carrier: { type: 'string' }, vessel: { type: 'string', description: 'Vessel name without voyage' }, voyage: { type: 'string' },
       pol: { type: 'string', description: 'Port of loading as written' }, pod: { type: 'string', description: 'Port of discharge as written' },
-      atd: { type: 'string', description: 'Date it sailed / on board date, YYYY-MM-DD' }, ata: { type: 'string', description: 'Actual arrival date, YYYY-MM-DD (arrival notices: the arrival date)' },
-      eta: { type: 'string', description: 'Estimated arrival, YYYY-MM-DD' }, release_date: { type: 'string', description: 'Telex / cargo release date, YYYY-MM-DD' },
+      atd: { type: 'string', description: 'Date it sailed / on board date, YYYY-MM-DD' }, ata: { type: 'string', description: 'Actual arrival date, YYYY-MM-DD — only when the document says the vessel has arrived' },
+      eta: { type: 'string', description: 'Vessel arrival date / ETA at the port of discharge, YYYY-MM-DD. Arrival notices always state it (often "ETA", "Arrival date" or "Vessel arrival"); record it.' }, release_date: { type: 'string', description: 'Telex / cargo release date, YYYY-MM-DD' },
       due_date: { type: 'string', description: 'Payment due date of an invoice, YYYY-MM-DD' },
       ocean_usd: { type: 'number', description: 'Ocean / air freight charge in USD (the transport line only)' },
       charges: { type: 'array', description: 'Every other charge line in USD (THC, documentation, ISF, customs clearance, delivery…)', items: { type: 'object', properties: { name: { type: 'string' }, usd: { type: 'number' } }, required: ['name', 'usd'] } },
@@ -87,12 +87,12 @@ function factsLine(ai, entry) {
     fx.pol || fx.pod ? `${fx.pol || '?'} → ${fx.pod || '?'}` : '',
     fr ? `freight ${usd(fr.v)}${(fx.charges || []).length ? ` (incl. ${fx.charges.length} charge${fx.charges.length === 1 ? '' : 's'})` : ''}` : '',
     fx.goods_value_usd ? `goods ${usd(fx.goods_value_usd)}` : '', fx.cartons ? `${fx.cartons} ctns` : '',
-    fx.atd ? `sailed ${PL.short(fx.atd)}` : '', fx.ata ? `arrived ${PL.short(fx.ata)}` : '', fx.release_date ? `released ${PL.short(fx.release_date)}` : '', fx.due_date ? `due ${PL.short(fx.due_date)}` : '',
+    fx.atd ? `sailed ${PL.short(fx.atd)}` : '', fx.ata ? `arrived ${PL.short(fx.ata)}` : fx.eta ? `ETA ${PL.short(fx.eta)}` : '', fx.release_date ? `released ${PL.short(fx.release_date)}` : '', fx.due_date ? `due ${PL.short(fx.due_date)}` : '',
     fx.pos?.length ? `PO ${fx.pos.join(', ')}` : '',
   ].filter(Boolean).join(' · ') || ai.summary;
 }
 
-const FLAB = { entry_no: 'Entry no.', duty: 'Customs duty', fees: 'Fees (MPF + HMF)', freight: 'Freight', pos: 'POs', atd: 'Sailed', ata: 'Arrived', hbl_no: 'House B/L', mbl_no: 'Master B/L', container_no: 'Container', carrier: 'Carrier', vessel: 'Vessel', voyage: 'Voyage' };
+const FLAB = { eta: 'ETA', entry_no: 'Entry no.', duty: 'Customs duty', fees: 'Fees (MPF + HMF)', freight: 'Freight', pos: 'POs', atd: 'Sailed', ata: 'Arrived', hbl_no: 'House B/L', mbl_no: 'Master B/L', container_no: 'Container', carrier: 'Carrier', vessel: 'Vessel', voyage: 'Voyage' };
 
 /**
  * What the documents say vs the record. c: the record container; entries: its customs entries.
@@ -116,11 +116,14 @@ function suggest(c, entries = []) {
     for (const k of ['hbl_no', 'mbl_no', 'container_no', 'carrier', 'vessel', 'voyage']) put(k, fx[k], { from: x.name });
     if (fx.atd) put('atd', fx.atd, { from: x.name, show: PL.short(fx.atd) });
     if (fx.ata) put('ata', fx.ata, { from: x.name, show: PL.short(fx.ata) });
+    // an arrival notice gives the vessel's arrival as an ETA: once that day has passed it is the arrival date
+    else if (fx.eta && fx.eta <= PL.today()) put('ata', fx.eta, { from: x.name, show: PL.short(fx.eta), detail: `ETA on the ${x.ai.label.toLowerCase()} — passed` });
+    else if (fx.eta) put('eta', fx.eta, { from: x.name, show: PL.short(fx.eta) });
     if (fx.pos?.length) put('pos', fx.pos, { from: x.name });
   }
   const cur = {
     entry_no: rec.entry_no || null, duty: rec.duty ?? null, fees: rec.fees ?? null, freight: rec.freight ?? null, pos: (rec.pos_text || (rec.pos || []).map((p) => p.po)).map(PL.normPo),
-    atd: day(f.atd), ata: day(f.ata), hbl_no: f.hbl_no ? code(f.hbl_no) : null, mbl_no: f.mbl_no ? code(f.mbl_no) : null, container_no: f.container_no || null, carrier: f.carrier || null, vessel: f.vessel || null, voyage: f.voyage || null,
+    atd: day(f.atd), ata: day(f.ata), eta: f.ata ? day(f.ata) : day(f.eta), hbl_no: f.hbl_no ? code(f.hbl_no) : null, mbl_no: f.mbl_no ? code(f.mbl_no) : null, container_no: f.container_no || null, carrier: f.carrier || null, vessel: f.vessel || null, voyage: f.voyage || null,
   };
   const dis = new Set(rec.dismissed || []);
   const items = [];
@@ -129,9 +132,9 @@ function suggest(c, entries = []) {
     let same; let differs;
     if (k === 'pos') { const add = s.v.filter((p) => !now0.includes(p)); same = !add.length; differs = false; s.v = [...new Set([...now0, ...s.v])]; s.show = s.v.join(', '); }
     else if (['duty', 'fees', 'freight'].includes(k)) { same = now0 != null && Math.abs(Number(now0) - Number(s.v)) < 0.01; differs = now0 != null && !same; }
-    else { same = now0 != null && code(now0) === code(s.v); differs = now0 != null && now0 !== '' && !same; }
+    else { const n = (v) => (k === 'voyage' ? code(v).replace(/^(VOY|V)(?=\d)/, '') : code(v)); same = now0 != null && n(now0) === n(s.v); differs = now0 != null && now0 !== '' && !same; }
     if (same || dis.has(`${k}=${Array.isArray(s.v) ? s.v.join(',') : s.v}`)) continue;
-    items.push({ key: k, label: FLAB[k], now: k === 'pos' ? (now0.length ? now0.join(', ') : null) : ['duty', 'fees', 'freight'].includes(k) ? (now0 != null ? usd(now0) : null) : ['atd', 'ata'].includes(k) ? (now0 ? PL.short(now0) : null) : now0, found: s.show || (Array.isArray(s.v) ? s.v.join(', ') : String(s.v)), value: s.v, detail: s.detail || '', from: s.from, differs });
+    items.push({ key: k, label: FLAB[k], now: k === 'pos' ? (now0.length ? now0.join(', ') : null) : ['duty', 'fees', 'freight'].includes(k) ? (now0 != null ? usd(now0) : null) : ['atd', 'ata', 'eta'].includes(k) ? (now0 ? PL.short(now0) : null) : now0, found: s.show || (Array.isArray(s.v) ? s.v.join(', ') : String(s.v)), value: s.v, detail: s.detail || '', from: s.from, differs });
   }
   const order = Object.keys(FLAB); items.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   // cross-checks between documents
@@ -160,11 +163,12 @@ async function apply(db, c, keys, entries, { by = null, markShipped = false } = 
     else if (s.key === 'pos') { const r = await REC.resolvePos(db, s.value); rec.pos = r.found; rec.pos_text = r.all; }
     else if (s.key === 'atd') fwd.atd = s.value;
     else if (s.key === 'ata') Object.assign(fwd, { ata: s.value, eta: s.value, arrived: true });
+    else if (s.key === 'eta') fwd.eta = s.value;
     else fwd[s.key] = s.value;
     src[s.key] = s.from;
   }
   rec.src = src;
-  const delivered = fwd.ata || fwd.atd;
+  const delivered = fwd.ata || fwd.eta || fwd.atd;
   await db.update('plan_containers', { id: c.id }, { record: rec, fwd, ...(delivered ? { delivered_at: `${delivered}T12:00:00Z` } : {}), updated_at: now() });
   if (markShipped && pick.some((s) => s.key === 'pos')) await REC.markShipped(db, rec.pos || []);
   return pick.length;
