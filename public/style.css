@@ -3221,3 +3221,4 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .fa-c{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}.fa-h{display:flex;gap:8px;align-items:center}.fa-h .r{margin-left:auto}.fa-t{font-weight:800;font-size:15px}.fa-i{margin-top:6px}.fa-i form.inline{display:inline}
 .fa-ls{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}.fa-l{font-size:12px;border-radius:7px;padding:3px 8px;background:#f4f2ef}.fa-l.oc{background:#eef3f8;color:#1d4f7a}.fa-l.un{background:#fdf3e1;color:#6d4300}.fa-l a{font-weight:700;color:#8a5300}
 @media (max-width:1100px){.fc-g3{grid-template-columns:1fr}}
+.fc-qd{font-size:12.5px;color:var(--ink);font-weight:600;margin-top:2px}.fc-hid{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-top:10px;font-size:12.5px}.fc-hid form.inline{display:inline-flex;gap:4px;align-items:center;margin:0;background:#f4f2ef;border-radius:7px;padding:2px 8px}

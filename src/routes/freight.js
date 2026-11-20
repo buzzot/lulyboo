@@ -108,7 +108,9 @@ module.exports = function freightRoutes(router, { db, config }) {
     const today = PL.today();
     // this container's offers, plus unlinked offers that are still valid (a quote without a validity date counts for 14 days)
     const live = (o) => (o.valid_until ? o.valid_until >= today : o.quoted_on >= PL.addDays(today, -14));
-    let list = offers.filter((o) => !o.excluded && o.box === box && (c ? (o.container_id === c.id || (!o.container_id && live(o))) : live(o)));
+    const inScope = (o) => o.box === box && (c ? (o.container_id === c.id || (!o.container_id && live(o))) : live(o));
+    const hidden = offers.filter((o) => o.excluded && inScope(o)).slice(0, 12);
+    let list = offers.filter((o) => !o.excluded && inScope(o));
     list = list.map((o) => ({ o, id: o.id, a: FC.allIn(o, types, typ, { lines: nLines }) })).filter((x) => x.o.ocean_usd != null);
     list.sort((x, y) => (y.o.chosen ? 1 : 0) - (x.o.chosen ? 1 : 0) || x.a.total - y.a.total);
     const shown = list.slice(0, 4);
@@ -167,7 +169,8 @@ module.exports = function freightRoutes(router, { db, config }) {
       ${(st.delivery_address || FC.DEFAULT_ADDRESS) !== to ? html`<form method="post" action="${BASE}/address" class="fc-addr"><input type="hidden" name="address" value="${to}"><span class="sub">Delivering to a different address than your default (${st.delivery_address || FC.DEFAULT_ADDRESS}).</span> <button class="link small">Make it the default</button></form>` : ''}
       ${shown.length ? html`<div class="table-wrap"><table class="fc-cmp"><thead><tr><th></th>${cols.map((x) => (x.typical ? html`<th class="fc-ty"><b>Your typical</b><div class="sub">median of ${x.o.n} quote${x.o.n === 1 ? '' : 's'} (90 days) · your charges</div></th>`
         : html`<th class="${best && x.id === best.id && shown.length > 1 ? 'fc-best' : ''}"><b>${x.o.company || 'Forwarder'}</b>${best && x.id === best.id && shown.length > 1 ? html` <span class="lr-c ok">best all-in</span>` : ''}${x.o.chosen ? html` <span class="lr-c v">chosen</span>` : ''}
-            <div class="sub">${[x.o.source && x.o.source !== 'rfq' ? x.o.source.toUpperCase() : 'RFQ reply', x.o.ref, short(x.o.quoted_on), x.o.valid_until ? `valid to ${short(x.o.valid_until)}` : ''].filter(Boolean).join(' · ')}</div></th>`))}</tr></thead><tbody>
+            <div class="fc-qd">Quoted ${short(x.o.quoted_on)}${x.o.valid_until ? html` · <span class="${x.o.valid_until < today ? 'fc-up' : ''}">valid to ${short(x.o.valid_until)}</span>` : ' · no validity date'}</div>
+            <div class="sub">${[x.o.source && x.o.source !== 'rfq' ? (x.o.source === 'email' ? 'Pasted email' : x.o.source === 'image' ? 'Screenshot' : 'PDF') : 'RFQ reply', x.o.ref].filter(Boolean).join(' · ')}</div></th>`))}</tr></thead><tbody>
         <tr class="grp"><td colspan="${cols.length + 1}">Schedule</td></tr>
         <tr><td class="k">Carrier · ETD → ETA</td>${cols.map((x) => cell(x, (y) => (y.typical ? '—' : html`${y.o.carrier || html`<span class="fc-est">carrier TBD</span>`}${y.o.etd || y.o.eta ? html` · ${short(y.o.etd) || '?'} → ${short(y.o.eta) || '?'}${y.o.transit_days ? ` · ${y.o.transit_days}d` : ''}` : ''}`)))}</tr>
         <tr><td class="k">Cut-off vs cargo ready</td>${cols.map((x) => cell(x, (y) => (y.typical ? '—' : cut(y.o))))}</tr>
@@ -185,12 +188,14 @@ module.exports = function freightRoutes(router, { db, config }) {
           : html`<tr><td class="k">vs typical</td>${cols.map((x) => cell(x, (y) => (y.typical || !tyA.total ? '' : html`<span class="${y.a.total <= tyA.total ? 'fc-dn' : 'fc-up'}">${y.a.total <= tyA.total ? '−' : '+'}${usd(Math.abs(y.a.total - tyA.total), 0)}</span>`)))}</tr>`}
         <tr class="fc-acts"><td></td>${cols.map((x) => cell(x, (y) => (y.typical ? '' : html`${(y.o.files || []).length ? html`<a class="btn ghost small" href="${BASE}/offers/${y.o.id}/files/0" data-preview="${BASE}/offers/${y.o.id}/files/0?inline=1" data-type="${/image\//.test(y.o.files[0].type || '') ? 'image' : 'doc'}" data-dl="${BASE}/offers/${y.o.id}/files/0">Open</a>` : ''}
           ${y.a.missing.length ? html`<button type="button" class="btn ghost small" data-open-dialog="fc-mail-${y.o.id}">Ask for ${y.a.missing.length} missing</button>` : ''}
-          <form method="post" action="${BASE}/offers/${y.o.id}/choose" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><button class="btn small ${y.o.chosen ? 'ghost' : ''}" ${y.o.chosen ? raw('disabled') : ''}>${y.o.chosen ? 'Chosen' : 'Choose'}</button></form>
-          <form method="post" action="${BASE}/offers/${y.o.id}/exclude" class="inline"><button class="link small" title="Leave this offer out of comparisons">Hide</button></form>`)))}</tr>
+          ${y.o.chosen ? html`<form method="post" action="${BASE}/offers/${y.o.id}/unchoose" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><button class="btn ghost small" title="Undo the choice">Unchoose</button></form>`
+            : html`<form method="post" action="${BASE}/offers/${y.o.id}/choose" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><button class="btn small">Choose</button></form>`}
+          <form method="post" action="${BASE}/offers/${y.o.id}/exclude" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><button class="link small" title="Take it out of this comparison — nothing is deleted, you can show it again below">Hide</button></form>`)))}</tr>
       </tbody></table></div>
       ${shown.some((x) => x.a.missing.length) ? html`<div class="fc-note">⚠ Amounts in amber were not quoted and are estimated from your typical (other quotes, then your invoices). Hover a figure to see how it was worked out.</div>` : ''}
       ${rec ? html`<div class="fc-rec">✓ <span>${rec}</span></div>` : ''}
-      ${list.length > 4 ? html`<p class="sub">${list.length - 4} more offer${list.length - 4 === 1 ? '' : 's'} — hide some to compare them.</p>` : ''}`
+      ${list.length > 4 ? html`<p class="sub">${list.length - 4} more offer${list.length - 4 === 1 ? '' : 's'} — hide some to compare them.</p>` : ''}
+      ${hidden.length ? html`<div class="fc-hid"><span class="sub">Hidden:</span> ${hidden.map((o) => html`<form method="post" action="${BASE}/offers/${o.id}/include" class="inline"><input type="hidden" name="c" value="${c?.id || ''}"><span>${o.company || 'Forwarder'} · ${short(o.quoted_on)}${o.ocean_usd != null ? ` · ${usd(o.ocean_usd, 0)}` : ''}</span> <button class="link small">show</button></form>`)}</div>` : ''}`
       : html`<p class="sub fc-empty">No offers for ${BOXN[box]}${c ? ' on this container' : ''} yet. Add one from a PDF, a screenshot or a pasted email — or ask forwarders from <a href="/admin/logistics/planning/load">Load containers</a>.</p>`}
     </section>
     ${shown.map(mailDlg)}
@@ -357,9 +362,23 @@ module.exports = function freightRoutes(router, { db, config }) {
   }));
 
   router.post(`${BASE}/offers/:id/exclude`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req).catch(() => ({ fields: {} }));
     const o = await db.get('freight_quotes', req.params.id).catch(() => null); if (!o) throw new HttpError(404, 'Offer not found');
     await db.update('freight_quotes', { id: o.id }, { excluded: true, updated_at: now() });
-    flash(res, 'ok', `${o.company} hidden from comparisons (Quotes tab can bring it back)`); back(res, o.container_id, o.box);
+    flash(res, 'ok', `${o.company} (${short(o.quoted_on)}) hidden — “show” at the bottom brings it back`); back(res, f.c || o.container_id, o.box);
+  }));
+  router.post(`${BASE}/offers/:id/include`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req).catch(() => ({ fields: {} }));
+    const o = await db.get('freight_quotes', req.params.id).catch(() => null); if (!o) throw new HttpError(404, 'Offer not found');
+    await db.update('freight_quotes', { id: o.id }, { excluded: false, updated_at: now() });
+    flash(res, 'ok', `${o.company} (${short(o.quoted_on)}) is back in the comparison`); back(res, f.c || o.container_id, o.box);
+  }));
+  router.post(`${BASE}/offers/:id/unchoose`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req).catch(() => ({ fields: {} }));
+    const o = await db.get('freight_quotes', req.params.id).catch(() => null); if (!o) throw new HttpError(404, 'Offer not found');
+    if (o.quote_id) { const q = await db.get('plan_quotes', o.quote_id).catch(() => null); if (q && q.status === 'chosen') { await db.update('plan_quotes', { id: q.id }, { status: q.replied_at ? 'replied' : 'sent', updated_at: now() }); await RH.syncContainer(db, q.container_id); } }
+    await db.update('freight_quotes', { id: o.id }, { chosen: false, updated_at: now() });
+    flash(res, 'ok', `${o.company} is no longer the chosen offer`); back(res, f.c || o.container_id, o.box);
   }));
 
   // charges

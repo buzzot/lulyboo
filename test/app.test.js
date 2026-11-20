@@ -4681,6 +4681,18 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   // choose Pacific for this container
   await req(base, 'POST', `/admin/logistics/freight/offers/${B.id}/choose`, { cookie, form: { c: c.id } });
   assert.ok(db.tables.freight_quotes.find((o) => o.id === B.id).chosen);
+  page = (await req(base, 'GET', `/admin/logistics/freight?c=${c.id}`, { cookie })).text;
+  assert.match(page, /Quoted Nov 20 · <span class="">valid to Nov 30/);
+  assert.match(page, /Unchoose/);
+  await req(base, 'POST', `/admin/logistics/freight/offers/${B.id}/unchoose`, { cookie, form: { c: c.id } });
+  assert.ok(!db.tables.freight_quotes.find((o) => o.id === B.id).chosen);
+  // hide → listed under "Hidden" with "show" → back
+  await req(base, 'POST', `/admin/logistics/freight/offers/${A.id}/exclude`, { cookie, form: { c: c.id } });
+  page = (await req(base, 'GET', `/admin/logistics/freight?c=${c.id}`, { cookie })).text;
+  assert.match(page, /Hidden:<\/span>[\s\S]*Affinity Shipping \(USA\), Inc\. · Nov 20 · \$6,200/);
+  await req(base, 'POST', `/admin/logistics/freight/offers/${A.id}/include`, { cookie, form: { c: c.id } });
+  assert.ok(!db.tables.freight_quotes.find((o) => o.id === A.id).excluded);
+  await req(base, 'POST', `/admin/logistics/freight/offers/${B.id}/choose`, { cookie, form: { c: c.id } });
 
   // charges: edit, AI note, add a new one
   const ch = types.find((x) => x.code === 'chassis');
