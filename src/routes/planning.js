@@ -27,7 +27,7 @@ const cbmText = (v) => (v ? `${n1(v)} m³` : 'CBM ?');
 const BASE = '/admin/logistics/planning';
 
 const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', unit_price: o.unit_price ?? '', units_per_carton: o.units_per_carton ?? '', carton_size: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => x) ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)}` : '', carton_gw_kg: o.carton_gw_kg ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
-const editBtn = (o, cls = 'cp-edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="Edit ${o.po}" title="Edit">✎</button>`;
+const editBtn = (o, cls = 'cp-edit', label = '✎', title = 'Edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="${`${title} · ${o.po}`}" title="${title}">${label}</button>`;
 /** The order-line edit popup (posts to /admin/logistics/planning/:id/edit; app.js fills it). */
 const editDialog = (back) => html`<dialog class="cp-dlg" data-edit-dlg aria-labelledby="cp-dlg-t"><form method="post" data-edit-form>
           <div class="cp-dlg-h"><div><h2 id="cp-dlg-t" data-f-title>Edit order</h2><span class="sub" data-f-sub></span></div><button type="button" class="icon-btn" data-edit-close aria-label="Close">×</button></div>

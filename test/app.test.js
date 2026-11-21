@@ -4448,6 +4448,31 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   assert.equal((await db.get('products', p.id)).hts_declare_code, null);
 });
 
+test('PO page: totals row with qty, amount, CBM, cartons and weight', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Kean' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '700020', product: 'Toothbrush', qty: 5000, unit_price: 0.46, currency: 'USD', cbm: 1.01, units_per_carton: 200, carton_gw_kg: 8.5 });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '700020', product: 'Rattle', qty: 3520, unit_price: 1.73, currency: 'USD', cbm: 0.73, cartons: 44, gross_kg: 396 });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '700020', product: 'Teether', qty: 2540, unit_price: 0.94, currency: 'USD', cbm: 1.03 });
+  const page = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=700020`, { cookie })).text;
+  const foot = page.slice(page.indexOf('<tfoot>'), page.indexOf('</tfoot>'));
+  assert.match(foot, /<b>Order total<\/b> <span class="sub">· 3 lines<\/span><\/td><td class="r">11,060<\/td>/);
+  assert.match(foot, /\$10,777\.20/);
+  assert.match(foot, /<td class="r">69 <span class="sub or-miss" title="1 line without cartons">\+1\?<\/span><\/td>/); // 25 + 44
+  assert.match(foot, /<td class="r">2\.77<\/td>/);
+  assert.match(foot, /<td class="r">608\.5 <span class="sub or-miss"/);                                      // 25 × 8.5 + 396
+  assert.match(foot, /Shipping: <b>LCL<\/b>/);
+  assert.match(foot, /4% of a 40' HQ/);
+  assert.match(foot, /Chargeable <b>2\.77 W\/M<\/b>/);
+  assert.match(foot, /1 line without packing/);
+  assert.match(page, /<th class="r">Cartons<\/th><th class="r">CBM<\/th><th class="r">Gross kg<\/th>/);
+  assert.match(page, />25<i class="sub" title="Calculated: qty ÷ pcs per carton"> calc\.<\/i>/);
+  assert.match(page, /class="or-add"[^>]*title="Add pcs per carton">add<\/button>/);
+});
+
 test('customs: delete an entry — duty paid goes back to the previous import, PO copies and files go', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db);

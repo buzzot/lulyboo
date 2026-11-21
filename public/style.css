@@ -3227,3 +3227,10 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .fc-pop{position:fixed;z-index:200;max-width:340px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.16);padding:10px 12px;font-size:12.8px;line-height:1.45;color:var(--ink-soft);text-align:left}
 .fc-pop b{color:var(--ink);font-size:13.5px}.fc-pop .fc-tip-t{display:block;margin-top:5px;white-space:normal}
 .rh-acts{white-space:nowrap;display:flex;gap:10px;align-items:center;justify-content:flex-end}.rh-acts form.inline{display:inline;margin:0}.rh-del{font-size:13px;color:var(--err);font-weight:600}
+.cp-table tfoot .or-tot td{border-top:2px solid var(--ink);border-bottom:0;padding-top:11px;font-weight:800;font-variant-numeric:tabular-nums;background:#faf9f7}
+.cp-table tfoot .or-tot .sub{font-weight:500}.or-miss{font-size:12px}
+.cp-table tfoot .or-ship td{background:#faf9f7;border-bottom:0;padding:4px 10px 12px;font-size:13px;color:#5d5852}
+.or-sc{display:inline-flex;align-items:center;gap:6px;margin-right:18px;white-space:nowrap}.or-sc b{color:var(--ink)}
+.or-bar{display:inline-block;width:90px;height:7px;border-radius:5px;background:#e8e4df;overflow:hidden}.or-bar i{display:block;height:100%;background:#1d4f7a}
+.or-warn{background:#fdf3e1;color:#6d4300;border-radius:7px;padding:2px 8px;font-weight:600}
+.or-add{background:none;border:0;padding:0;font:inherit;font-size:12.5px;font-weight:600;color:#8a5300;text-decoration:underline dotted;cursor:pointer}

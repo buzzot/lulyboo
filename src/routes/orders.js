@@ -16,6 +16,21 @@ const AI = require('../ai');
 const RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 };
 const n2 = (v) => Math.round(Number(v || 0) * 100) / 100;
 const int = (v) => Number(v || 0).toLocaleString('en-US');
+const n1 = (v) => (Math.round(Number(v || 0) * 10) / 10).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+/** Packing math for PO lines: cartons and gross kg (given, else calculated), and the shipping picture for a whole PO. */
+const PK = {
+  ctn: (o) => (Number(o.cartons) > 0 ? Number(o.cartons) : o.qty && Number(o.units_per_carton) > 0 ? Math.ceil(Number(o.qty) / Number(o.units_per_carton)) : null),
+  kg: (o) => { if (Number(o.gross_kg) > 0) return Number(o.gross_kg); const c = PK.ctn(o); return c && Number(o.carton_gw_kg) > 0 ? c * Number(o.carton_gw_kg) : null; },
+  /** LCL up to PL.LCL_MAX m³ (charged per W/M = max(m³, t)); above that FCL with the boxes PL.suggest would pick. */
+  shipping(cbm, kg, ctns) {
+    if (!(cbm > 0)) return null;
+    const hq = PL.BOXES.find((b) => b.code === '40HQ');
+    const mode = cbm <= (PL.LCL_MAX || 15) ? 'LCL' : 'FCL';
+    let boxes = '';
+    if (mode === 'FCL') { const fits = PL.BOXES.slice().sort((a, b) => a.cap - b.cap).find((b) => b.cap >= cbm); boxes = fits ? `1 × ${fits.code.replace(/^(\d\d)/, "$1' ")}` : `${Math.ceil(cbm / hq.cap)} × 40' HQ`; }
+    return { mode, boxes, cap: hq.cap, pct: Math.round((cbm / hq.cap) * 100), wm: Math.max(cbm, (kg || 0) / 1000), byWeight: (kg || 0) / 1000 > cbm, avgKg: ctns && kg ? kg / ctns : null };
+  },
+};
 const portName = (c) => SC.PORT[c]?.name || null;
 const poUrl = (supplierId, po) => `/admin/orders/view?supplier=${encodeURIComponent(supplierId)}&po=${encodeURIComponent(po)}`;
 const tag = (st) => html`<span class="cp-tag ${PL.STATE[st].tag}">${PL.STATE[st].label}</span>`;
@@ -186,17 +201,32 @@ module.exports = function orderRoutes(router, { db, config }) {
               : html`<form method="post" action="/admin/orders/todo" class="inline or-td-date"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="ids" value="${t.ids.join(',')}"><input type="hidden" name="what" value="inspection"><input type="hidden" name="back" value="${back}"><input type="date" name="date" value="${t.date || ''}" aria-label="Inspection date" required><button class="btn small ghost">${t.date ? 'Change' : 'Set date'}</button></form>`}</div></div>`)}
           ${notesG.length ? html`<details class="or-td-notes" ${todo.length ? '' : raw('open')}><summary>Notes <span class="sub">${notesG.length}</span></summary>${notesG.map(([n, g]) => html`<p>${who(g) && g.length < ls.length ? html`<b>${who(g)}:</b> ` : ''}${n}</p>`)}</details>` : ''}
         </section>` : ''}
-        <section class="card"><div class="head-row"><h2>Lines</h2>${missingCat.length ? html`<form method="post" action="/admin/orders/catalog" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn ghost small">Add ${missingCat.length} product${missingCat.length === 1 ? '' : 's'} to ${supplier.name}'s product list</button></form>` : ''}</div><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">Amount</th><th class="r">CBM</th><th>Ready</th><th>Port</th><th>Status</th><th>Container</th><th></th></tr></thead>
+        <section class="card"><div class="head-row"><h2>Lines</h2>${missingCat.length ? html`<form method="post" action="/admin/orders/catalog" class="inline"><input type="hidden" name="supplier" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><button class="btn ghost small">Add ${missingCat.length} product${missingCat.length === 1 ? '' : 's'} to ${supplier.name}'s product list</button></form>` : ''}</div><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Product</th><th class="r">Qty</th><th class="r">Cost / pc</th><th class="r">Amount</th><th class="r">Cartons</th><th class="r">CBM</th><th class="r">Gross kg</th><th>Ready</th><th>Port</th><th>Status</th><th>Container</th><th></th></tr></thead>
           <tbody>${ls.map((o) => html`<tr class="${o.shipped ? 'done' : ''}"><td>${(() => { const c = inCat(o); const pack = [o.units_per_carton ? `${int(o.units_per_carton)} pcs/ctn` : null, o.carton_l_cm && o.carton_w_cm && o.carton_h_cm ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)} cm` : null, o.carton_gw_kg ? `${Number(o.carton_gw_kg)} kg/ctn` : null, o.cartons ? `${int(o.cartons)} ctns` : null].filter(Boolean);
               if (!o.product) return html`<span class="sub">(whole PO)</span>`;
               return html`<span class="or-pc" tabindex="0" data-popcard>${o.product}
                 <span class="or-pc-card" role="tooltip"><b>${o.product}</b>${o.sku ? html`<span class="cu-mono">${o.sku}</span>` : ''}${c ? html`<a href="/admin/products/${c.id}">✓ In ${supplier.name}'s products →</a>` : ''}${pack.length ? html`<span>📦 ${pack.join(' · ')}</span>` : html`<span class="sub">No packing data yet</span>`}</span></span>
-                ${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${c ? '' : html`<span class="or-cat no">Not in product list</span>`}`; })()}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.unit_price ? money(o.unit_price, o.currency, 3) : '—'}</td><td class="r">${o.unit_price && o.qty ? money(o.unit_price * o.qty, o.currency) : '—'}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td>
+                ${o.sku ? html`<div class="sub">${o.sku}</div>` : ''}${c ? '' : html`<span class="or-cat no">Not in product list</span>`}`; })()}</td><td class="r">${o.qty ? int(o.qty) : '—'}</td><td class="r">${o.unit_price ? money(o.unit_price, o.currency, 3) : '—'}</td><td class="r">${o.unit_price && o.qty ? money(o.unit_price * o.qty, o.currency) : '—'}</td><td class="r">${(() => { const v = PK.ctn(o); return v == null ? (o.product && o.qty ? PR.editBtn({ ...o, sup: supplier }, 'or-add', 'add', 'Add pcs per carton') : '—') : html`${int(v)}${o.cartons ? '' : html`<i class="sub" title="Calculated: qty ÷ pcs per carton"> calc.</i>`}`; })()}</td><td class="r">${o.cbm ? n2(o.cbm) : '—'}${o.cbm_estimated ? html`<i class="sub" title="Calculated: cartons × carton size"> calc.</i>` : ''}</td><td class="r">${(() => { const v = PK.kg(o); return v == null ? (o.product && o.qty ? PR.editBtn({ ...o, sup: supplier }, 'or-add', 'add', 'Add carton weight') : '—') : html`${n1(v)}${o.gross_kg ? '' : html`<i class="sub" title="Calculated: cartons × kg per carton"> calc.</i>`}`; })()}</td>
             <td>${o.ready_date ? PL.short(o.ready_date) : '—'}</td><td>${portName(o.port) || html`<span class="sub">To confirm</span>`}</td>
             <td>${tag(o.st === 'waiting' ? 'production' : o.st)}${o.production_status && !/^in production$/i.test(o.production_status) ? html`<div class="sub">${o.production_status}</div>` : ''}</td>
             <td>${(() => { const x = ci.labelFor(o); const mv = html`<button type="button" class="link small or-mvb" data-open-dialog="${`mv-${o.id}`}">${x ? 'Move…' : 'Add to container…'}</button>`;
               return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a> ${mv}` : o.shipped ? html`— ${mv}` : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a> ${mv}`; })()}</td>
-            <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody></table></div>
+            <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody>
+          ${ls.length > 1 ? (() => {
+            // order total: cartons/kg from the line, else calculated from packing (PK); "+N?" = lines without data
+            const sum = (f) => { const v = ls.map(f); return { total: v.reduce((a, x) => a + (x || 0), 0), missing: v.filter((x) => !x).length }; };
+            const q = sum((o) => Number(o.qty) || null); const c = sum((o) => Number(o.cbm) || null); const k = sum(PK.kg); const t = sum(PK.ctn);
+            const byCur = {}; let noPrice = 0;
+            for (const o of ls) { if (o.unit_price && o.qty) byCur[o.currency || 'USD'] = (byCur[o.currency || 'USD'] || 0) + o.unit_price * o.qty; else noPrice++; }
+            const miss = (x, what) => (x.missing ? html` <span class="sub or-miss" title="${`${x.missing} line${x.missing === 1 ? '' : 's'} without ${what}`}">+${x.missing}?</span>` : '');
+            const amt = Object.entries(byCur).map(([cu, v]) => money(v, cu));
+            const ship = PK.shipping(c.total, k.total, t.total);
+            const short = ls.filter((o) => o.product && (PK.ctn(o) == null || PK.kg(o) == null || !Number(o.cbm))).length;
+            return html`<tfoot><tr class="or-tot"><td><b>Order total</b> <span class="sub">· ${ls.length} lines</span></td><td class="r">${int(q.total)}${miss(q, 'a quantity')}</td><td></td>
+              <td class="r">${amt.length ? amt.map((x, n) => html`${n ? html`<br>` : ''}${x}`) : '—'}${noPrice ? html` <span class="sub or-miss" title="${`${noPrice} line${noPrice === 1 ? '' : 's'} without a price`}">+${noPrice}?</span>` : ''}</td>
+              <td class="r">${int(t.total)}${miss(t, 'cartons')}</td><td class="r">${n2(c.total)}${miss(c, 'a volume')}</td><td class="r">${n1(k.total)}${miss(k, 'a weight')}</td><td colspan="5"></td></tr>
+              ${ship ? html`<tr class="or-ship"><td colspan="12"><span class="or-sc">Shipping: <b>${ship.mode}</b> — ${n2(c.total)} m³ ${ship.mode === 'FCL' ? html`≈ <b>${ship.boxes}</b>` : ''} <span class="or-bar" aria-hidden="true"><i style="${`width:${Math.min(100, ship.pct)}%`}"></i></span> ${ship.pct}% of a 40' HQ <span class="sub">(${ship.cap} m³ usable)</span></span>${ship.mode === 'LCL' ? html`<span class="or-sc" title="LCL is charged per W/M: the larger of volume (m³) and weight (t)">Chargeable <b>${n2(ship.wm)} W/M</b> <span class="sub">(${ship.byWeight ? 'weight' : 'volume'} decides)</span></span>` : ''}${ship.avgKg ? html`<span class="or-sc">Avg <b>${n1(ship.avgKg)} kg</b> / carton</span>` : ''}${short ? html`<span class="or-sc"><span class="or-warn">${short} line${short === 1 ? '' : 's'} without packing — totals are short</span></span>` : ''}</td></tr>` : ''}</tfoot>`;
+          })() : ''}</table></div>
           </section>` : ''}
         ${ls.map((o) => { const SN = require('../shipname'); const cur = o.container_id;
           const cands = Object.values(ci.byId || {}).filter((c) => !c.delivered_at && (!o.port || !c.port || c.port === o.port) || c.id === cur)
