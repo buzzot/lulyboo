@@ -25,6 +25,30 @@ const portName = (code) => SC.PORT[code]?.name || null;
 const n1 = (v) => (v === null || v === undefined || v === '' ? '—' : Math.round(Number(v) * 100) / 100);
 const cbmText = (v) => (v ? `${n1(v)} m³` : 'CBM ?');
 const BASE = '/admin/logistics/planning';
+const usd = (v, cur) => `${!cur || cur === 'USD' ? '$' : `${cur} `}${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const pcs = (v) => Number(v || 0).toLocaleString('en-US');
+/** Review screen: the document's printed totals vs what AI read. */
+function checkTiles(checks) {
+  return checks.filter((c) => c.has || c.off.length).map((c) => {
+    const tile = (ok, k, v, sub) => html`<div class="${`pk-t ${ok ? 'ok' : 'no'}`}"><span class="pk-k">${k}</span><b>${v}${ok ? html` <i aria-label="matches">✓</i>` : ''}</b><span class="pk-s">${sub}</span></div>`;
+    const short = [];
+    if (!c.qty.ok) short.push(`${pcs(Math.abs(c.qty.doc - c.qty.read))} pcs ${c.qty.read < c.qty.doc ? 'missing' : 'too many'}`);
+    if (!c.amount.ok) short.push(`${usd(Math.abs(c.amount.doc - c.amount.read), c.currency)} ${c.amount.read < c.amount.doc ? 'missing' : 'too much'}`);
+    if (!c.lines.ok) short.push(`${c.lines.read} of ${c.lines.doc} printed lines read`);
+    return html`<div class="pk-chk" aria-label="${`Check against ${c.file}`}">
+      ${c.qty.doc != null ? tile(c.qty.ok, 'Quantity', `${pcs(c.qty.read)} pcs`, `${c.type || 'Document'} total says ${pcs(c.qty.doc)}`) : ''}
+      ${c.amount.doc != null ? tile(c.amount.ok, 'Amount', usd(c.amount.read, c.currency), `${c.type || 'Document'} subtotal says ${usd(c.amount.doc, c.currency)}`) : ''}
+      ${tile(c.lines.ok, 'Lines', `${c.lines.read} line${c.lines.read === 1 ? '' : 's'} → ${c.lines.products} product${c.lines.products === 1 ? '' : 's'}`, c.lines.doc ? `${c.lines.doc} printed${c.lines.combined ? ` · ${c.lines.combined} repeated SKU${c.lines.combined === 1 ? '' : 's'} combined` : ''}` : c.lines.combined ? `${c.lines.combined} repeated SKU${c.lines.combined === 1 ? '' : 's'} combined` : 'line count not printed')}
+      ${tile(!c.off.length, 'Each line', 'qty × cost = amount', c.off.length ? `${c.off.length} line${c.off.length === 1 ? '' : 's'} disagree — see below` : `${c.lines.read} of ${c.lines.read} agree`)}
+    </div>${short.length ? html`<div class="pk-ban" role="alert">⚠ <span><b>${c.file}: AI read ${pcs(c.qty.read)} pcs · ${usd(c.amount.read, c.currency)} — the ${c.type || 'document'} says ${c.qty.doc != null ? `${pcs(c.qty.doc)} pcs` : ''}${c.qty.doc != null && c.amount.doc != null ? ' · ' : ''}${c.amount.doc != null ? usd(c.amount.doc, c.currency) : ''}.</b> ${short.join(' · ')}. Fix the quantities below, or go back and upload it again to re-read.</span></div>` : ''}`;
+  });
+}
+/** One line for the flash message after saving. */
+function checkFlash(checks = []) {
+  return checks.filter((c) => c.has).map((c) => (c.ok ? ` · ✓ matches ${c.type || 'PO'} ${c.po} total (${pcs(c.qty.doc ?? c.qty.read)} pcs${c.amount.doc != null ? ` · ${usd(c.amount.doc, c.currency)}` : ''})`
+    : ` · ⚠ ${c.type || 'PO'} ${c.po}: read ${pcs(c.qty.read)} pcs but the document says ${pcs(c.qty.doc)}${c.amount.doc != null ? ` (${usd(c.amount.read, c.currency)} vs ${usd(c.amount.doc, c.currency)})` : ''} — check the PO page`)).join('')
+    + (checks.some((c) => c.noTable) ? ' · run supabase/po-checks.sql to keep PO totals' : '');
+}
 
 const editData = (o) => JSON.stringify({ id: o.id, po: o.po, supplier: o.sup?.name || '', product: o.product || '', qty: o.qty ?? '', cbm: o.cbm ?? '', unit_price: o.unit_price ?? '', units_per_carton: o.units_per_carton ?? '', carton_size: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => x) ? `${Number(o.carton_l_cm)}×${Number(o.carton_w_cm)}×${Number(o.carton_h_cm)}` : '', carton_gw_kg: o.carton_gw_kg ?? '', ready_date: o.ready_date || '', inspection_date: o.inspection_date || '', port: o.port || '', production_status: o.production_status || '', pending_from_us: o.pending_from_us || '', notes: o.notes || '', shipped: !!o.shipped });
 const editBtn = (o, cls = 'cp-edit', label = '✎', title = 'Edit') => html`<button type="button" class="${cls}" data-edit-order="${editData(o)}" aria-label="${`${title} · ${o.po}`}" title="${title}">${label}</button>`;
@@ -367,6 +391,7 @@ function planningRoutes(router, { db, config }) {
       title: 'Check orders · Container planning', nav: adminNav('orders-import'), wide: true, req,
       body: html`<p><a href="${BASE}/import">‹ Back</a></p><h1>Check what AI read</h1>${from ? html`<p class="sub">From email: ${from}</p>` : ''}
         <p class="muted">${created ? html`New supplier: <b>${supplier.name}</b>` : supplier.name}${aiName && supplier && aiName.toLowerCase() !== supplier.name.toLowerCase() ? html` · document names <b>${aiName}</b>` : ''} · ${notes.join(' · ')}</p>
+        ${checkTiles(PL.docChecks(d))}
         <div class="cp-chips"><span class="cp-tag ok">${count('new')} new</span><span class="cp-tag plan">${count('updated')} updated</span><span class="cp-tag done">${count('same')} unchanged</span>${d.some((x) => !x.cbm) ? html`<span class="cp-tag wait">${d.filter((x) => !x.cbm).length} without CBM</span>` : ''}</div>
         <form method="post" action="${BASE}/save" data-busy class="card">
           <input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="n" value="${d.length}">
@@ -377,16 +402,16 @@ function planningRoutes(router, { db, config }) {
             <td><input name="r${i}_po" value="${o.po}" class="w-po"></td>
             <td><input name="r${i}_sku" value="${o.sku || ''}" class="w-sku" placeholder="—" aria-label="SKU"></td>
             <td><input name="r${i}_product" value="${o.product || ''}" class="w-prod" placeholder="(whole PO)"></td>
-            <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric"></td>
-            <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece"></td>
+            <td class="r"><input name="r${i}_qty" value="${o.qty ?? ''}" class="w-num" inputmode="numeric">${o.parts ? html`<div class="sub" title="${`Printed on ${o.parts.length} lines${o.line_nos?.length ? ` (No. ${o.line_nos.join(', ')})` : ''} — added together`}">${o.parts.map(pcs).join(' + ')}</div>` : ''}</td>
+            <td class="r"><input name="r${i}_price" value="${o.unit_price ?? ''}" class="w-num" inputmode="decimal" placeholder="—" aria-label="Cost per piece">${(o.amount_off || []).map((x) => html`<div class="pk-off" title="qty or cost misread">${x.line_no ? `No. ${x.line_no}: ` : ''}${pcs(x.qty)} × ${x.price} = ${usd(x.calc)}, printed ${usd(x.printed)}</div>`)}</td>
             <td class="r"><input name="r${i}_cbm" value="${o.cbm ?? ''}" class="w-num ${o.cbm_estimated ? 'est' : ''}" inputmode="decimal" title="${o.cbm_estimated ? 'Estimated from carton size' : ''}"></td>
             <td><input type="date" name="r${i}_ready" value="${o.ready_date || ''}"></td>
             <td><input name="r${i}_status" value="${o.production_status || ''}" class="w-st"></td>
             <td><input name="r${i}_pending" value="${o.pending_from_us || ''}" class="w-st"></td>
             <td><select name="r${i}_port">${portOpts(o.port)}</select></td>
-            <td>${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
+            <td>${o.parts ? html`<span class="cp-tag pk-cmb">${o.parts.length} PO lines combined</span> ` : ''}${o.change === 'new' ? html`<span class="cp-tag ok">New</span>` : o.change === 'same' ? html`<span class="cp-tag done">Unchanged</span>` : html`<span class="cp-tag plan">Updated</span><div class="sub">${o.changes.map((c) => `${c.field}: ${c.from} → ${c.to}`).join(' · ')}</div>`}</td></tr>`)}</tbody></table></div>
           <p class="sub">Lines with no SKU and no product update every line of that PO (ready date, status). Orange CBM is calculated from the carton size. New products are added to the supplier's product list with this cost.</p>
-          <div class="oi-acts"><button class="btn">Save checked lines</button>${inboxId ? html`<button class="link small" form="oi-discard">Discard this email</button>` : ''}</div>
+          <div class="oi-acts"><button class="btn">${PL.docChecks(d).some((c) => !c.ok) ? 'Save anyway' : 'Save checked lines'}</button>${inboxId ? html`<button class="link small" form="oi-discard">Discard this email</button>` : ''}</div>
         </form>${inboxId ? html`<form id="oi-discard" method="post" action="${BASE}/import/inbox/${inboxId}/discard" data-confirm="Discard this email import? Its lines won't be saved."></form>` : ''}`,
     }));
   }
@@ -497,9 +522,9 @@ function planningRoutes(router, { db, config }) {
       supplier = existing || await db.insert('suppliers', { name, crm_status: 'Active', created_via: 'planning' }).catch(() => db.insert('suppliers', { name }));
     }
     const n = Math.min(2000, Number(fields.n) || 0);
-    const lines = [];
+    const lines = []; const all = [];
     for (let i = 0; i < n; i++) {
-      if (fields[`r${i}_on`] !== '1') continue;
+      if (fields[`r${i}_on`] !== '1') { try { const o = JSON.parse(fields[`r${i}_json`] || '{}'); if (o.po) all.push(o); } catch { /* ignore */ } continue; }
       let o = {}; try { o = JSON.parse(fields[`r${i}_json`] || '{}'); } catch { /* ignore */ }
       const num = (v) => { const x = Number(String(v || '').replace(/[^0-9.\-]/g, '')); return String(v || '').trim() && Number.isFinite(x) ? x : null; };
       const cbm = num(fields[`r${i}_cbm`]);
@@ -508,10 +533,10 @@ function planningRoutes(router, { db, config }) {
         production_status: String(fields[`r${i}_status`] || '').trim().slice(0, 120) || null, pending_from_us: String(fields[`r${i}_pending`] || '').trim().slice(0, 200) || null,
         port: SC.PORT[fields[`r${i}_port`]] ? fields[`r${i}_port`] : null });
     }
-    const valid = lines.filter((o) => o.po);
+    const valid = lines.filter((o) => o.po); all.push(...valid);   // the totals check counts unticked (unchanged) lines too
     if (!valid.length) { flash(res, 'warn', 'No lines were checked'); return res.redirect(`${BASE}/import?supplier=${supplier.id}`); }
     const batch = `imp-${Date.now().toString(36)}`;
-    const r = await PL.save(db, supplier.id, valid, { batch, sourceName: String(fields.source || '').slice(0, 200) });
+    const r = await PL.save(db, supplier.id, valid, { batch, sourceName: String(fields.source || '').slice(0, 200), checkLines: all });
     // an email import: keep its files with the supplier's documents (linked to the POs) and close it
     const imp = fields.inbox_id ? await db.get('order_imports', String(fields.inbox_id)).catch(() => null) : null;
     if (imp && imp.status === 'pending') {
@@ -521,7 +546,7 @@ function planningRoutes(router, { db, config }) {
       await OI.close(db, imp, 'saved', req.staff?.name || 'Owner');
       await db.docs.remove((imp.files || []).map((f) => f.path)).catch(() => null);
     }
-    flash(res, 'ok', `${supplier.name}: ${r.added} new, ${r.updated} updated${r.same ? `, ${r.same} unchanged` : ''}`);
+    flash(res, (r.checks || []).some((c) => c.has && !c.ok) ? 'warn' : 'ok', `${supplier.name}: ${r.added} new, ${r.updated} updated${r.same ? `, ${r.same} unchanged` : ''}${checkFlash(r.checks)}`);
     res.redirect(`${BASE}?supplier=${supplier.id}`);
   }));
 
@@ -585,6 +610,28 @@ function planningRoutes(router, { db, config }) {
     res.redirect(back.startsWith(BASE) ? back : `${BASE}?view=table`);
   }));
 
+  // re-read the PO on file (PO page "Fix from the PO"): AI reads it again, lines are updated, totals checked
+  router.post(`${BASE}/po-recheck`, G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const supplier = await db.get('suppliers', String(fields.supplier_id || '')).catch(() => null); if (!supplier) throw new HttpError(404, 'Supplier not found');
+    const po = String(fields.po || '').trim();
+    const backTo = String(fields.back || '').startsWith('/admin/orders/view') ? String(fields.back) : `/admin/orders/view?supplier=${encodeURIComponent(supplier.id)}&po=${encodeURIComponent(po)}`;
+    const done = (t, m) => { flash(res, t, m); res.redirect(backTo); };
+    if (!AI.enabled()) return done('warn', 'AI is not configured');
+    const chk = await PL.poCheck(db, supplier.id, po);
+    const files = (await db.list('plan_files', { filters: { supplier_id: supplier.id } }).catch(() => [])).filter((f) => (f.pos || []).some((x) => PL.normPo(x) === PL.normPo(po)) && /\.(pdf|png|jpe?g|webp|xlsx|xlsm|csv)$/i.test(f.name || ''));
+    const byDate = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
+    const f = files.find((x) => chk && x.name === chk.file_name) || files.filter((x) => /^(PO|PI)$/i.test(x.kind || '') || /\bp\.?o\b|purchase|proforma|\bpi\b/i.test(x.name)).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0) || byDate(a, b))[0];
+    if (!f) return done('warn', `No PO file on ${po} to read — upload the PO in Documents`);
+    const buffer = await db.docs.download(f.path);
+    const r = await PL.readOrders({ name: f.name, buffer, defaultPo: po, hint: `This document is a purchase order from ${supplier.name}. It belongs to PO ${po}. Record one line per printed line with its quantity, cost and amount.` });
+    const lines = r.orders.filter((o) => PL.normPo(o.po) === PL.normPo(po));
+    if (!lines.length) return done('warn', `AI found no lines for ${po} in ${f.name}`);
+    for (const o of lines) if (!o.port) o.port = null;
+    const s = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: f.name });
+    done((s.checks || []).some((c) => c.has && !c.ok) ? 'warn' : 'ok', `Re-read ${f.name}: ${s.added} new, ${s.updated} updated${checkFlash(s.checks)}`);
+  }));
+
   router.post(`${BASE}/files`, G(async (req, res) => {
     const { fields, files } = await parseForm(req, { limitBytes: 120 * 1024 * 1024 });
     const supplier = fields.supplier_id ? await db.get('suppliers', fields.supplier_id) : null;
@@ -619,8 +666,8 @@ function planningRoutes(router, { db, config }) {
       if (lines.length) { for (const o of lines) if (!o.port) o.port = null; read = await PL.save(db, supplier.id, lines, { batch: `doc-${Date.now().toString(36)}`, sourceName: docs.map((f) => f.name).join(', ') }); }
     }
     const r = await PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner', signed: fields.signed === '1' }).catch(async (e) => { if (!/signed/i.test(e.message)) throw e; return PL.storeFiles(db, supplier.id, docs, { pos: typed, kind, by: req.staff?.name || 'Owner' }); });
-    const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.products ? ` · added to ${supplier.name}'s products: ${read.productNames.join(', ')}` : ''}${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} product${read.catalog === 1 ? '' : 's'} in the product list` : ''}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
-    back(r.errors.length || unread.length ? 'warn' : 'ok', `${r.saved.length ? `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}` : 'No new documents stored'}${r.skipped?.length ? ` · already stored: ${r.skipped.join(', ')}` : ''}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
+    const readText = read ? ` · AI read ${read.added} new line${read.added === 1 ? '' : 's'}, ${read.updated} updated${read.products ? ` · added to ${supplier.name}'s products: ${read.productNames.join(', ')}` : ''}${read.volumes ? ` · volume calculated for ${read.volumes}` : ''}${read.catalog ? ` · packing saved to ${read.catalog} product${read.catalog === 1 ? '' : 's'} in the product list` : ''}${checkFlash(read.checks)}` : fields.read === '1' && AI.enabled() && !unread.length ? ' · AI found no product lines' : '';
+    back(r.errors.length || unread.length || (read?.checks || []).some((c) => c.has && !c.ok) ? 'warn' : 'ok', `${r.saved.length ? `${r.saved.length} document${r.saved.length === 1 ? '' : 's'} stored for ${supplier.name}` : 'No new documents stored'}${r.skipped?.length ? ` · already stored: ${r.skipped.join(', ')}` : ''}${readText}${unread.length ? ` · could not read ${unread.join(', ')}` : ''}${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`, `&supplier=${supplier.id}`);
   }));
   router.get(`${BASE}/files/:id`, G(async (req, res) => {
     const f = await db.get('plan_files', req.params.id); if (!f) throw new HttpError(404, 'Document not found');

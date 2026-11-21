@@ -3234,3 +3234,14 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .or-bar{display:inline-block;width:90px;height:7px;border-radius:5px;background:#e8e4df;overflow:hidden}.or-bar i{display:block;height:100%;background:#1d4f7a}
 .or-warn{background:#fdf3e1;color:#6d4300;border-radius:7px;padding:2px 8px;font-weight:600}
 .or-add{background:none;border:0;padding:0;font:inherit;font-size:12.5px;font-weight:600;color:#8a5300;text-decoration:underline dotted;cursor:pointer}
+
+/* PO totals check: review tiles, banner, PO page line */
+.pk-chk{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:0 0 12px}
+.pk-t{border:1px solid #ece9e5;border-radius:11px;padding:9px 13px;background:#fbfaf8;display:flex;flex-direction:column;gap:1px}
+.pk-t.ok{border-color:#cfe6da;background:#f3faf6}.pk-t.no{border-color:#f0c9c2;background:#fdf4f2}.pk-t.no b{color:#9b2f22}
+.pk-k{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#78746e}.pk-t b{font-size:16px}.pk-t b i{font-style:normal;color:#2f8a63}.pk-s{font-size:12.5px;color:#78746e}
+.pk-ban{display:flex;gap:10px;align-items:flex-start;border-radius:11px;padding:10px 14px;margin:0 0 12px;background:#fdf4f2;border:1px solid #f0c9c2;color:#7d2418;font-size:13.5px}
+.pk-off{color:#8a5300;font-size:11.5px;font-weight:600;max-width:170px;margin-left:auto;line-height:1.3;margin-top:3px}.cp-tag.pk-cmb{background:#eaf1f9;color:#1d4f7a}
+.or-pk{display:inline-block;border-radius:8px;padding:3px 10px;font-weight:600}.or-pk.ok{background:#e5f3ec;color:#1f5a40}.or-pk.no{background:#fbe7e4;color:#7d2418}
+.or-pk-r{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:7px}.or-pochk td{padding-top:8px}
+.or-pkw{color:#b4473b;text-decoration:none;font-weight:700}

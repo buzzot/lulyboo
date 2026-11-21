@@ -4804,3 +4804,75 @@ test('freight costs: offers read from PDF / email, all-in compare with estimates
   const em = db.tables.freight_quotes.at(-1);
   assert.equal(em.company, 'Pacific Link Logistics'); assert.ok(em.forwarder_id); assert.equal(em.source, 'email'); assert.equal(em.ocean_usd, 5850);
 });
+
+test('PO totals check: repeated SKUs are added up, read vs printed totals, PO page match / mismatch, re-read, merge keeps quantity', async (t) => {
+  const PL = require('../src/planning');
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch;
+  const L = (n, sku, name, qty, p, a) => ({ po: 'PO900020', line_no: n, sku, product: `${sku} - ${name}`, qty, unit_price: p, amount: a, currency: 'USD', ready_date: '2026-11-25', port: 'Yantian' });
+  const full = [L(1, 'FRTS 001', 'Flower rattle & teether set of 2', 3520, 1.73, 6089.6), L(2, 'FRTS 001', 'Flower rattle & teether set of 2', 3500, 1.73, 6055), L(3, 'CITG 001', 'Infant Toothbrush - Cactus - Green', 5000, 0.46, 2300),
+    L(4, 'FRT 001', 'Flower rattle & teether', 2540, 0.94, 2387.6), L(5, 'FRT 001', 'Flower rattle & teether', 2500, 0.94, 2350), L(6, 'CITB 001', 'Infant Toothbrush - Cactus - Blue', 5000, 0.46, 2300),
+    L(7, 'CITG 001', 'Infant Toothbrush - Cactus - Green', 5000, 0.46, 2300), L(8, 'CITP 001', 'Infant Toothbrush - Cactus - Pink', 5000, 0.46, 2300)];
+  const totals = { total_qty: 32060, total_amount: 26082.2, currency: 'USD', line_count: 8 };
+  let answer = { supplier_name: 'Kean', document_type: 'PO', document_totals: totals, orders: full };
+  global.fetch = async (url, opts = {}) => (String(url).includes('api.anthropic.com') ? new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'record_orders', input: answer }] }), { status: 200 }) : realFetch(url, opts));
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Kean' });
+  const unesc = (v) => v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const formOf = (h) => { const f = {}; for (const m of h.matchAll(/<input(?: type="(?:hidden|checkbox|date)")? name="([^"]+)" value="([^"]*)"([^>]*)>/g)) { if (/type="checkbox"/.test(m[0]) && !/checked/.test(m[3])) continue; f[m[1]] = unesc(m[2]); } return f; };
+  const review = async () => { const fd = new FormData(); fd.append('supplier_id', k.id); fd.append('file', new Blob([Buffer.from('%PDF-1.4 po')], { type: 'application/pdf' }), 'PO900020_Kean_Signed.pdf'); return (await fetch(`${base}/admin/logistics/planning/import`, { method: 'POST', body: fd, headers: { cookie } })).text(); };
+
+  // 1. review: 8 printed lines → 5 products, totals match
+  let rev = await review();
+  assert.match(rev, /32,060 pcs <i aria-label="matches">✓<\/i>/);
+  assert.match(rev, /\$26,082\.20 <i aria-label="matches">✓<\/i>/);
+  assert.match(rev, /8 lines → 5 products/); assert.match(rev, /3 repeated SKUs combined/);
+  assert.match(rev, /3,520 \+ 3,500/); assert.match(rev, /2 PO lines combined/);
+  assert.match(rev, /Save checked lines/); assert.doesNotMatch(rev, /pk-ban/);
+  const save = await req(base, 'POST', '/admin/logistics/planning/save', { cookie, form: formOf(rev) });
+  assert.ok([302, 303].includes(save.status));
+  const ls = () => db.tables.plan_orders.filter((o) => o.supplier_id === k.id);
+  assert.equal(ls().length, 5);
+  assert.equal(ls().find((o) => o.sku === 'CITG 001').qty, 10000); assert.equal(ls().find((o) => o.sku === 'FRTS 001').qty, 7020);
+  assert.equal(ls().reduce((a, o) => a + o.qty, 0), 32060);
+  assert.equal(db.tables.po_checks.length, 1); assert.equal(db.tables.po_checks[0].total_qty, 32060); assert.equal(db.tables.po_checks[0].po, '900020');
+  const view = () => req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=900020`, { cookie }).then((r) => r.text);
+  assert.match(await view(), /✓ Matches PO 900020 · 32,060 pcs · \$26,082\.20/);
+
+  // 2. a line goes missing in the portal: PO page says what, list shows ⚠
+  const citg = ls().find((o) => o.sku === 'CITG 001'); await db.update('plan_orders', { id: citg.id }, { qty: 5000 });
+  let v = await view();
+  assert.match(v, /⚠ PO 900020 says 32,060 pcs · \$26,082\.20 — 5,000 pcs \/ \$2,300\.00 not in the portal/);
+  assert.match(v, /CITG 001 −5,000/); assert.match(v, /action="\/admin\/logistics\/planning\/po-recheck"/);
+  assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /class="or-pkw"[^>]*title="Doesn&#39;t match the PO: it says 32,060 pcs/);
+
+  // 3. re-read the stored PO file fixes it
+  const f = db.tables.plan_files.find((x) => x.name === 'PO900020_Kean_Signed.pdf'); assert.ok(f);
+  const rr = await req(base, 'POST', '/admin/logistics/planning/po-recheck', { cookie, form: { supplier_id: k.id, po: '900020' } });
+  assert.ok([302, 303].includes(rr.status));
+  assert.equal(ls().find((o) => o.sku === 'CITG 001').qty, 10000);
+  assert.match(await view(), /✓ Matches PO 900020/);
+
+  // 4. a short read is flagged before saving
+  answer = { ...answer, orders: full.filter((o) => o.line_no !== 7) };
+  rev = await review();
+  assert.match(rev, /class="pk-ban"/); assert.match(rev, /AI read 27,060 pcs · \$23,782\.20 — the PO says 32,060 pcs · \$26,082\.20/);
+  assert.match(rev, /5,000 pcs missing/); assert.match(rev, /7 of 8 printed lines read/); assert.match(rev, /Save anyway/);
+  // a misread line (qty × cost ≠ printed amount) is pointed at
+  answer = { ...answer, orders: full.map((o) => (o.line_no === 4 ? { ...o, qty: 2500 } : o)) };
+  rev = await review();
+  assert.match(rev, /No\. 4: 2,500 × 0\.94 = \$2,350\.00, printed \$2,387\.60/);
+
+  // 5. merge duplicates: two lines from one document are added up, a re-import duplicate keeps the newest
+  const s2 = await db.insert('suppliers', { name: 'Other' });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: '1', product: 'Cup', sku: 'C1', qty: 100, batch: 'doc-a', created_at: '2026-01-01' });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: '1', product: 'Cup', sku: 'C1', qty: 50, batch: 'doc-a', created_at: '2026-01-01' });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: '2', product: 'Cup', sku: 'C1', qty: 100, batch: 'doc-a', created_at: '2026-01-01' });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: 'PO2', product: 'Cup', sku: 'C1', qty: 120, batch: 'doc-b', created_at: '2026-02-01' });
+  await PL.mergeDuplicates(db, s2.id);
+  const o2 = db.tables.plan_orders.filter((o) => o.supplier_id === s2.id);
+  assert.equal(o2.find((o) => o.po === '1').qty, 150); assert.equal(o2.filter((o) => PL.normPo(o.po) === '2').length, 1); assert.equal(o2.find((o) => PL.normPo(o.po) === '2').qty, 120);
+});

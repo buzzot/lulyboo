@@ -71,6 +71,17 @@ const TOOL = {
     type: 'object',
     properties: {
       supplier_name: { type: 'string', description: 'Supplier / factory named in the document, if any' },
+      document_type: { type: 'string', description: 'PO, PI (proforma invoice), packing list, order report or other' },
+      document_totals: {
+        type: 'object',
+        description: 'Totals exactly as PRINTED on the document (do not add them up yourself); leave out what is not printed',
+        properties: {
+          total_qty: { type: 'number', description: 'Printed total quantity in pieces (e.g. "Total Qty")' },
+          total_amount: { type: 'number', description: 'Printed goods subtotal / total amount (before tax if both are shown)' },
+          currency: { type: 'string' },
+          line_count: { type: 'number', description: 'Number of numbered item lines printed (highest line No.)' },
+        },
+      },
       orders: {
         type: 'array',
         items: {
@@ -84,6 +95,8 @@ const TOOL = {
             cbm: { type: 'number', description: 'Total goods volume in m³ for this line' },
             gross_kg: { type: 'number', description: 'Total gross weight in kg' },
             unit_price: { type: 'number', description: 'Price per piece, from a Cost / Unit price / Price column (not the line amount)' },
+            amount: { type: 'number', description: 'Line amount as printed (Amount / Total column of this line)' },
+            line_no: { type: 'number', description: 'Line number as printed (No. column), if any' },
             currency: { type: 'string', description: 'Currency of the unit price, e.g. USD' },
             units_per_carton: { type: 'number', description: 'Packing: pieces per export carton (master carton), from a packing list or PO packing spec' },
             carton_l_cm: { type: 'number', description: 'Export carton length in cm (convert mm/inches to cm)' },
@@ -139,7 +152,7 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
     else if (/\.(xlsx|xlsm)$/.test(n) || (buffer[0] === 0x50 && buffer[1] === 0x4b)) table = tableText(parseXlsx(buffer));
     else table = tableText(parseCsv(decodeText(buffer)));
   }
-  content.push({ type: 'text', text: `Today is ${today()}. Record every purchase-order line, one per product.${hint ? ` ${hint}` : ''}${table ? `\n\n${table}` : ''}${text ? `\n\n${String(text).slice(0, 60000)}` : ''}` });
+  content.push({ type: 'text', text: `Today is ${today()}. Record every purchase-order line as printed — when the same product is printed on two lines, record both lines. Copy the printed totals into document_totals.${hint ? ` ${hint}` : ''}${table ? `\n\n${table}` : ''}${text ? `\n\n${String(text).slice(0, 60000)}` : ''}` });
   const { result } = await AI.callTool({ tool: TOOL, content, maxTokens: 16000 });
   const orders = (Array.isArray(result?.orders) ? result.orders : []).map((o) => {
     const insp = isoDay(o.inspection_date);
@@ -149,11 +162,116 @@ async function readOrders({ name = 'document', buffer = null, text = '', hint = 
       ready_date: isoDay(o.ready_date), inspection_date: insp, inspection_note: insp ? null : txt(o.inspection_date, 80),
       production_status: txt(o.production_status, 120), pending_from_us: txt(o.pending_from_lulyboo, 200), order_type: txt(o.order_type, 60), approved_by: txt(o.approved_by, 60),
       port_text: port, port: SC.portCode(port), ...splitTerms(txt(o.notes, 500), txt(o.po_terms, 500)),
-      unit_price: num(o.unit_price), currency: txt(o.currency, 8),
+      unit_price: num(o.unit_price), currency: txt(o.currency, 8), amount: num(o.amount), line_no: num(o.line_no),
       units_per_carton: num(o.units_per_carton), carton_l_cm: num(o.carton_l_cm), carton_w_cm: num(o.carton_w_cm), carton_h_cm: num(o.carton_h_cm), carton_gw_kg: num(o.carton_gw_kg), carton_nw_kg: num(o.carton_nw_kg),
     };
   }).map((o) => (o.po || !defaultPo ? o : { ...o, po: defaultPo })).filter((o) => o.po).map((o) => ({ ...o, product: cleanName(o.product, o.sku) || o.sku || null }));
-  return { orders, supplierName: txt(result?.supplier_name, 120) };
+  return { orders: withCheck(orders, result, name), supplierName: txt(result?.supplier_name, 120) };
+}
+
+// ── checksum: what AI read vs the totals printed on the document (no extra AI call) ──
+const amountOf = (o) => (num(o.amount) != null ? num(o.amount) : num(o.qty) != null && num(o.unit_price) != null ? num(o.qty) * num(o.unit_price) : null);
+const r2 = (v) => Math.round(v * 100) / 100;
+/** A printed line whose qty × cost is not its printed amount: qty or cost was misread. */
+const amountOff = (o) => { const q = num(o.qty), p = num(o.unit_price), a = num(o.amount); if (q == null || p == null || a == null) return null; const c = r2(q * p); return Math.abs(c - a) > Math.max(0.05, a * 0.005) ? { printed: a, calc: c } : null; };
+/**
+ * The same item printed on several lines of one PO (two lots, two colours of carton…) becomes one line with the sum
+ * of qty, amount, cartons, m³ and kg; `parts` keeps the printed quantities ("3,520 + 3,500").
+ */
+function combineRepeats(lines) {
+  const key = (o) => (o.sku ? `${normPo(o.po)}|S${normSku(o.sku)}` : o.product ? `${normPo(o.po)}|P${normProd(o.product)}` : null);
+  const out = []; const at = new Map();
+  for (const o of lines) {
+    const k = key(o);
+    if (!k || !at.has(k)) { if (k) at.set(k, out.length); out.push({ ...o, parts: [num(o.qty)], line_nos: o.line_no ? [o.line_no] : [] }); continue; }
+    const a = out[at.get(k)];
+    const add = (f) => (a[f] == null || num(o[f]) == null ? null : r2(num(a[f]) + num(o[f])));
+    const amtA = amountOf(a); const amtO = amountOf(o);
+    a.amount = amtA != null && amtO != null ? r2(amtA + amtO) : null;
+    for (const f of ['qty', 'cartons', 'cbm', 'gross_kg']) a[f] = add(f);
+    if (a.unit_price != null && num(o.unit_price) != null && num(o.unit_price) !== num(a.unit_price) && a.qty && a.amount != null) a.unit_price = Math.round((a.amount / a.qty) * 10000) / 10000;
+    for (const [f, v] of Object.entries(o)) if ((a[f] == null || a[f] === '') && v != null && v !== '' && !['line_no', 'amount'].includes(f)) a[f] = v;
+    a.parts.push(num(o.qty)); if (o.line_no) a.line_nos.push(o.line_no);
+  }
+  // flag every printed line whose qty × cost isn't its amount, on the line it ended up in
+  lines.forEach((o, i) => { const off = amountOff(o); if (!off) return; const k = key(o); const t = k ? out[at.get(k)] : out.find((x) => x.line_no === o.line_no && x.qty === o.qty) || out[i]; if (t) t.amount_off = [...(t.amount_off || []), { line_no: o.line_no, qty: num(o.qty), price: num(o.unit_price), ...off }]; });
+  return out.map((o) => { const x = { ...o }; if (x.parts.length < 2) delete x.parts; if (!x.line_nos.length) delete x.line_nos; delete x.line_no; return x; });
+}
+/** Combine repeats and attach the document's printed totals (`doc`) to each line of a one-PO document. */
+function withCheck(raw, result, name) {
+  const lines = combineRepeats(raw);
+  const t = result?.document_totals || {};
+  const pos = [...new Set(lines.map((o) => normPo(o.po)))];
+  const doc = { file: txt(name, 200), type: txt(result?.document_type, 40), total_qty: num(t.total_qty), total_amount: num(t.total_amount), currency: txt(t.currency, 8), line_count: num(t.line_count), read_lines: raw.length };
+  if (pos.length !== 1 || (doc.total_qty == null && doc.total_amount == null && !lines.some((o) => o.amount_off))) return lines;
+  return lines.map((o) => ({ ...o, doc }));
+}
+/**
+ * One check per document read: Σ qty vs printed total qty, Σ amount vs printed subtotal, lines read vs lines printed,
+ * and lines where qty × cost ≠ amount. `ok` is false when any printed figure disagrees.
+ */
+function docChecks(lines) {
+  const groups = new Map();
+  for (const o of lines) { if (!o.doc) continue; const k = `${o.doc.file}|${normPo(o.po)}`; if (!groups.has(k)) groups.set(k, { doc: o.doc, po: o.po, lines: [] }); groups.get(k).lines.push(o); }
+  return [...groups.values()].map(({ doc, po, lines: ls }) => {
+    const qty = ls.reduce((a, o) => a + (num(o.qty) || 0), 0);
+    const amts = ls.map(amountOf); const amount = r2(amts.reduce((a, x) => a + (x || 0), 0));
+    const printedLines = ls.reduce((a, o) => a + (o.parts ? o.parts.length : 1), 0);
+    const off = ls.flatMap((o) => (o.amount_off || []).map((x) => ({ ...x, sku: o.sku, product: o.product })));
+    const c = {
+      po, file: doc.file, type: doc.type, currency: doc.currency || ls.find((o) => o.currency)?.currency || 'USD',
+      qty: { read: qty, doc: doc.total_qty, ok: doc.total_qty == null || Math.abs(qty - doc.total_qty) < 0.5 },
+      amount: { read: amount, doc: doc.total_amount, ok: doc.total_amount == null || Math.abs(amount - doc.total_amount) <= Math.max(1, doc.total_amount * 0.002) },
+      lines: { read: printedLines, doc: doc.line_count, products: ls.length, combined: ls.filter((o) => o.parts).length, ok: !doc.line_count || doc.line_count === printedLines },
+      off,
+    };
+    c.has = doc.total_qty != null || doc.total_amount != null;
+    c.ok = c.qty.ok && c.amount.ok && c.lines.ok && !off.length;
+    return c;
+  });
+}
+const isOrderDoc = (t) => !t || !/packing|report/i.test(t);   // packing lists and status reports are checked, not stored as the PO total
+/** Keep the printed PO totals (table po_checks) so the PO page can compare the live lines against them. */
+async function saveChecks(db, supplierId, lines) {
+  const out = [];
+  for (const c of docChecks(lines)) {
+    if (!c.has || !isOrderDoc(c.type)) { out.push(c); continue; }
+    const ls = lines.filter((o) => o.doc && o.doc.file === c.file && normPo(o.po) === normPo(c.po));
+    const row = { supplier_id: supplierId, po: cleanPo(c.po), total_qty: c.qty.doc, total_amount: c.amount.doc, currency: c.currency, line_count: c.lines.doc, file_name: c.file,
+      lines: ls.map((o) => ({ sku: o.sku || null, product: o.product || null, qty: num(o.qty), amount: amountOf(o) })), read_ok: c.ok, checked_at: new Date().toISOString() };
+    try {
+      const have = (await db.list('po_checks', { filters: { supplier_id: supplierId } })).filter((x) => normPo(x.po) === normPo(c.po));
+      if (have.length) { await db.update('po_checks', { id: have[0].id }, row); for (const x of have.slice(1)) await db.remove('po_checks', { id: x.id }); }
+      else await db.insert('po_checks', row);
+      c.saved = true;
+    } catch (e) { if (!/po_checks|PGRST205|relation|schema cache/i.test(e.message || '')) throw e; c.noTable = true; }
+    out.push(c);
+  }
+  return out;
+}
+/** The saved PO totals for one PO (null when none or the table is missing). */
+async function poCheck(db, supplierId, po) {
+  const all = await db.list('po_checks', { filters: { supplier_id: supplierId } }).catch(() => []);
+  return all.filter((x) => normPo(x.po) === normPo(po)).sort((a, b) => String(b.checked_at || '').localeCompare(String(a.checked_at || '')))[0] || null;
+}
+/** Live PO lines vs the saved PO totals: { qty, amount, missing per SKU, ok }. */
+function compareToCheck(chk, ls) {
+  if (!chk || (chk.total_qty == null && chk.total_amount == null)) return null;
+  const qty = ls.reduce((a, o) => a + (num(o.qty) || 0), 0);
+  const amount = r2(ls.reduce((a, o) => a + (num(o.qty) != null && num(o.unit_price) != null ? num(o.qty) * num(o.unit_price) : 0), 0));
+  const qOk = chk.total_qty == null || Math.abs(qty - Number(chk.total_qty)) < 0.5;
+  const aOk = chk.total_amount == null || Math.abs(amount - Number(chk.total_amount)) <= Math.max(1, Number(chk.total_amount) * 0.002);
+  const want = Array.isArray(chk.lines) ? chk.lines : [];
+  const byLines = want.reduce((a, x) => a + (num(x.qty) || 0), 0);
+  const items = [];
+  if (chk.total_qty == null || Math.abs(byLines - Number(chk.total_qty)) < 0.5) {   // per item only when the saved lines add up to the printed total
+    for (const w of want) {
+      const have = ls.filter((o) => (w.sku && o.sku && normSku(o.sku) === normSku(w.sku)) || (!w.sku && w.product && normProd(cleanName(o.product, o.sku)) === normProd(w.product)));
+      const h = have.reduce((a, o) => a + (num(o.qty) || 0), 0);
+      if (Math.abs(h - (num(w.qty) || 0)) >= 0.5) items.push({ sku: w.sku, product: w.product, want: num(w.qty), have: h });
+    }
+  }
+  return { qty: { have: qty, want: chk.total_qty == null ? null : Number(chk.total_qty) }, amount: { have: amount, want: chk.total_amount == null ? null : Number(chk.total_amount) }, currency: chk.currency || 'USD', items, ok: qOk && aOk, file: chk.file_name, at: chk.checked_at };
 }
 
 // ── match against what is already saved ─────────────────────────────────────
@@ -196,7 +314,7 @@ function diff(incoming, existing) {
 }
 
 /** Save reviewed lines: update matched rows (only fields that came in), insert the rest. */
-async function save(db, supplierId, lines, { batch, sourceName }) {
+async function save(db, supplierId, lines, { batch, sourceName, checkLines = null }) {
   for (const o of lines) if (!o.product && o.sku) o.product = o.sku;   // a SKU makes it a product line, never "(whole PO)"
   await namesFromCatalog(db, supplierId, lines);
   const existing = await db.list('plan_orders', { filters: { supplier_id: supplierId } });
@@ -227,7 +345,18 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
       // PO numbers are kept as the number only ("900018", never "PO900018")
       await write((r) => db.insert('plan_orders', r), { supplier_id: supplierId, po: cleanPo(o.po), ...vals, cbm_estimated: !!o.cbm_estimated, batch, source_name: sourceName, created_at: now, updated_at: now }); added++;
     }
-    else if (o.change === 'updated') {
+    else if (o.change === 'updated' || (o.change === 'same' && o.targetIds?.length > 1 && o.product && o.qty != null)) {
+      // the document is one line for this item but we hold several (an older import split it): keep one, drop the copies
+      if (o.product && o.qty != null && o.targetIds.length > 1) {
+        const ts = o.targetIds.map((id) => existing.find((e) => e.id === id)).filter(Boolean);
+        const boxed = ts.filter((e) => e.container_id);
+        if (boxed.length <= 1) {
+          const keepRow = boxed[0] || ts.slice().sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))[0];
+          for (const e of ts) if (e.id !== keepRow.id) await db.remove('plan_orders', { id: e.id });
+          o.targetIds = [keepRow.id]; o.change = 'updated';
+        } else for (const k of ['qty', 'cartons', 'cbm', 'gross_kg']) delete vals[k];   // split across containers on purpose: leave the quantities
+      }
+      if (o.change !== 'updated') continue;
       const keep = o.product ? (o.keepName ? Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku'].includes(k))) : vals) : Object.fromEntries(Object.entries(vals).filter(([k]) => !['product', 'sku', 'qty', 'cartons', 'cbm', 'gross_kg', ...PACK, ...PRICE].includes(k)));
       if (keep.cbm !== undefined) keep.cbm_estimated = !!o.cbm_estimated;
       for (const id of o.targetIds) await write((r) => db.update('plan_orders', { id }, r), { ...keep, updated_at: now, source_name: sourceName }); updated++;
@@ -238,7 +367,8 @@ async function save(db, supplierId, lines, { batch, sourceName }) {
   const vol = await fillVolumes(db, supplierId);
   const created = await addToCatalog(db, supplierId, lines.filter((o) => o.product && d.find((x) => x === o || (x.po === o.po && x.product === o.product))?.keepName !== true));
   const catalog = await packingToCatalog(db, supplierId, lines);
-  return { added, updated, same: d.filter((x) => x.change === 'same').length, volumes: vol, catalog, products: created.added, productNames: created.names };
+  const checks = await saveChecks(db, supplierId, checkLines || lines).catch(() => []);
+  return { added, updated, same: d.filter((x) => x.change === 'same').length, volumes: vol, catalog, products: created.added, productNames: created.names, checks };
 }
 
 /** Fill CBM from the supplier's products (carton size × cartons) when the document gave none. */
@@ -413,7 +543,12 @@ async function mergeDuplicates(db, supplierId = null) {
       if (!empty(keep[k])) continue;
       const v = newest.find((x) => !empty(x[k])); if (v) patch[k] = v[k];
     }
-    for (const k of ['unit_price', 'currency', 'qty']) { const v = newest.find((x) => !empty(x[k])); if (v && String(v[k]) !== String(keep[k] ?? '')) patch[k] = v[k]; }
+    // lines from the same document are separate printed lines (two lots of one item): add them up, never drop quantity
+    const oneDoc = g.every((x) => x.batch && x.batch === g[0].batch);
+    if (oneDoc) {
+      for (const k of ['qty', 'cartons', 'cbm', 'gross_kg']) { const v = g.map((x) => num(x[k])); if (v.every((x) => x != null)) patch[k] = Math.round(v.reduce((a, x) => a + x, 0) * 100) / 100; }
+      const v = newest.find((x) => !empty(x.unit_price)); if (v && String(v.unit_price) !== String(keep.unit_price ?? '')) patch.unit_price = v.unit_price;
+    } else for (const k of ['unit_price', 'currency', 'qty']) { const v = newest.find((x) => !empty(x[k])); if (v && String(v[k]) !== String(keep[k] ?? '')) patch[k] = v[k]; }
     const clean = g.map((x) => cleanName(x.product, x.sku || keep.sku)).sort((a, b) => a.length - b.length)[0];
     if (clean && clean !== keep.product) patch.product = clean;
     if (Object.keys(patch).length) await db.update('plan_orders', { id: keep.id }, { ...patch, updated_at: new Date().toISOString() }).catch(() => db.update('plan_orders', { id: keep.id }, Object.fromEntries(Object.entries(patch).filter(([k]) => ![...PACK, ...PRICE].includes(k)))));
@@ -553,4 +688,4 @@ async function storeFiles(db, supplierId, files, { pos = [], kind = null, batch 
   return { saved, errors, skipped };
 }
 
-module.exports = { cleanPo, splitTerms, DOC_KINDS, storeFiles, guessKind, BOXES, LCL_MAX, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };
+module.exports = { combineRepeats, docChecks, saveChecks, poCheck, compareToCheck, amountOf, cleanPo, splitTerms, DOC_KINDS, storeFiles, guessKind, BOXES, LCL_MAX, suggest, today, isoDay, weekStart, isoWeek, weekLabel, short, addDays, state, STATE, readOrders, diff, save, estimateCbm, normPo, TOOL, FIELDS, PACK, PRICE, packingFromText, namesFromCatalog, fillVolumes, duplicateGroups, mergeDuplicates, addToCatalog, catalogMatch, cleanName, volumeFrom, mergePlaceholders, packingToCatalog };

@@ -82,6 +82,8 @@ module.exports = function orderRoutes(router, { db, config }) {
     const { lines, files, sups, missing, ci } = await load();
     const day = PL.today();
     const all = groupPos(lines, sups, files, day);
+    const checks = await db.list('po_checks').catch(() => []);
+    for (const p of all) { const c = checks.filter((x) => x.supplier_id === p.supplier_id && PL.normPo(x.po) === PL.normPo(p.po)).sort((a, b) => String(b.checked_at || '').localeCompare(String(a.checked_at || '')))[0]; p.cmp = PL.compareToCheck(c, p.lines); }
     const q = String(req.query.q || '').trim().toLowerCase();
     const fSup = sups[req.query.supplier] ? req.query.supplier : '';
     const TABS = [['open', 'Open'], ['overdue', 'Late'], ['waiting', 'Waiting on us'], ['shipped', 'Shipped'], ['all', 'All']];
@@ -119,7 +121,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td><a href="${poUrl(p.supplier_id, p.po)}"><b>${p.po}</b></a></td>
             <td><a href="/admin/suppliers/${p.supplier_id}">${p.supplier?.name || '—'}</a></td>
             <td>${p.products.length ? html`${p.products[0]}${p.products.length > 1 ? html` <span class="sub">+${p.products.length - 1} more</span>` : ''}` : html`<span class="sub">${p.lines.length} line${p.lines.length === 1 ? '' : 's'}</span>`}</td>
-            <td class="r">${p.qty ? int(p.qty) : '—'}</td>
+            <td class="r">${p.cmp && !p.cmp.ok ? html`<a class="or-pkw" href="${poUrl(p.supplier_id, p.po)}" title="${`Doesn't match the PO: it says ${int(p.cmp.qty.want ?? p.cmp.qty.have)} pcs${p.cmp.amount.want != null ? ` · ${money(p.cmp.amount.want, p.cmp.currency)}` : ''}`}">⚠</a> ` : ''}${p.qty ? int(p.qty) : '—'}</td>
             <td class="r">${p.cbm ? n2(p.cbm) : '—'}${p.cbmMissing && p.cbm ? html`<span class="sub"> +?</span>` : ''}</td>
             <td>${p.first ? (p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`) : '—'}</td>
             <td>${p.ports.map(portName).filter(Boolean).join(', ') || html`<span class="sub">To confirm</span>`}</td>
@@ -147,6 +149,7 @@ module.exports = function orderRoutes(router, { db, config }) {
     for (const x of split) if ((x.notes || null) !== (x.o.notes || null) || (x.po_terms || null) !== (x.o.po_terms || null)) await db.update('plan_orders', { id: x.o.id }, { notes: x.notes, po_terms: x.po_terms }).catch(() => null);
     for (const x of split) { x.o.notes = x.notes; x.o.po_terms = x.po_terms; }
     const back = req.url;
+    const cmp = PL.compareToCheck(await PL.poCheck(db, supplier.id, poQ), ls);   // live lines vs the totals printed on the PO
     const prods = await db.list('products', { filters: { supplier_id: supplier.id } }).catch(() => []);
     const inCat = (o) => (o.product ? PL.catalogMatch(o, prods) : null);
     const missingCat = ls.filter((o) => o.product && !inCat(o));
@@ -212,7 +215,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td>${(() => { const x = ci.labelFor(o); const mv = html`<button type="button" class="link small or-mvb" data-open-dialog="${`mv-${o.id}`}">${x ? 'Move…' : 'Add to container…'}</button>`;
               return x ? html`<a class="or-ctn" href="${x.url}">📦 ${x.text}</a> ${mv}` : o.shipped ? html`— ${mv}` : html`<a class="sub" href="/admin/logistics/planning/load${o.port ? `?port=${o.port}` : ''}">Not planned</a> ${mv}`; })()}</td>
             <td class="or-acts">${PR.editBtn({ ...o, sup: supplier }, 'link small')}<form method="post" action="/admin/logistics/planning/${o.id}/delete" class="inline" data-confirm="${`Delete this line (${o.po}${o.product ? ` · ${o.product}` : ''})? This can't be undone.`}"><input type="hidden" name="back" value="${back}"><button class="icon-btn" title="Delete line" aria-label="${`Delete ${o.product || o.po}`}">×</button></form></td></tr>`)}</tbody>
-          ${ls.length > 1 ? (() => {
+          ${ls.length > 1 || cmp ? (() => {
             // order total: cartons/kg from the line, else calculated from packing (PK); "+N?" = lines without data
             const sum = (f) => { const v = ls.map(f); return { total: v.reduce((a, x) => a + (x || 0), 0), missing: v.filter((x) => !x).length }; };
             const q = sum((o) => Number(o.qty) || null); const c = sum((o) => Number(o.cbm) || null); const k = sum(PK.kg); const t = sum(PK.ctn);
@@ -225,6 +228,10 @@ module.exports = function orderRoutes(router, { db, config }) {
             return html`<tfoot><tr class="or-tot"><td><b>Order total</b> <span class="sub">· ${ls.length} lines</span></td><td class="r">${int(q.total)}${miss(q, 'a quantity')}</td><td></td>
               <td class="r">${amt.length ? amt.map((x, n) => html`${n ? html`<br>` : ''}${x}`) : '—'}${noPrice ? html` <span class="sub or-miss" title="${`${noPrice} line${noPrice === 1 ? '' : 's'} without a price`}">+${noPrice}?</span>` : ''}</td>
               <td class="r">${int(t.total)}${miss(t, 'cartons')}</td><td class="r">${n2(c.total)}${miss(c, 'a volume')}</td><td class="r">${n1(k.total)}${miss(k, 'a weight')}</td><td colspan="5"></td></tr>
+              ${cmp ? html`<tr class="or-ship or-pochk"><td colspan="12">${cmp.ok
+                ? html`<span class="or-pk ok">✓ Matches PO ${p.po} · ${int(cmp.qty.want ?? cmp.qty.have)} pcs${cmp.amount.want != null ? ` · ${money(cmp.amount.want, cmp.currency)}` : ''}</span> <span class="sub">checked against ${cmp.file || 'the PO'}${cmp.at ? ` · ${PL.short(String(cmp.at).slice(0, 10))}` : ''}</span>`
+                : html`<span class="or-pk no">⚠ PO ${p.po} says ${cmp.qty.want != null ? `${int(cmp.qty.want)} pcs` : ''}${cmp.qty.want != null && cmp.amount.want != null ? ' · ' : ''}${cmp.amount.want != null ? money(cmp.amount.want, cmp.currency) : ''} — ${[cmp.qty.want != null && cmp.qty.have !== cmp.qty.want ? `${int(Math.abs(cmp.qty.want - cmp.qty.have))} pcs` : '', cmp.amount.want != null && Math.abs(cmp.amount.want - cmp.amount.have) > 1 ? money(Math.abs(cmp.amount.want - cmp.amount.have), cmp.currency) : ''].filter(Boolean).join(' / ')} ${cmp.qty.have < (cmp.qty.want ?? cmp.qty.have) || cmp.amount.have < (cmp.amount.want ?? cmp.amount.have) ? 'not in the portal' : 'more in the portal than on the PO'}</span>
+                  <div class="or-pk-r"><form method="post" action="/admin/logistics/planning/po-recheck" class="inline" data-busy><input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}"><input type="hidden" name="back" value="${back}"><button class="link small" title="AI reads the PO file again and updates the lines">Fix from the PO (re-read)</button></form>${cmp.items.length ? html`<span class="sub">${cmp.items.map((x) => `${x.sku || x.product} ${x.have > x.want ? '+' : '−'}${int(Math.abs(x.want - x.have))}`).join(' · ')}</span>` : ''}<span class="sub">or fix a quantity with ✎</span></div>`}</td></tr>` : ''}
               ${ship ? html`<tr class="or-ship"><td colspan="12"><span class="or-sc">Shipping: <b>${ship.mode}</b> — ${n2(c.total)} m³ ${ship.mode === 'FCL' ? html`≈ <b>${ship.boxes}</b>` : ''} <span class="or-bar" aria-hidden="true"><i style="${`width:${Math.min(100, ship.pct)}%`}"></i></span> ${ship.pct}% of a 40' HQ <span class="sub">(${ship.cap} m³ usable)</span></span>${ship.mode === 'LCL' ? html`<span class="or-sc" title="LCL is charged per W/M: the larger of volume (m³) and weight (t)">Chargeable <b>${n2(ship.wm)} W/M</b> <span class="sub">(${ship.byWeight ? 'weight' : 'volume'} decides)</span></span>` : ''}${ship.avgKg ? html`<span class="or-sc">Avg <b>${n1(ship.avgKg)} kg</b> / carton</span>` : ''}${short ? html`<span class="or-sc"><span class="or-warn">${short} line${short === 1 ? '' : 's'} without packing — totals are short</span></span>` : ''}</td></tr>` : ''}</tfoot>`;
           })() : ''}</table></div>
           </section>` : ''}
