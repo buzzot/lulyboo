@@ -4467,6 +4467,7 @@ test('PO page: totals row with qty, amount, CBM, cartons and weight', async (t) 
   assert.match(foot, /Shipping: <b>LCL<\/b>/);
   assert.match(foot, /4% of a 40' HQ/);
   assert.doesNotMatch(foot, /Chargeable|Avg/);
+  assert.match(foot, /class="or-fill"/); assert.equal((require('fs').readFileSync(require('path').join(__dirname, '../public/style.css'), 'utf8').match(/\.or-bar\{/g) || []).length, 1, '.or-bar is the list filter bar; the fill bar is .or-fill');
   assert.match(foot, /1 line without packing/);
   assert.match(page, /<th class="r">Cartons<\/th><th class="r">CBM<\/th><th class="r">Gross kg<\/th><th>Container<\/th>/);
   assert.match(page, /pieces · <b class="or-kp">69 cartons<\/b>/);
