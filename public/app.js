@@ -1437,9 +1437,16 @@
     var days = {}; ls.forEach(function (x) { if (x.ready) days[x.ready] = 1; });
     var mixed = Object.keys(days).length > 1;
     return '<span class="lp-pop" role="tooltip"><span class="lp-pop-h"><b>' + esc(o.po) + '</b><span>' + esc(o.supplier) + '</span></span>' +
-      '<span class="lp-pop-r"><span>Ready</span><b>' + (readyOf(ls) ? esc(short(readyOf(ls))) + (mixed ? ' <em>last item</em>' : '') : '<em>not set</em>') + '</b></span>' +
-      '<span class="lp-pop-l">' + ls.map(function (x) { return '<span><span class="lp-pop-n">' + esc(x.product || '(whole PO)') + (x.part ? ' <em class="lp-chip-pt">part ' + x.part + '</em>' : '') + (canSplit(x) ? '<button type="button" class="link small lp-pop-s" data-lp-splitone="' + x.id + '">Split…</button>' : '') + '</span><span>' + (x.qty ? int(x.qty) + ' pcs' : '') + (x.cartons ? ' · ' + int(x.cartons) + ' ctns' : '') + (x.cbm ? ' · ' + n2(x.cbm) + ' m³' : '') + (mixed && x.ready ? ' · ' + esc(x.readyText) : '') + '</span></span>'; }).join('') + '</span>' +
+      '<span class="lp-pop-r"><span>Ready</span><b>' + (readyOf(ls) ? esc(short(readyOf(ls))) + (mixed ? ' <em>last item</em>' : '') : '<em>not set</em>') + ctnTotal(ls) + '</b></span>' +
+      '<span class="lp-pop-l">' + ls.map(function (x) { return '<span><span class="lp-pop-n">' + esc(x.product || '(whole PO)') + (x.part ? ' <em class="lp-chip-pt">part ' + x.part + '</em>' : '') + (canSplit(x) ? '<button type="button" class="link small lp-pop-s" data-lp-splitone="' + x.id + '">Split…</button>' : '') + '</span><span>' + (x.qty ? int(x.qty) + ' pcs' : '') + (ctnOf(x) ? ' · ' + int(ctnOf(x)) + ' ctns' : '') + (x.cbm ? ' · ' + n2(x.cbm) + ' m³' : '') + (mixed && x.ready ? ' · ' + esc(x.readyText) : '') + '</span></span>'; }).join('') + '</span>' +
       '<a class="lp-pop-a" href="/admin/orders/view?supplier=' + encodeURIComponent(sid) + '&po=' + encodeURIComponent(o.po) + '">Open PO →</a></span>';
+  }
+  // cartons on a line: given, else qty ÷ pcs per carton (rounded up); 0 when unknown
+  function ctnOf(x) { return x.cartons || (x.upc && x.qty ? Math.ceil(x.qty / x.upc) : 0); }
+  function ctnTotal(ls) {
+    var t = 0, miss = 0; ls.forEach(function (x) { var c = ctnOf(x); if (c) t += c; else if (x.product) miss++; });
+    if (!t) return '';
+    return '<span class="lp-pop-c"' + (miss ? ' title="' + miss + ' line' + (miss === 1 ? '' : 's') + ' without packing — not counted"' : '') + '>' + int(t) + (miss ? '+' : '') + ' ctns</span>';
   }
   function readyOf(ls) { var d = ls.map(function (x) { return x.ready; }).filter(Boolean).sort(); return d.length ? d[d.length - 1] : null; }
   function short(d) { var x = new Date(d + 'T12:00:00Z'); return x.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); }
