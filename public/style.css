@@ -3245,3 +3245,14 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .or-pk{display:inline-block;border-radius:8px;padding:3px 10px;font-weight:600}.or-pk.ok{background:#e5f3ec;color:#1f5a40}.or-pk.no{background:#fbe7e4;color:#7d2418}
 .or-pk-r{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:7px}.or-pochk td{padding-top:8px}
 .or-pkw{color:#b4473b;text-decoration:none;font-weight:700}
+.or-est{cursor:help}.or-diff{font-size:12px;font-weight:600;color:#8a5300;margin-top:1px}.cp-kpi small .or-kp{font-size:inherit;font-weight:700;color:var(--ink)}
+.or-cc{display:inline-flex;align-items:center;gap:8px}.or-ib{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e0dcd6;border-radius:7px;background:#fff;color:#c4574b;cursor:pointer;flex:none}.or-ib:hover{background:#fbf3f1;border-color:#c4574b}
+.or-diff .cp-tag{font-size:11px;padding:1px 7px;margin-right:4px}
+.or-chip{display:inline-flex;align-items:center;gap:8px;padding:5px 10px 5px 7px;border:1px solid #e6e2dc;border-radius:9px;background:#fbfaf8;text-decoration:none;color:var(--ink);line-height:1.2;max-width:260px}
+.or-chip:hover{border-color:#c4574b;background:#fff}.or-chip-i{font-size:15px}.or-chip-t{display:flex;flex-direction:column;min-width:0}
+.or-chip-t b{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.or-chip-t small{font-size:11.5px;color:#78746e;white-space:nowrap;display:flex;align-items:center;gap:5px}
+.or-dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:#8d9692}.or-dot.req{background:#d07a1e}.or-dot.booked{background:#2f8a63}.or-dot.plan{background:#3b6fb6}.or-dot.shipped{background:#b9c0bc}
+.or-chip.add{border-style:dashed;border-color:#d9d3cb;background:#fff;font:inherit;cursor:pointer;text-align:left}
+.or-chip.add .or-chip-t b{color:#5d5852}.or-chip.add .or-chip-t small{color:#c4574b;font-weight:600}
+.or-chip.add:hover{border-color:#c4574b;border-style:solid;background:#fbf3f1}.or-chip-i.ib{color:#c4574b;display:inline-flex;width:20px;justify-content:center}
+.or-chip.add{min-height:36px;padding-right:12px}

@@ -2375,7 +2375,7 @@ test('load containers: drag lines into a container, fill + volume, forwarder quo
   await j(`${B}/assign`, { order: o1.id, container: c2.id });
 
   const po = await req(base, 'GET', `/admin/orders/view?supplier=${b.id}&po=PO200014`, { cookie });
-  assert.match(po.text, /📦 Sails ~\w+ \d+ · 40′ GP · Ningbo → LA/);
+  assert.match(po.text, /<b>40′ GP · Ningbo → LA<\/b><small><i class="or-dot req"><\/i>Quotes requested · sails ~\w+ \d+<\/small>/);
   assert.match((await req(base, 'GET', '/admin/orders', { cookie })).text, /Quotes requested/);
 
   assert.ok((await j(`${B}/containers/${c.id}/shipped`, {})).ok);
@@ -4224,7 +4224,7 @@ test('PO page: add a line to a container (also a shipped one), move it, take it 
   await db.insert('plan_orders', { supplier_id: s.id, po: '70011', product: 'Easy Spoon - Blue', qty: 5040, port: 'CNYTN', container_id: c.id, shipped: true });
   const pink = await db.insert('plan_orders', { supplier_id: s.id, po: '70011', product: 'Easy Spoon - Pink', qty: 5040, port: 'CNYTN', shipped: false });
   const pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=70011`, { cookie })).text;
-  assert.match(pg, new RegExp(`id="mv-${pink.id}"`)); assert.match(pg, /Add to container…/); assert.match(pg, /YN0011 · 40′ HQ · Yantian → LA/);
+  assert.match(pg, new RegExp(`id="mv-${pink.id}"`)); assert.match(pg, /class="or-chip add"[^>]*title="Add to container"/); assert.doesNotMatch(pg, /Add to container…|<th>Status<\/th>|<th>Port<\/th>/); assert.match(pg, /YN0011 · 40′ HQ · Yantian → LA/);
   let r = await req(base, 'POST', `/admin/logistics/planning/line/${pink.id}/move`, { cookie, form: { container_id: c.id, back: `/admin/orders/view?supplier=${s.id}&po=70011` } });
   assert.equal(r.status, 303);
   let row = db.tables.plan_orders.find((x) => x.id === pink.id);
@@ -4466,10 +4466,11 @@ test('PO page: totals row with qty, amount, CBM, cartons and weight', async (t) 
   assert.match(foot, /<td class="r">608\.5 <span class="sub or-miss"/);                                      // 25 × 8.5 + 396
   assert.match(foot, /Shipping: <b>LCL<\/b>/);
   assert.match(foot, /4% of a 40' HQ/);
-  assert.match(foot, /Chargeable <b>2\.77 W\/M<\/b>/);
+  assert.doesNotMatch(foot, /Chargeable|Avg/);
   assert.match(foot, /1 line without packing/);
-  assert.match(page, /<th class="r">Cartons<\/th><th class="r">CBM<\/th><th class="r">Gross kg<\/th>/);
-  assert.match(page, />25<i class="sub" title="Calculated: qty ÷ pcs per carton"> calc\.<\/i>/);
+  assert.match(page, /<th class="r">Cartons<\/th><th class="r">CBM<\/th><th class="r">Gross kg<\/th><th>Container<\/th>/);
+  assert.match(page, /pieces · <b class="or-kp">69 cartons<\/b>/);
+  assert.match(page, /<span class="or-est" title="Calculated: qty ÷ pcs per carton">25<\/span>/); assert.doesNotMatch(page, / calc\.</);
   assert.match(page, /class="or-add"[^>]*title="Add pcs per carton">add<\/button>/);
 });
 
