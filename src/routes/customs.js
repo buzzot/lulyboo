@@ -3,6 +3,7 @@
 
 const { html, raw } = require('../lib/html');
 const { parseForm, flash, takeFlash, HttpError } = require('../lib/http');
+const ST = require('../staff');
 const { page, adminNav } = require('../views/layout');
 const { guard } = require('./admin');
 const SCR = require('./schedules');
@@ -91,6 +92,7 @@ module.exports = function customsRoutes(router, { db, config }) {
   const getE = async (id) => { const e = await db.get('customs_entries', id).catch(() => null); if (!e) throw new HttpError(404, 'Customs entry not found'); return e; };
 
   router.get(BASE, G(async (req, res) => {
+    const canDel = ST.can(ST.current()?.role || 'admin', 'delete');
     const { rows, missing } = await entries(db);
     const s = statsOf(rows);
     const pending = rows.filter((r) => r.status === 'pending');
@@ -121,8 +123,9 @@ module.exports = function customsRoutes(router, { db, config }) {
             ${s.hts.slice(0, 12).map((h) => html`<tr><td><span class="cu-mono hts-tip" data-hts="${h.hts}" tabindex="0">${h.hts}</span><div class="sub">${h.description || ''}</div></td><td class="r">${usd(h.value)}</td><td class="r">${usd(h.duty)}</td><td class="r">${h.rate}%</td></tr>`)}</tbody></table></div></section>
         </div>
         <section class="card flush"><div class="rh-head pad"><h2 class="sec">Entries <span class="sub">${saved.length}</span></h2></div>
-          <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Entry</th><th>Date</th><th>Shipment</th><th>POs</th><th class="r">Value</th><th class="r">Duty</th><th class="r">Rate</th><th class="r">Fees</th><th></th></tr></thead><tbody>
-          ${saved.map((r) => { const open = (r.lines || []).filter((l) => l.suggestion?.verdict === 'suggest' && l.suggestion?.hts && l.suggestion.status === 'open').length; return html`<tr><td><button type="button" class="link cu-mono" data-cu-open="${r.id}">${r.entry_no || 'Entry'}</button></td><td>${r.entry_date ? PL.short(String(r.entry_date).slice(0, 10)) : '—'}</td><td>${conts[r.container_id] || '—'}</td><td class="sub">${(r.pos || []).join(', ')}</td><td class="r">${usd(r.entered_value)}</td><td class="r"><b>${usd(r.duty)}</b></td><td class="r">${r.entered_value ? `${pct(r.duty || 0, r.entered_value)}%` : '—'}</td><td class="r">${usd(r.fees)}</td><td>${open ? html`<span class="cp-tag wait">${open} HTS to check</span>` : html`<span class="cp-tag ok">Checked</span>`}</td></tr>`; })}
+          <div class="table-wrap"><table class="list cu-t"><thead><tr><th>Entry</th><th>Date</th><th>Shipment</th><th>POs</th><th class="r">Value</th><th class="r">Duty</th><th class="r">Rate</th><th class="r">Fees</th><th></th><th></th></tr></thead><tbody>
+          ${saved.map((r) => { const open = (r.lines || []).filter((l) => l.suggestion?.verdict === 'suggest' && l.suggestion?.hts && l.suggestion.status === 'open').length; return html`<tr><td><button type="button" class="link cu-mono" data-cu-open="${r.id}">${r.entry_no || 'Entry'}</button></td><td>${r.entry_date ? PL.short(String(r.entry_date).slice(0, 10)) : '—'}</td><td>${conts[r.container_id] || '—'}</td><td class="sub">${(r.pos || []).join(', ')}</td><td class="r">${usd(r.entered_value)}</td><td class="r"><b>${usd(r.duty)}</b></td><td class="r">${r.entered_value ? `${pct(r.duty || 0, r.entered_value)}%` : '—'}</td><td class="r">${usd(r.fees)}</td><td>${open ? html`<span class="cp-tag wait">${open} HTS to check</span>` : html`<span class="cp-tag ok">Checked</span>`}</td>
+            <td class="rh-acts" data-armbox>${canDel ? html`<button type="button" class="bd-del rh-del" data-arm title="Delete this entry: it leaves the statistics, and its products' duty paid goes back to their previous import">Delete</button><button type="submit" class="bd-yes" form="${`cu-del-${r.id}`}">✓ Delete</button><form id="${`cu-del-${r.id}`}" method="post" action="${BASE}/${r.id}/delete" hidden></form>` : ''}</td></tr>`; })}
           </tbody></table></div></section>` : !pending.length ? html`<section class="card"><p class="muted">No customs entries yet. Add your first 7501 with “＋ Add customs entry”, or email it to ${CU.customsAddress()}.</p></section>` : ''}`,
     }));
   }));
@@ -139,6 +142,14 @@ module.exports = function customsRoutes(router, { db, config }) {
   router.get(`${BASE}/hts`, J(async (req) => ({ hts: await require('../duty').explainHts(String(req.query.code || '')) })));
   router.get(`${BASE}/:id/view`, J(async (req) => ({ view: await viewOf(db, await getE(req.params.id)) })));
   router.post(`${BASE}/:id/save`, J(async (req) => { const e = await getE(req.params.id); await CU.save(db, e, { by: by(req) }); return { view: await viewOf(db, await getE(e.id)) }; }));
+  router.post(`${BASE}/:id/delete`, G(async (req, res) => {
+    await parseForm(req).catch(() => null);
+    if (!ST.can(ST.current()?.role || 'admin', 'delete')) throw new HttpError(403, 'Only an Admin can delete a customs entry.');
+    const e = await getE(req.params.id);
+    const out = await CU.removeEntry(db, e);
+    flash(res, 'ok', `Entry ${e.entry_no || ''} deleted${out.products + out.cleared ? ` · duty paid ${out.products ? `back to the previous import on ${out.products} product${out.products === 1 ? '' : 's'}` : ''}${out.products && out.cleared ? ', ' : ''}${out.cleared ? `cleared on ${out.cleared} product${out.cleared === 1 ? '' : 's'}` : ''}` : ''}`);
+    res.redirect(BASE);
+  }));
   router.post(`${BASE}/:id/discard`, J(async (req) => { const e = await getE(req.params.id); if (e.status === 'saved') throw new HttpError(400, 'A saved entry stays in the statistics'); await db.update('customs_entries', { id: e.id }, { status: 'discarded' }); return {}; }));
   router.post(`${BASE}/:id/hts`, J(async (req) => {
     const { fields: f } = await parseForm(req);

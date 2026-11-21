@@ -404,7 +404,38 @@ async function setPaid(db, productId, { rate, at, entry }) {
   return true;
 }
 
+/**
+ * Delete an entry for good, and undo what it fed: each product's "duty paid" goes back to its latest other saved
+ * entry (or is cleared), the 7501 copies on the POs' documents and the stored files go, records forget the link.
+ * Returns { products: n restored, cleared: n }.
+ */
+async function removeEntry(db, e) {
+  const out = { products: 0, cleared: 0 };
+  const others = (await db.list('customs_entries').catch(() => [])).filter((x) => x.id !== e.id && x.status === 'saved').sort((a, b) => String(b.entry_date || '').localeCompare(String(a.entry_date || '')));
+  const ids = [...new Set((e.lines || []).flatMap((l) => (l.products || []).map((p) => p.product_id)).filter(Boolean))];
+  for (const id of ids) {
+    const p = await db.get('products', id).catch(() => null); if (!p) continue;
+    if (p.duty_paid_entry && e.entry_no && p.duty_paid_entry !== e.entry_no) continue; // a newer import already set it
+    let prev = null;
+    for (const x of others) { const l = (x.lines || []).find((y) => (y.products || []).some((q) => q.product_id === id)); if (l) { prev = { rate: lineRate(l), at: x.entry_date, entry: x.entry_no }; break; } }
+    if (prev) { await db.update('products', { id }, { duty_paid_pct: prev.rate, duty_paid_at: prev.at ? String(prev.at).slice(0, 10) : null, duty_paid_entry: prev.entry || null }).catch(() => null); out.products++; }
+    else { await db.update('products', { id }, { duty_paid_pct: null, duty_paid_at: null, duty_paid_entry: null }).catch(() => null); out.cleared++; }
+  }
+  const paths = (e.files || []).map((f) => f.path).filter(Boolean);
+  if (paths.length) {
+    for (const pf of await db.list('plan_files').catch(() => [])) if (paths.includes(pf.path)) await db.remove('plan_files', { id: pf.id }).catch(() => null);
+    await db.docs.remove(paths).catch(() => null);
+  }
+  for (const c of await db.list('plan_containers').catch(() => [])) {
+    const files = c.record?.files || [];
+    if (!files.some((x) => x.ai?.entry_id === e.id)) continue;
+    await db.update('plan_containers', { id: c.id }, { record: { ...c.record, files: files.map((x) => (x.ai?.entry_id === e.id ? { ...x, ai: { ...x.ai, entry_id: null, note: 'Its customs entry was deleted — Re-read to add it again.' } } : x)) } }).catch(() => null);
+  }
+  await db.remove('customs_entries', { id: e.id });
+  return out;
+}
+
 /** Effective rate of a line (base + chapter 99), %. */
 const lineRate = (l) => Math.round(((l.rate || 0) + (l.extras || []).reduce((a, x) => a + (x.rate || 0), 0)) * 10) / 10;
 
-module.exports = { setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };
+module.exports = { removeEntry, setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };

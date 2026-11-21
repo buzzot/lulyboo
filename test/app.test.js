@@ -4448,6 +4448,28 @@ test('HTS classification: AI classifies once, rates from USITC, checked save kee
   assert.equal((await db.get('products', p.id)).hts_declare_code, null);
 });
 
+test('customs: delete an entry — duty paid goes back to the previous import, PO copies and files go', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const p = await db.insert('products', { product_name: 'Seat', duty_paid_pct: 43.8, duty_paid_at: '2026-11-21', duty_paid_entry: 'E-2' });
+  const q = await db.insert('products', { product_name: 'Bowl', duty_paid_pct: 30, duty_paid_at: '2026-11-21', duty_paid_entry: 'E-2' });
+  const line = (rate, pid) => ({ no: '001', hts: '3922.90.0000', rate, extras: [{ code: '9903.88.03', rate: 25 }], products: [{ product_id: pid }] });
+  await db.insert('customs_entries', { entry_no: 'E-1', entry_date: '2026-10-01', status: 'saved', lines: [line(6.3, p.id)] });
+  const e2 = await db.insert('customs_entries', { entry_no: 'E-2', entry_date: '2026-11-21', status: 'saved', lines: [line(18.8, p.id), { ...line(5, q.id), no: '002' }], files: [{ name: '7501.pdf', path: 'customs/x.pdf', type: 'application/pdf' }] });
+  db.files.set('docs/customs/x.pdf', Buffer.from('x'));
+  await db.insert('plan_files', { supplier_id: 's', name: '7501.pdf', path: 'customs/x.pdf', kind: 'Customs entry' });
+  const page = (await req(base, 'GET', '/admin/logistics/customs', { cookie })).text;
+  assert.match(page, /cu-del-/);
+  await req(base, 'POST', `/admin/logistics/customs/${e2.id}/delete`, { cookie, form: {} });
+  assert.ok(!db.tables.customs_entries.some((x) => x.id === e2.id));
+  const p2 = db.tables.products.find((x) => x.id === p.id); const q2 = db.tables.products.find((x) => x.id === q.id);
+  assert.equal(p2.duty_paid_pct, 31.3); assert.equal(p2.duty_paid_entry, 'E-1');   // back to the previous import
+  assert.equal(q2.duty_paid_pct, null);                                             // no other import: cleared
+  assert.ok(!db.tables.plan_files.some((x) => x.path === 'customs/x.pdf'));
+});
+
 test('costs & rates: compact table, one-rate dialog save with log, default star, use your quotes, delete, calculator, expired flag', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db);
