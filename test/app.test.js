@@ -2263,7 +2263,7 @@ test('orders menu: PO list, PO page with lines and documents, mark shipped', asy
   const list = await req(base, 'GET', '/admin/orders', { cookie });
   assert.equal(list.status, 200);
   assert.equal((list.text.match(/<b>PO200014<\/b>/g) || []).length, 1);                // two lines → one PO row
-  assert.match(list.text, /Basic Baby Car Mirror <span class="sub">\+1 more<\/span>/); assert.match(list.text, /📎 1/);
+  assert.match(list.text, /Basic Baby Car Mirror <span class="sub">\+1 more<\/span>/); assert.match(list.text, /class="or-docs"[^>]*title="1 document"[^>]*>📎<\/a>/);
   assert.match(list.text, /Needs: Package artwork/); assert.match(list.text, /Ready, not shipped/);
   const late = await req(base, 'GET', '/admin/orders?status=overdue', { cookie });
   assert.match(late.text, /PO900018/); assert.doesNotMatch(late.text, /<b>PO200014<\/b>/);
@@ -4877,4 +4877,52 @@ test('PO totals check: repeated SKUs are added up, read vs printed totals, PO pa
   await PL.mergeDuplicates(db, s2.id);
   const o2 = db.tables.plan_orders.filter((o) => o.supplier_id === s2.id);
   assert.equal(o2.find((o) => o.po === '1').qty, 150); assert.equal(o2.filter((o) => PL.normPo(o.po) === '2').length, 1); assert.equal(o2.find((o) => PL.normPo(o.po) === '2').qty, 120);
+});
+
+test('Purchase orders list: a partly shipped PO says which lines sailed and in which container', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db); t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const g = await db.insert('suppliers', { name: 'Guangzhou Yuanyi' });
+  const c = await db.insert('plan_containers', { box: '20GP', port: 'CNYTN', status: 'shipped', fwd: { container_no: 'ZCSU7687624' }, created_at: '2026-11-01' });
+  await db.insert('plan_orders', { supplier_id: g.id, po: '500024', product: 'Self-Feeder', qty: 12000, ready_date: '2026-11-15', port: 'CNYTN', container_id: c.id, shipped: true });
+  await db.insert('plan_orders', { supplier_id: g.id, po: '500024', product: 'Nipples', qty: 12000, ready_date: '2026-11-17', port: 'CNYTN' });
+  const t2 = (await req(base, 'GET', '/admin/orders?status=all', { cookie })).text;
+  assert.match(t2, /<div class="or-part">1 of 2 lines shipped<\/div>/);
+  assert.match(t2, /class="or-dot shipped"><\/i>Shipped · 1 of 2 lines/);
+  assert.match(t2, /1 line not planned/);
+});
+
+test('Load containers: Confirm booking locks the container, its POs show Booked, unlock opens it again', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db); t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const k = await db.insert('suppliers', { name: 'Kean' });
+  const c = await db.insert('plan_containers', { box: 'LCL', port: 'CNYTN', status: 'planned', created_at: '2026-11-01' });
+  const c2 = await db.insert('plan_containers', { box: 'LCL', port: 'CNYTN', status: 'planned', created_at: '2026-11-02' });
+  const a = await db.insert('plan_orders', { supplier_id: k.id, po: '900020', product: 'Brush', qty: 5000, cbm: 2, ready_date: '2020-01-01', port: 'CNYTN', container_id: c.id });
+  const free = await db.insert('plan_orders', { supplier_id: k.id, po: '900021', product: 'Cup', qty: 100, cbm: 1, ready_date: '2020-01-01', port: 'CNYTN' });
+  const B = '/admin/logistics/planning';
+  const book = await req(base, 'POST', `${B}/containers/${c.id}/book`, { cookie, form: { booking: 'SZX2411587', forwarder: 'Affinity', cutoff: '2026-11-25', etd: '2026-12-02', ctns_0: '50', cbm_0: '2', kg_0: '220' } });
+  assert.equal(book.status, 200, book.text);
+  const cc = db.tables.plan_containers.find((x) => x.id === c.id);
+  assert.equal(cc.status, 'booked'); assert.equal(cc.fwd.booking_no, 'SZX2411587'); assert.equal(cc.fwd.cfs_cutoff, '2026-11-25'); assert.equal(cc.fwd.confirmed.ctns, 50); assert.equal(cc.loading_date, '2026-11-25');
+  // locked: nothing in or out, no box change, no delete
+  for (const [u, f] of [[`${B}/assign`, { order: free.id, container: c.id }], [`${B}/assign`, { order: a.id, container: c2.id }], [`${B}/assign`, { order: a.id, container: '' }], [`${B}/containers/${c.id}`, { box: '20GP' }], [`${B}/containers/${c.id}/delete`, {}]]) {
+    const r = await req(base, 'POST', u, { cookie, form: f }); assert.equal(r.status, 400, u); assert.match(r.text, /booked and locked/);
+  }
+  assert.equal(db.tables.plan_orders.find((x) => x.id === a.id).container_id, c.id);
+  // PO page "move" is refused too
+  await req(base, 'POST', `${B}/line/${a.id}/move`, { cookie, form: { container_id: 'none' } });
+  assert.equal(db.tables.plan_orders.find((x) => x.id === a.id).container_id, c.id);
+  // Purchase orders: Booked tab, not Late / Open
+  const list = (await req(base, 'GET', '/admin/orders?status=booked', { cookie })).text;
+  assert.match(list, />Booked <span class="or-n">1<\/span>/); assert.match(list, /href="\/admin\/orders\/view\?supplier=[^"]+&amp;po=900020"/);
+  assert.match(list, />Late <span class="or-n">1<\/span>/);   // only 900021
+  assert.match(list, /Booked · CFS Nov 25 · sails ~Dec 2/);
+  // unlock: back to planning, the confirmation stays
+  const un = await req(base, 'POST', `${B}/containers/${c.id}/unlock`, { cookie, form: {} });
+  assert.equal(un.status, 200); assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).status, 'planned');
+  assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.confirmed.ctns, 50);
+  assert.equal((await req(base, 'POST', `${B}/assign`, { cookie, form: { order: free.id, container: c.id } })).status, 200);
 });

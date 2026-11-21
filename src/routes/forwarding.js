@@ -172,7 +172,8 @@ function summary(c) {
   const f = c.fwd; if (!f) return null;
   const cut = c.box === 'LCL' ? f.cfs_cutoff || f.cy_cutoff : f.cy_cutoff || f.cfs_cutoff;
   return { booking: f.booking_no || '', carrier: f.carrier || '', cut: cut ? PL.short(cut) : '', cutName: c.box === 'LCL' ? 'CFS cut-off' : 'CY cut-off', si: f.si_cutoff ? PL.short(f.si_cutoff) : '', transit: f.transit || '', price: f.ocean_usd ? `$${Number(f.ocean_usd).toLocaleString('en-US')}` : '',
-    forwarder: f.forwarder || '', hbl: f.hbl_no || '', mbl: f.mbl_no || '', no: fmtCont(f.container_no || ''), vessel: [f.vessel, f.voyage].filter(Boolean).join(' '), pol: f.pol || '', pod: f.pod || '', etd: f.atd || f.etd || '', eta: f.ata || f.eta || '', etdText: f.atd || f.etd ? PL.short(f.atd || f.etd) : '', etaText: f.ata || f.eta ? PL.short(f.ata || f.eta) : '', etaPrev: f.eta_prev ? PL.short(f.eta_prev) : '', stage: FW.stageOf(f) || '', track: FW.trackUrl(f) || '' };
+    forwarder: f.forwarder || '', hbl: f.hbl_no || '', mbl: f.mbl_no || '', no: fmtCont(f.container_no || ''), vessel: [f.vessel, f.voyage].filter(Boolean).join(' '), pol: f.pol || '', pod: f.pod || '', etd: f.atd || f.etd || '', eta: f.ata || f.eta || '', etdText: f.atd || f.etd ? PL.short(f.atd || f.etd) : '', etaText: f.ata || f.eta ? PL.short(f.ata || f.eta) : '', etaPrev: f.eta_prev ? PL.short(f.eta_prev) : '', stage: FW.stageOf(f) || '', track: FW.trackUrl(f) || '',
+    cutDay: cut ? String(cut).slice(0, 10) : '', etdDay: f.etd ? String(f.etd).slice(0, 10) : '', confirmed: f.confirmed || null };
 }
 
 /** Display text for a field value. */

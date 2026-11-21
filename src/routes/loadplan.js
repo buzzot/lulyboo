@@ -24,6 +24,7 @@ const BOX = {
   LCL: { name: 'LCL', cap: 15, lcl: true, zone: [12, 20] },
 };
 const STATUSES = ['planned', 'requested', 'booked'];
+const LOCKED = 'This container is booked and locked — unlock it first to change it';
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const emails = (v) => String(v || '').split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
 const n2 = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
@@ -62,11 +63,14 @@ function loadPlanRoutes(router, { db, config }) {
     const back = String(f.back || '').startsWith('/admin/') ? f.back : '/admin/orders';
     if (f.container_id === 'none') {
       const old = o.container_id ? await db.get('plan_containers', o.container_id).catch(() => null) : null;
+      if (old && old.status === 'booked') { flash(res, 'warn', `${require('../shipname').shipName(old)} is booked and locked — unlock it on Load containers to change what's in it`); return res.redirect(back); }
       await db.update('plan_orders', { id: o.id }, { container_id: null, shipped: false, updated_at: now() });
       flash(res, 'ok', `${o.product || `PO ${o.po}`} taken out of ${old ? require('../shipname').shipName(old) : 'the container'}`);
       return res.redirect(back);
     }
     const c = await db.get('plan_containers', String(f.container_id || '')).catch(() => null); if (!c) throw new HttpError(400, 'Choose a container');
+    const from = o.container_id && o.container_id !== c.id ? await db.get('plan_containers', o.container_id).catch(() => null) : null;
+    for (const x of [c, from]) if (x && x.status === 'booked') { flash(res, 'warn', `${require('../shipname').shipName(x)} is booked and locked — unlock it on Load containers to change what's in it`); return res.redirect(back); }
     const gone = c.status === 'shipped' || !!c.delivered_at;
     await db.update('plan_orders', { id: o.id }, { container_id: c.id, ...(o.port ? {} : { port: c.port }), ...(gone ? { shipped: true } : {}), updated_at: now() });
     flash(res, 'ok', `${o.product || `PO ${o.po}`} → ${require('../shipname').shipName(c)}${gone ? ' (shipped)' : ''}`);
@@ -199,7 +203,7 @@ function loadPlanRoutes(router, { db, config }) {
     const c = await getContainer(req.params.id);
     const { fields: f } = await parseForm(req);
     const patch = { updated_at: now() };
-    if (f.box !== undefined) { if (!BOX[f.box]) throw new HttpError(400, 'Unknown container type'); patch.box = f.box; }
+    if (f.box !== undefined) { if (!BOX[f.box]) throw new HttpError(400, 'Unknown container type'); if (c.status === 'booked' && f.box !== c.box) throw new HttpError(400, LOCKED); patch.box = f.box; }
     if (f.sailing !== undefined) patch.sailing_id = f.sailing || null;
     if (f.loading_date !== undefined) patch.loading_date = PL.isoDay(f.loading_date) || null;
     if (f.status !== undefined) { if (!STATUSES.includes(f.status)) throw new HttpError(400, 'Unknown status'); patch.status = f.status; }
@@ -207,8 +211,38 @@ function loadPlanRoutes(router, { db, config }) {
     return {};
   }));
 
+  // Confirm booking: what the forwarder confirmed (booking no., cut-off, ETD, cartons / m³ / kg per PO). Locks the container.
+  router.post(`${BASE}/containers/:id/book`, json(async (req) => {
+    const c = await getContainer(req.params.id);
+    if (c.status === 'shipped') throw new HttpError(400, 'That container has shipped');
+    const { fields: f } = await parseForm(req);
+    const num = (v) => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) && n >= 0 && String(v ?? '').trim() !== '' ? n : null; };
+    const lines = await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => []);
+    if (!lines.length) throw new HttpError(400, 'Load POs first');
+    const pos = [...new Set(lines.map((l) => `${l.supplier_id}|${PL.normPo(l.po)}`))];
+    const conf = pos.map((pk, i) => { const ls = lines.filter((l) => `${l.supplier_id}|${PL.normPo(l.po)}` === pk);
+      return { pk, po: ls[0].po, ctns: num(f[`ctns_${i}`]), cbm: num(f[`cbm_${i}`]), kg: num(f[`kg_${i}`]) }; });
+    const tot = (k) => (conf.every((x) => x[k] != null) ? Math.round(conf.reduce((a, x) => a + x[k], 0) * 100) / 100 : null);
+    const cutKey = c.box === 'LCL' ? 'cfs_cutoff' : 'cy_cutoff';
+    const fwd = { ...(c.fwd || {}), confirmed: { at: now(), by: req.staff?.name || 'Owner', lines: conf, ctns: tot('ctns'), cbm: tot('cbm'), kg: tot('kg') } };
+    const bk = String(f.booking || '').trim().slice(0, 60); if (bk) fwd.booking_no = bk;
+    const fw = String(f.forwarder || '').trim().slice(0, 80); if (fw) fwd.forwarder = fw;
+    const cut = PL.isoDay(f.cutoff); if (cut) fwd[cutKey] = cut;
+    const etd = PL.isoDay(f.etd); if (etd) fwd.etd = etd;
+    await db.update('plan_containers', { id: c.id }, { status: 'booked', fwd, ...(cut ? { loading_date: cut } : {}), updated_at: now() });
+    return { fwd: FR.summary({ ...c, fwd }), loading: cut || '' };
+  }));
+  // Unlock a booked container (the forwarder rebooked, cargo changed): back to planning; the confirmation is kept for reference.
+  router.post(`${BASE}/containers/:id/unlock`, json(async (req) => {
+    const c = await getContainer(req.params.id);
+    if (c.status !== 'booked') return {};
+    await db.update('plan_containers', { id: c.id }, { status: c.request_to ? 'requested' : 'planned', updated_at: now() });
+    return { status: c.request_to ? 'requested' : 'planned' };
+  }));
+
   router.post(`${BASE}/containers/:id/delete`, json(async (req) => {
     const c = await getContainer(req.params.id);
+    if (c.status === 'booked') throw new HttpError(400, LOCKED);
     await RH.syncContainer(db, c.id);   // keep its priced quotes in the rate history
     const ls = await db.list('plan_orders', { filters: { container_id: c.id } }).catch(() => []);
     await db.update('plan_orders', { container_id: c.id }, { container_id: null, updated_at: now() });
@@ -230,9 +264,11 @@ function loadPlanRoutes(router, { db, config }) {
     const { fields: f } = await parseForm(req);
     const o = await db.get('plan_orders', String(f.order || '')).catch(() => null);
     if (!o) throw new HttpError(404, 'Order line not found');
+    if (o.container_id) { const from = await db.get('plan_containers', o.container_id).catch(() => null); if (from && from.status === 'booked' && from.id !== f.container) throw new HttpError(400, LOCKED); }
     if (f.container) {
       const c = await getContainer(f.container);
       if (c.status === 'shipped') throw new HttpError(400, 'That container has shipped');
+      if (c.status === 'booked' && o.container_id !== c.id) throw new HttpError(400, LOCKED);
       if (o.port !== c.port) throw new HttpError(400, `${o.po} loads at ${portName(o.port) || 'an unknown port'}, not ${portName(c.port)}`);
       if (!(Number(o.cbm) > 0)) throw new HttpError(400, `Add the volume of ${o.po} first`);
     }
@@ -250,6 +286,7 @@ function loadPlanRoutes(router, { db, config }) {
     const { fields: f } = await parseForm(req);
     const o = await db.get('plan_orders', String(f.order || '')).catch(() => null);
     if (!o) throw new HttpError(404, 'Order line not found');
+    if (o.container_id && (await db.get('plan_containers', o.container_id).catch(() => null))?.status === 'booked') throw new HttpError(400, LOCKED);
     const r = await SPL.split(db, o, f.keep, { by: req.staff?.name || 'Owner' });
     return { kept: lineOut(r.kept), part: lineOut(r.part) };
   }));

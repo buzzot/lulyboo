@@ -1373,7 +1373,7 @@
   var menu = document.createElement('div'); menu.className = 'lp-menu'; menu.hidden = true; menu.setAttribute('role', 'menu'); document.body.appendChild(menu);
   function openMenu(btn) {
     var pk = btn.getAttribute('data-lp-loadmenu');
-    menu.innerHTML = D.containers.map(function (c) {
+    menu.innerHTML = D.containers.filter(function (c) { return !locked(c); }).map(function (c) {
       var t = D.box[c.box], free = t.lcl ? '' : n2(Math.max(0, t.cap - usedOf(c))) + ' m³ free';
       return '<button type="button" role="menuitem" data-lp-to="' + c.id + '" data-pk="' + esc(pk) + '"><span>' + esc(cName(c)) + '</span><small>' + esc(t.lcl ? 'LCL' : t.name + ' · ' + free) + '</small></button>';
     }).join('');
@@ -1428,7 +1428,7 @@
   function ctlHTML(c) {
     return '<div class="lp-ctl"><select data-lp-box="' + c.id + '" aria-label="Container type">' + Object.keys(D.box).map(function (b) { return '<option value="' + b + '"' + (b === c.box ? ' selected' : '') + '>' + esc(D.box[b].lcl ? 'LCL (shared container)' : D.box[b].name) + '</option>'; }).join('') + '</select>' +
       '<select data-lp-sail="' + c.id + '" aria-label="Sailing"><option value="">' + (D.sailings.length ? 'Choose sailing…' : 'No sailings loaded') + '</option>' + D.sailings.map(function (s) { return '<option value="' + s.id + '"' + (s.id === c.sailing ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('') + '</select>' +
-      '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested'], ['booked', 'Booked']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+      '<select data-lp-status="' + c.id + '" aria-label="Status">' + [['planned', 'Planned'], ['requested', 'Quotes requested']].map(function (x) { return '<option value="' + x[0] + '"' + (c.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
       '<button type="button" class="icon-btn" title="Remove" aria-label="Remove ' + esc(cName(c)) + '" data-lp-del="' + c.id + '">×</button></div>';
   }
   // PO chips: ready date on the chip, details on hover / focus (supplier, items, link to the PO)
@@ -1452,12 +1452,12 @@
   function short(d) { var x = new Date(d + 'T12:00:00Z'); return x.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); }
   function chipsHTML(items) {
     if (!items.length) return '';
-    var cid = items[0].container;
+    var cid = items[0].container, lk = locked(cById(cid));
     return '<div class="lp-chips">' + groupBy(items).map(function (ls) {
       var o = ls[0], tot = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), all = linesOfPo(o.pk).length, rd = readyOf(ls);
       var part = all > ls.length ? ' <em class="lp-chip-part" title="' + ls.length + ' of ' + all + ' products of this PO are in this container">' + ls.length + '/' + all + '</em>' : '';
       if (ls.some(function (x) { return x.part; })) part += ' <em class="lp-chip-pt" title="Part of a split line — the rest ships separately">part</em>';
-      return '<span class="lp-chip" style="--c:' + o.color + '" draggable="true" tabindex="0" data-po="' + esc(o.pk) + '" data-from="' + cid + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<span class="lp-chip-rd' + (rd ? '' : ' none') + '">' + (rd ? esc(short(rd)) : 'no date') + '</span>' + popHTML(o, ls) + '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button></span>';
+      return '<span class="lp-chip" style="--c:' + o.color + '"' + (lk ? '' : ' draggable="true"') + ' tabindex="0" data-po="' + esc(o.pk) + '" data-from="' + cid + '"><i></i><b>' + esc(o.po) + '</b> ' + esc(n2(tot) + ' m³') + part + '<span class="lp-chip-rd' + (rd ? '' : ' none') + '">' + (rd ? esc(short(rd)) : 'no date') + '</span>' + popHTML(o, ls) + (lk ? '' : '<button type="button" class="lp-x" data-lp-outpo="' + esc(o.pk) + '" data-from="' + cid + '" title="Unload" aria-label="Unload ' + esc(o.po) + '">×</button>') + '</span>';
     }).join('') + '</div>';
   }
   // Cargo ready: each PO's ready date, and the date everything is ready — what the forwarder needs
@@ -1505,7 +1505,37 @@
     var sups = {}; items.forEach(function (o) { sups[o.supplier] = 1; });
     return ldHTML(c, sail) + '<div class="lp-foot"><span class="sub">' + (items.length ? '<b>' + groupBy(items).length + ' PO' + (groupBy(items).length > 1 ? 's' : '') + '</b>' + (groupBy(items).length !== items.length ? ' (' + items.length + ' products)' : '') + ' · ' + Object.keys(sups).length + ' supplier' + (Object.keys(sups).length > 1 ? 's' : '') + ' · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs' + (sail ? ' · ' + esc(sail.label.split(' · ')[1] || '') : '') : 'Empty — drag POs from the left') + '</span>' +
       '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-fwd="' + c.id + '" title="Paste or drop an email from the forwarder — AI compares it with this container">＋ Forwarder update</button><button type="button" class="btn ghost small" data-lp-ship="' + c.id + '"' + (items.length ? '' : ' disabled') + '>Mark shipped</button>' +
-      '<button type="button" class="btn small" data-lp-request="' + c.id + '"' + (canReq ? '' : ' disabled title="' + esc(why) + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>';
+      (items.length ? '<button type="button" class="btn ' + (c.status === 'requested' ? '' : 'ghost ') + 'small" data-lp-book="' + c.id + '" title="The forwarder confirmed space and cargo: record it and lock this container">Confirm booking</button>' : '') +
+      '<button type="button" class="btn ' + (c.status === 'requested' ? 'ghost ' : '') + 'small" data-lp-request="' + c.id + '"' + (canReq ? '' : ' disabled title="' + esc(why) + '"') + '>' + (c.quotes && c.quotes.length ? 'Ask more forwarders' : 'Request quotes') + '</button></div></div>';
+  }
+  // Booked: the forwarder confirmed space and cargo. The card is locked and compact: stages, confirmed vs planned, dates.
+  function locked(c) { return !!c && c.status === 'booked'; }
+  function stepsHTML(c) {
+    var at = c.status === 'booked' ? 2 : c.status === 'requested' ? 1 : 0;
+    return '<ol class="lp-steps" aria-label="Stage">' + ['Planned', 'Quotes', 'Booked', 'Sailed'].map(function (l, i) { return '<li class="' + (i < at ? 'done' : i === at ? 'now' : '') + '"' + (i === at ? ' aria-current="step"' : '') + '><i>' + (i < at ? '✓' : i + 1) + '</i>' + l + '</li>'; }).join('') + '</ol>';
+  }
+  function bookedHTML(c) {
+    var items = itemsOf(c), f = c.fwd || {}, k = f.confirmed || {}, sail = sById(c.sailing);
+    var ctnP = items.reduce(function (a, o) { return a + ctnOf(o); }, 0), cbmP = usedOf(c), kgP = sumOf(c, 'kg');
+    var cmp = function (plan, conf, fmt, unit) {
+      if (conf == null) return '<small>planned · not confirmed</small>';
+      var d = Math.round((conf - plan) * 100) / 100, same = Math.abs(d) < (unit === 'm³' ? 0.05 * Math.max(1, plan) : 0.5);
+      return '<small>planned ' + fmt(plan) + ' · ' + (same ? '<span class="lp-ok">confirmed ✓</span>' : '<span class="lp-diff">' + (d > 0 ? '+' : '−') + fmt(Math.abs(d)) + ' ' + unit + '</span>') + '</small>';
+    };
+    var st = function (v, l, sub) { return '<div class="lp-st"><b>' + v + '</b><span>' + l + '</span>' + (sub || '') + '</div>'; };
+    var stats = '<div class="lp-stats lp-bkstats">' +
+      st(n2(k.cbm != null ? k.cbm : cbmP) + ' m³', 'Volume', cmp(cbmP, k.cbm, n2, 'm³')) +
+      st(int(k.ctns != null ? k.ctns : ctnP) + ' ctns', 'Cartons', cmp(ctnP, k.ctns, int, 'ctns')) +
+      st((k.kg != null ? int(Math.round(k.kg)) : kgP ? int(Math.round(kgP)) : '—') + ' kg', 'Gross weight', kgP || k.kg != null ? cmp(kgP, k.kg, function (v) { return int(Math.round(v)); }, 'kg') : '') +
+      st(f.cut ? esc(f.cut) : c.loading ? esc(short(c.loading)) : '—', esc(f.cutName || (D.box[c.box].lcl ? 'CFS cut-off' : 'CY cut-off'))) +
+      st(f.etdText ? esc(f.etdText) : sail ? esc(short(sail.etd)) : '—', 'ETD' + (f.etaText ? ' · ETA ' + esc(f.etaText) : '')) + '</div>';
+    return '<section class="card lp-c lp-booked" data-c="' + c.id + '">' + stepsHTML(c) +
+      '<div class="lp-ch"><h2>' + esc(cName(c)) + statusTag(c) + (f.forwarder ? ' <span class="lp-bk">' + esc(f.forwarder) + '</span>' : '') + '</h2>' +
+        '<div class="lp-ctl"><button type="button" class="btn ghost small" data-lp-unlock="' + c.id + '" title="The forwarder rebooked or the cargo changed">🔓 Unlock to change</button></div></div>' +
+      stats + '<div class="lp-lock">🔒 <span><b>Locked — cargo confirmed with the forwarder' + (k.at ? ' (' + esc(short(String(k.at).slice(0, 10))) + ')' : '') + '.</b> Its POs show <b>Booked</b> on Purchase orders and leave the to-do list. It moves to shipped when the forwarder sends the B/L or departure date, or with Mark shipped.</span></div>' +
+      chipsHTML(items) + voyHTML(c) +
+      '<div class="lp-foot"><span class="sub"><b>' + groupBy(items).length + ' PO' + (groupBy(items).length > 1 ? 's' : '') + '</b> · ' + int(items.reduce(function (a, o) { return a + o.qty; }, 0)) + ' pcs</span>' +
+        '<div class="lp-acts"><button type="button" class="btn ghost small" data-lp-fwd="' + c.id + '">＋ Forwarder update</button><button type="button" class="btn ghost small" data-lp-book="' + c.id + '">Edit booking</button><button type="button" class="btn small" data-lp-ship="' + c.id + '">Mark shipped</button></div></div></section>';
   }
   function statusTag(c) { return c.status === 'booked' ? ' <span class="cp-tag ok">Booked</span>' + (c.fwd && c.fwd.booking ? ' <span class="lp-bk">' + esc(c.fwd.booking) + '</span>' : '') : c.status === 'requested' ? ' <span class="cp-tag wait">Quotes requested</span>' : ''; }
   // LCL: no box to fill — a carton pile per PO, totals and the chargeable freight tons (W/M).
@@ -1529,7 +1559,7 @@
       if (sail) { var late = items.filter(function (o) { return o.ready && o.ready > sail.etd; }); if (late.length) warns.push('<div class="lp-warn">' + esc(late.map(lineName).join(', ')) + (late.length > 1 ? ' are' : ' is') + " ready after this sailing's ETD.</div>"); }
     }
     var stat = function (v, l, sub) { return '<div class="lp-st"><b>' + v + '</b><span>' + l + '</span>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>'; };
-    return '<section class="card lp-c lp-lcl" data-c="' + c.id + '">' +
+    return '<section class="card lp-c lp-lcl" data-c="' + c.id + '">' + stepsHTML(c) +
       '<div class="lp-ch"><h2>' + esc(cName(c)) + statusTag(c) + '</h2>' + ctlHTML(c) + '</div>' +
       '<div class="lp-stage lp-lclstage" data-lp-drop="' + c.id + '"><div class="lp-lbl3">LCL · shares a container with other shippers · goods go to the forwarder\'s CFS warehouse</div>' +
         (items.length ? '<div class="lp-piles">' + piles + '</div>' : '<div class="lp-dropmsg lp-lcldrop">Drop POs here</div>') + '</div>' +
@@ -1539,6 +1569,7 @@
   }
   function stageWidth() { var w = boxesEl.clientWidth || 900; return Math.max(320, Math.min(820, w - 40 - 200)); }
   function containerHTML(c, idx) {
+    if (locked(c)) return bookedHTML(c);
     if (D.box[c.box] && D.box[c.box].lcl) return lclHTML(c);
     var t = D.box[c.box], items = itemsOf(c), u = usedOf(c), pct = u / t.cap * 100, over = u > t.cap;
     var W = c.box === '20GP' ? Math.round(stageWidth() * 0.55) : stageWidth();
@@ -1566,7 +1597,7 @@
     var noCbm = items.filter(function (o) { return o.est; }); if (noCbm.length) warns.push('<div class="lp-warn soft">' + esc(noCbm.map(lineName).join(', ')) + ' volume is estimated from carton size — confirm with the packing list.</div>');
     if (!over && items.length && u <= LCLC) warns.push('<div class="lp-warn soft">Only ' + n2(u) + ' m³ — LCL (sharing a container) is usually cheaper. <button type="button" class="link small" data-lp-switch="' + c.id + '" data-box="LCL">Switch to LCL</button></div>');
     else if (!over && items.length && c.box !== '20GP' && u <= D.box['20GP'].cap) warns.push("<div class=\"lp-warn soft\">Only " + n2(u) + " m³ — a 20' GP may be cheaper.</div>");
-    return '<section class="card lp-c" data-c="' + c.id + '">' +
+    return '<section class="card lp-c" data-c="' + c.id + '">' + stepsHTML(c) +
       '<div class="lp-ch"><h2>' + esc(cName(c)) + statusTag(c) + '</h2>' + ctlHTML(c) + '</div>' +
       '<div class="lp-stage" data-lp-drop="' + c.id + '"><div class="lp-box" style="width:' + W + 'px;height:' + H + 'px">' +
         '<div class="lp-lbl">' + esc(t.name) + ' · ' + t.cap + ' m³ practical load</div><div class="lp-lbl2" style="left:' + (W - 70) + 'px">door →</div>' +
@@ -1580,21 +1611,24 @@
   }
   function render() {
     renderPool();
-    boxesEl.innerHTML = D.containers.length ? D.containers.map(containerHTML).join('') : '<div class="card lp-none"><p>No containers yet at this port.</p></div>';
+    var open = D.containers.filter(function (c) { return !locked(c); }), bk = D.containers.filter(locked);
+    boxesEl.innerHTML = D.containers.length ? open.map(containerHTML).join('') + (bk.length ? '<h3 class="lp-grp">Booked — waiting to sail <span>' + bk.length + '</span></h3>' + bk.map(containerHTML).join('') : '') : '<div class="card lp-none"><p>No containers yet at this port.</p></div>';
     var tip = root.querySelector('[data-lp-tip]'), waiting = D.orders.filter(function (o) { return !o.container; }).reduce(function (a, o) { return a + (o.cbm || 0); }, 0);
     var hasLcl = D.containers.some(function (c) { return D.box[c.box] && D.box[c.box].lcl; });
     if (tip) { tip.hidden = !(waiting > 0 && waiting <= LCLC && !hasLcl); tip.innerHTML = tip.hidden ? '' : '<span>Only <b>' + n2(waiting) + ' m³</b> waiting at ' + esc(D.portName || D.port) + ' — not enough for a container. Plan it as LCL?</span><button type="button" class="btn small" data-lp-addlcl>Add LCL shipment</button>'; }
     fresh = {};
   }
 
+  function lockedMsg() { toast('Booked and locked — unlock it to change'); }
   function load(id, cid) {
     var o = byId(id), c = cById(cid); if (!o || !c || o.container === cid) return;
+    if (locked(c) || locked(cById(o.container))) { lockedMsg(); return; }
     if (!o.cbm) { toast('Add the volume first'); return; }
     o.container = cid; fresh[id] = 1; render();
     var t = D.box[c.box]; if (!t.lcl && usedOf(c) > t.cap) toast(o.po + " doesn't fit — " + n2(usedOf(c) - t.cap) + ' m³ over');
     post(D.base + '/assign', { order: id, container: cid }).then(function (j) { if (applyMerge(j)) render(); }).catch(fail);
   }
-  function unload(id) { var o = byId(id); if (!o || !o.container) return; o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).then(function (j) { if (applyMerge(j)) render(); }).catch(fail); }
+  function unload(id) { var o = byId(id); if (!o || !o.container) return; if (locked(cById(o.container))) { lockedMsg(); return; } o.container = null; render(); post(D.base + '/assign', { order: id, container: '' }).then(function (j) { if (applyMerge(j)) render(); }).catch(fail); }
   function applyMerge(j) {
     if (!j || !j.removed || !j.removed.length) return false;
     D.orders = D.orders.filter(function (o) { return j.removed.indexOf(o.id) < 0; });
@@ -1604,7 +1638,7 @@
   }
   function assignAll(ls, cid) { return ls.reduce(function (p, o) { return p.then(function () { return post(D.base + '/assign', { order: o.id, container: cid || '' }).then(function (j) { if (applyMerge(j)) render(); }); }); }, Promise.resolve()); }
   function loadPo(pk, cid) {
-    var c = cById(cid); if (!c) return;
+    var c = cById(cid); if (!c) return; if (locked(c)) { lockedMsg(); return; }
     var ls = linesOfPo(pk).filter(function (o) { return !o.container && o.cbm; });
     if (!ls.length) { toast('Add the volume first'); return; }
     var left = linesOfPo(pk).filter(function (o) { return !o.container && !o.cbm; }).length;
@@ -1615,10 +1649,12 @@
     assignAll(ls, cid).catch(fail);
   }
   function unloadPo(pk, from) {
+    if (locked(cById(from))) { lockedMsg(); return; }
     var ls = linesOfPo(pk).filter(function (o) { return o.container && (!from || o.container === from); }); if (!ls.length) return;
     ls.forEach(function (o) { o.container = null; }); render(); assignAll(ls, '').catch(fail);
   }
   function movePo(pk, from, cid) {
+    if (locked(cById(from)) || locked(cById(cid))) { lockedMsg(); return; }
     var ls = linesOfPo(pk).filter(function (o) { return o.container === from; }); if (!ls.length || from === cid) return;
     ls.forEach(function (o) { o.container = cid; fresh[o.id] = 1; }); render(); assignAll(ls, cid).catch(fail);
   }
@@ -1674,6 +1710,14 @@
       post(D.base + '/' + id + '/cbm', { cbm: v }).then(function (j) { var o = byId(id); o.cbm = j.cbm; o.est = false; render(); toast('Volume saved — you can load it now'); }).catch(function (x) { b.disabled = false; toast(x.message); });
       return;
     }
+    if ((id = b.getAttribute('data-lp-unlock'))) {
+      var cu = cById(id);
+      window.ask('Unlock ' + cName(cu) + '?', { detail: 'It goes back to planning so you can change what is in it. Its POs leave "Booked". The confirmed booking stays saved — confirm again when the forwarder rebooks.', ok: 'Unlock' }).then(function (y) {
+        if (!y) return; post(D.base + '/containers/' + id + '/unlock').then(function (j) { cu.status = j.status || 'planned'; render(); toast(cName(cu) + ' unlocked'); }).catch(fail);
+      });
+      return;
+    }
+    if ((id = b.getAttribute('data-lp-book'))) { openBook(cById(id)); return; }
     if ((id = b.getAttribute('data-lp-del'))) {
       var c = cById(id);
       var rmC = function () { itemsOf(c).forEach(function (o) { o.container = null; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); post(D.base + '/containers/' + id + '/delete').then(function (j) { if (j.merged) location.reload(); }).catch(fail); };
@@ -1689,6 +1733,33 @@
         post(D.base + '/containers/' + id + '/shipped').then(function () { D.orders = D.orders.filter(function (o) { return o.container !== id; }); D.containers = D.containers.filter(function (x) { return x.id !== id; }); render(); toast(cName(c2) + ' shipped — ' + n + ' line' + (n > 1 ? 's' : '') + ' moved to Shipments'); }).catch(fail);
       });
     }
+  });
+  // Confirm booking: booking no., forwarder, cut-off, ETD and the confirmed cartons / m³ / kg per PO (planned values prefilled).
+  var bd = document.createElement('dialog'); bd.className = 'rp-modal lp-bkdlg'; bd.setAttribute('aria-labelledby', 'lp-bk-t'); document.body.appendChild(bd);
+  function openBook(c) {
+    if (!c) return; var f = c.fwd || {}, k = f.confirmed || {}, gs = groupBy(itemsOf(c)), lcl = D.box[c.box] && D.box[c.box].lcl;
+    var prev = function (po, key) { var x = (k.lines || []).filter(function (l) { return l.po === po; })[0]; return x && x[key] != null ? x[key] : null; };
+    var rows = gs.map(function (ls, i) {
+      var o = ls[0], ctn = ls.reduce(function (a, x) { return a + ctnOf(x); }, 0), cbm = ls.reduce(function (a, x) { return a + (x.cbm || 0); }, 0), kg = ls.reduce(function (a, x) { return a + (x.kg || 0); }, 0);
+      var v = function (key, plan, dp) { var p = prev(o.po, key); return p != null ? p : plan ? (dp ? Math.round(plan * 100) / 100 : Math.round(plan)) : ''; };
+      return '<tr><td><i class="lp-dot" style="background:' + o.color + '"></i><b>' + esc(o.po) + '</b> <span class="sub">' + esc(o.supplier) + '</span></td><td class="r sub">' + (ctn ? int(ctn) : '—') + '</td>' +
+        '<td class="r"><input name="ctns_' + i + '" inputmode="numeric" value="' + v('ctns', ctn) + '" aria-label="Confirmed cartons ' + esc(o.po) + '"></td><td class="r"><input name="cbm_' + i + '" inputmode="decimal" value="' + v('cbm', cbm, 1) + '" aria-label="Confirmed m³ ' + esc(o.po) + '"></td><td class="r"><input name="kg_' + i + '" inputmode="decimal" value="' + v('kg', kg) + '" aria-label="Confirmed kg ' + esc(o.po) + '"></td></tr>';
+    }).join('');
+    bd.innerHTML = '<form data-lp-bk-form><div class="rp-top"><h2 id="lp-bk-t">Confirm booking · ' + esc(cName(c)) + '</h2><button type="button" class="icon-btn" data-lp-bk-close aria-label="Close">×</button></div>' +
+      '<p class="sub rp-ctx">What the forwarder confirmed. Saving locks this container: its POs move to <b>Booked</b> and nothing can be dragged in or out until you unlock it.</p>' +
+      '<div class="lp-bkf"><label>Booking no. <input name="booking" value="' + esc(f.booking || '') + '" autocomplete="off"></label><label>Forwarder <input name="forwarder" value="' + esc(f.forwarder || '') + '"></label>' +
+      '<label>' + (lcl ? 'CFS cut-off' : 'CY cut-off') + ' <input type="date" name="cutoff" value="' + esc(f.cutDay || c.loading || '') + '"></label><label>ETD <input type="date" name="etd" value="' + esc(f.etdDay || (sById(c.sailing) ? sById(c.sailing).etd : '')) + '"></label></div>' +
+      '<div class="table-wrap"><table class="list compact lp-bkt"><thead><tr><th>PO</th><th class="r">Planned ctns</th><th class="r">Confirmed ctns</th><th class="r">m³</th><th class="r">kg</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="rp-actions"><button class="btn">Confirm &amp; lock</button><button type="button" class="btn ghost" data-lp-bk-close>Cancel</button><span class="sub">Forwarder emails and PDFs: use ＋ Forwarder update — AI reads them.</span></div></form>';
+    bd.setAttribute('data-c', c.id); bd.showModal();
+  }
+  bd.addEventListener('click', function (e) { if (e.target.closest('[data-lp-bk-close]') || e.target === bd) bd.close(); });
+  bd.addEventListener('submit', function (e) {
+    e.preventDefault(); var form = e.target, cid = form.getAttribute('data-c') || bd.getAttribute('data-c');
+    var c = D.containers.filter(function (x) { return x.id === cid; })[0]; if (!c) return;
+    var data = {}; Array.prototype.forEach.call(form.elements, function (el) { if (el.name) data[el.name] = el.value; });
+    var btn = form.querySelector('.btn'); btn.disabled = true;
+    post(D.base + '/containers/' + cid + '/book', data).then(function (j) { c.status = 'booked'; c.fwd = j.fwd; if (j.loading) c.loading = j.loading; bd.close(); render(); toast(cName(c) + ' booked and locked'); }).catch(function (x) { btn.disabled = false; toast(x.message); });
   });
   // Split by quantity: "Split to fit…" on an over-full container (with suggestions), or "Split…" on one line.
   // Tick any number of lines; each starts at its full quantity and you reduce what stays. One button applies them all.

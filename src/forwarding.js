@@ -405,6 +405,9 @@ async function healShipped(db, lines, containers) {
   const gone = new Set((containers || []).filter((c) => c.status === 'shipped').map((c) => c.id));
   let n = 0;
   for (const l of lines) if (!l.shipped && l.container_id && gone.has(l.container_id)) { await db.update('plan_orders', { id: l.id }, { shipped: true, updated_at: now() }).catch(() => null); l.shipped = true; n++; }
+  // lines in a booked (locked) container: status "Booked" — out of Late / Ready-not-shipped (planning.state reads this)
+  const booked = new Set((containers || []).filter((c) => c.status === 'booked').map((c) => c.id));
+  for (const l of lines) if (!l.shipped && l.container_id && booked.has(l.container_id)) l.container_status = 'booked';
   return n;
 }
 

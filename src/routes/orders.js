@@ -13,7 +13,7 @@ const LP = require('./loadplan');
 const money = (v, cur, dp = 2) => `${!cur || cur === 'USD' ? '$' : `${cur} `}${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: dp })}`;
 const AI = require('../ai');
 
-const RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, shipped: 1 };
+const RANK = { overdue: 5, waiting: 4, production: 3, ready: 2, booked: 1.5, shipped: 1 };
 const n2 = (v) => Math.round(Number(v || 0) * 100) / 100;
 const int = (v) => Number(v || 0).toLocaleString('en-US');
 const n1 = (v) => (Math.round(Number(v || 0) * 10) / 10).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -33,11 +33,14 @@ const PK = {
 };
 const portName = (c) => SC.PORT[c]?.name || null;
 /** A line's container as a compact two-line chip: what and where (box · route), then status and sailing. */
-function ctnChip(x) {
+function ctnChip(x, note = '') {
   const parts = require('../shipname').shipName(x.c, { sailing: x.c.sailing }).split(' · ').map((t) => t.trim()).filter(Boolean);
-  const when = /^(Sails ~|Not scheduled yet)/.test(parts[0] || '') ? parts.shift() : null;
+  let when = /^(Sails ~|Not scheduled yet)/.test(parts[0] || '') ? parts.shift() : null;
+  const etd = x.c.fwd?.atd || x.c.fwd?.etd || x.c.sailing?.etd;
+  if (!when && etd) when = `Sails ~${PL.short(String(etd).slice(0, 10))}`;
+  const cut = x.c.status === 'booked' && (x.c.fwd?.cfs_cutoff || x.c.fwd?.cy_cutoff);
   const st = x.c.status === 'booked' ? ['booked', 'Booked'] : x.c.status === 'requested' ? ['req', 'Quotes requested'] : x.c.status === 'shipped' ? ['shipped', 'Shipped'] : ['plan', 'Planned'];
-  return html`<a class="or-chip" href="${x.url}" title="${`Open on Load containers: ${x.text}`}"><span class="or-chip-i" aria-hidden="true">📦</span><span class="or-chip-t"><b>${parts.join(' · ')}</b><small><i class="${`or-dot ${st[0]}`}"></i>${st[1]}${when ? ` · ${when.replace('Not scheduled yet', 'no sailing yet').replace('Sails ~', 'sails ~')}` : ''}</small></span></a>`;
+  return html`<a class="or-chip" href="${x.url}" title="${`Open on Load containers: ${x.text}`}"><span class="or-chip-i" aria-hidden="true">📦</span><span class="or-chip-t"><b>${parts.join(' · ')}</b><small><i class="${`or-dot ${st[0]}`}"></i>${st[1]}${cut ? ` · ${x.c.box === 'LCL' ? 'CFS' : 'CY'} ${PL.short(String(cut).slice(0, 10))}` : ''}${when ? ` · ${when.replace('Not scheduled yet', 'no sailing yet').replace('Sails ~', 'sails ~')}` : ''}${note ? ` · ${note}` : ''}</small></span></a>`;
 }
 // container column icons: box with + (add), arrows (move)
 const ICON_ADD = '<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M2.5 6.5 9 3.5l6.5 3v7L9 16.5l-6.5-3z"/><path d="M2.5 6.5 9 9.5l6.5-3M9 9.5v7"/><path d="M16 1.5v5M13.5 4h5" stroke-linecap="round"/></svg>';
@@ -86,6 +89,17 @@ module.exports = function orderRoutes(router, { db, config }) {
     const ci = await LP.containerIndex(db).catch(() => ({ labelFor: () => null }));
     return { lines, files, sups, missing, ci };
   }
+  /**
+   * Status cell of an open PO: when part of it has sailed, say so ("1 of 2 lines shipped") — the tag above is the
+   * status of the lines still here; then each container as a chip with how many of the PO's lines it carries.
+   */
+  const shipSplit = (ci, ls) => {
+    const items = ls.filter((l) => l.product || ls.length === 1); const n = items.length;
+    const gone = items.filter((l) => l.shipped).length;
+    const boxes = new Map(); for (const l of items) { const x = ci.labelFor(l); if (x) { if (!boxes.has(x.c.id)) boxes.set(x.c.id, { x, k: 0 }); boxes.get(x.c.id).k++; } }
+    const loose = items.filter((l) => !l.shipped && !ci.labelFor(l)).length;
+    return html`${gone ? html`<div class="or-part">${gone} of ${n} line${n === 1 ? '' : 's'} shipped</div>` : ''}<div class="or-chips">${[...boxes.values()].map(({ x, k }) => html`${ctnChip(x, n > 1 && k < n ? `${k} of ${n} lines` : '')}`)}${loose && boxes.size ? html`<span class="or-loose">${loose} line${loose === 1 ? '' : 's'} not planned</span>` : ''}</div>`;
+  };
   const ctn = (ci, ls) => { const seen = new Set(); return ls.map((l) => ci.labelFor(l)).filter((x) => x && !seen.has(x.c.id) && seen.add(x.c.id)); };
 
   router.get('/admin/orders', G(async (req, res) => {
@@ -96,17 +110,18 @@ module.exports = function orderRoutes(router, { db, config }) {
     for (const p of all) { const c = checks.filter((x) => x.supplier_id === p.supplier_id && PL.normPo(x.po) === PL.normPo(p.po)).sort((a, b) => String(b.checked_at || '').localeCompare(String(a.checked_at || '')))[0]; p.cmp = PL.compareToCheck(c, p.lines); }
     const q = String(req.query.q || '').trim().toLowerCase();
     const fSup = sups[req.query.supplier] ? req.query.supplier : '';
-    const TABS = [['open', 'Open'], ['overdue', 'Late'], ['waiting', 'Waiting on us'], ['shipped', 'Shipped'], ['all', 'All']];
+    const TABS = [['open', 'Open'], ['overdue', 'Late'], ['waiting', 'Waiting on us'], ['booked', 'Booked'], ['shipped', 'Shipped'], ['all', 'All']];
     const tab = TABS.some(([k]) => k === req.query.status) ? req.query.status : 'open';
-    const inTab = (p) => (tab === 'all' ? true : tab === 'open' ? p.st !== 'shipped' : p.st === tab);
+    const isOpen = (p) => p.st !== 'shipped' && p.st !== 'booked';   // booked = the forwarder confirmed it: out of the to-do list, own tab
+    const inTab = (p) => (tab === 'all' ? true : tab === 'open' ? isOpen(p) : p.st === tab);
     const hit = (p) => (!fSup || p.supplier_id === fSup) && (!q || [p.po, PL.normPo(p.po), p.supplier?.name, ...p.products].filter(Boolean).join(' ').toLowerCase().includes(q.replace(/^po\s*#?\s*(?=\d)/, '')));
     let list = all.filter((p) => inTab(p) && hit(p));
     const wider = q && !list.length && all.some(hit);   // nothing in this tab: show matches from every status
     if (wider) list = all.filter(hit);
     list = list
       .sort((a, b) => (RANK[b.st] - RANK[a.st]) || String(a.first || '9').localeCompare(String(b.first || '9')));
-    const openPos = all.filter((p) => p.st !== 'shipped');
-    const count = (k) => all.filter((p) => (k === 'all' ? true : k === 'open' ? p.st !== 'shipped' : p.st === k)).length;
+    const openPos = all.filter(isOpen);
+    const count = (k) => all.filter((p) => (k === 'all' ? true : k === 'open' ? isOpen(p) : p.st === k)).length;
     const link = (over) => `/admin/orders?${new URLSearchParams(Object.entries({ status: tab, supplier: fSup, q: req.query.q || '', ...over }).filter(([, v]) => v))}`;
 
     res.html(page({
@@ -135,8 +150,8 @@ module.exports = function orderRoutes(router, { db, config }) {
             <td class="r">${p.cbm ? n2(p.cbm) : '—'}${p.cbmMissing && p.cbm ? html`<span class="sub"> +?</span>` : ''}</td>
             <td>${p.first ? (p.first === p.last ? PL.short(p.first) : `${PL.short(p.first)} – ${PL.short(p.last)}`) : '—'}</td>
             <td>${p.ports.map(portName).filter(Boolean).join(', ') || html`<span class="sub">To confirm</span>`}</td>
-            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub or-needs" title="${`Needs: ${p.pending.join(', ')}`}">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? ctn(ci, p.lines).map((x) => html`<div><a class="or-ctn" href="${x.url}">📦 ${x.text}</a></div>`) : ''}</td>
-            <td>${p.docs.length ? html`<a href="${poUrl(p.supplier_id, p.po)}#docs">📎 ${p.docs.length}</a>` : '—'}</td></tr>`)}</tbody></table></div>
+            <td>${tag(p.st)}${p.pending.length ? html`<div class="sub or-needs" title="${`Needs: ${p.pending.join(', ')}`}">Needs: ${p.pending.join(', ')}</div>` : ''}${p.st !== 'shipped' ? shipSplit(ci, p.lines) : ''}</td>
+            <td>${p.docs.length ? html`<a class="or-docs" href="${poUrl(p.supplier_id, p.po)}#docs" title="${`${p.docs.length} document${p.docs.length === 1 ? '' : 's'}`}" aria-label="${`${p.docs.length} document${p.docs.length === 1 ? '' : 's'} on PO ${p.po}`}">📎</a>` : '—'}</td></tr>`)}</tbody></table></div>
           ${wider ? html`<p class="sub or-empty">Not in "${(TABS.find(([k]) => k === tab) || [])[1]}" — showing matches from every status.</p>` : ''}
           <p class="muted or-empty" id="or-none" hidden>No match on this page — press Enter to search every status.</p>
           ${list.length ? '' : html`<p class="muted or-empty">${all.length ? 'No purchase orders match.' : 'No purchase orders yet. Import a supplier report or upload a PO to start.'}</p>`}</div>`,

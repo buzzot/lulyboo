@@ -214,7 +214,7 @@ function planningRoutes(router, { db, config }) {
     if (view === 'map') body = await mapView({ open, sups, day, thisWeek, by: req.query.by, poUrl });
     else if (view === 'port') {
       // one card per PO: lines of the same supplier + PO at this port, placed in the week of the latest ready date
-      const RANK = { overdue: 0, waiting: 1, production: 2, ready: 3, shipped: 4 };
+      const RANK = { overdue: 0, waiting: 1, production: 2, ready: 3, booked: 3.5, shipped: 4 };
       const poGroups = {};
       for (const o of open) {
         const k = portKey(o);

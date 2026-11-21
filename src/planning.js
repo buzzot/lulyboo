@@ -48,6 +48,7 @@ function weekLabel(ws) { const we = addDays(ws, 6); return { wk: `Wk ${isoWeek(w
 const NA = /^(n\/?a|none|no|nil|-|—|ok|0)?$/i;
 function state(o, day = today()) {
   if (o.shipped) return 'shipped';
+  if (o.container_status === 'booked') return 'booked';   // in a container the forwarder confirmed: waiting to sail
   const pending = String(o.pending_from_us || '').trim();
   if (pending && !NA.test(pending)) return 'waiting';
   const ready = /ready|finished|complete|done|packed/i.test(o.production_status || '');
@@ -60,6 +61,7 @@ const STATE = {
   waiting: { label: 'Waiting on Lulyboo', color: '#d07a1e', tag: 'wait' },
   ready: { label: 'Ready', color: '#2f8a63', tag: 'ok' },
   production: { label: 'In production', color: '#8d9692', tag: 'plan' },
+  booked: { label: 'Booked', color: '#3b6fb6', tag: 'bk' },
   shipped: { label: 'Shipped', color: '#b9c0bc', tag: 'done' },
 };
 
