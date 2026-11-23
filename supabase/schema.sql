@@ -410,7 +410,7 @@ create table if not exists public.staff_users (
   name            text not null,
   username        text not null,
   email           text not null,
-  role            text not null check (role in ('admin','director','manager','accountant')),
+  role            text not null check (role in ('admin','director','manager','accountant','development')),
   password_hash   text,
   status          text not null default 'invited' check (status in ('invited','active','disabled')),
   must_change     boolean not null default false,

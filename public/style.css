@@ -3308,3 +3308,9 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .fi-pay summary{cursor:pointer;list-style:none;display:inline-block}.fi-pay summary::-webkit-details-marker{display:none}.fi-payf{display:flex;flex-direction:column;gap:6px;margin-top:6px;min-width:220px}.fi-payf label{display:flex;flex-direction:column;font-size:12px;font-weight:600;gap:2px}
 @media (max-width:900px){.in-grid,.in-inv,.in-kv{grid-template-columns:1fr 1fr}.in-grid .w2,.in-grid .w3{grid-column:1/-1}}
 .in-invd summary{cursor:pointer}.in-invd summary .sub{font-weight:500;margin-left:6px}
+.sp-hidden{display:flex;gap:10px;align-items:center;background:#f6f5f3;border:1px dashed #d9d3cb;border-radius:11px;padding:10px 14px;color:#78746e;font-size:13px;margin-bottom:14px}
+.role-pill.r-development{background:#e8f0fb;color:#24508f}
+/* Development role: suppliers, RFQs and products are view-only — hide the controls that would be refused */
+main[data-ro] form[method="post"] button,main[data-ro] form[method="post"] select,main[data-ro] form[method="post"] textarea,main[data-ro] form[method="post"] input:not([type="hidden"]),main[data-ro] form[method="post"] .dd,main[data-ro] form[method="post"] label,main[data-ro] .sp-acts a[href^="#"],main[data-ro] details:has(> summary + form[method="post"]),main[data-ro] [data-open-dialog],main[data-ro] [data-open-edit],main[data-ro] .sp-imp,main[data-ro] .sp-more,main[data-ro] .more-menu,main[data-ro] .bulk-bar,main[data-ro] input[type="checkbox"][name="ids"],main[data-ro] [data-checkall]{display:none!important}
+main[data-ro]::before{content:"View only — Development projects and Samples can be edited";display:block;font-size:12px;font-weight:600;color:#24508f;background:#e8f0fb;border-radius:8px;padding:5px 10px;margin-bottom:12px;width:max-content}
+main[data-ro]:has(.ro-deny)::before{display:none}.ro-deny{max-width:640px;margin:40px auto;text-align:center;padding:30px}.ro-deny h2{margin:0 0 8px}

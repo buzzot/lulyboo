@@ -77,7 +77,7 @@ ${isAdmin && STAFF.current()?.viewing ? html`<div class="va-bar"><span>Viewing a
   ${isAdmin ? html`<div class="top-right">${nav?.groups && !nav.finance ? html`<button type="button" class="qk-btn" data-qk-open aria-label="Quick jump (⌘K)">${icon('search', 15)}<span>Jump to…</span><kbd data-qk-key>⌘K</kbd></button>` : ''}${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
 </div>${isAdmin && nav?.groups ? subNav(nav, wide) : ''}</header>
 ${isAdmin && nav?.groups ? quickJump(nav) : ''}
-<main class="${wide ? 'wide' : ''}">
+<main class="${wide ? 'wide' : ''}" ${isAdmin && STAFF.current()?.role === 'development' && !/^\/admin\/(projects|samples|dev-files|sample-files|profile)(\/|\?|$)/.test(String(req?.url || '')) ? raw('data-ro') : ''}>
 ${flashHtml}
 ${body}
 </main>
@@ -131,6 +131,15 @@ function adminNav(active) {
   if (staff?.role === 'accountant') {
     const groups = [['finance', '/admin/finance', 'Payments'], ['finance-paid', '/admin/finance?tab=paid', 'Paid'], ['finance-docs', '/admin/finance/docs', 'Documents'], ['finance-insp', '/admin/finance/inspections', 'Inspections'], ['finance-reports', '/admin/finance/reports', 'Reports']].map(([k, href, label]) => ({ label, href, active: on(k) }));
     return { home: '/admin/finance', label: 'Finance', groups, settings: null, items: groups, admin: true, finance: true };
+  }
+  if (staff?.role === 'development') {
+    const g = (label, items) => ({ label, href: items[0][1], items: items.map(([k, href, l, d]) => ({ href, label: l, desc: d, active: on(k) })), active: items.some(([k]) => on(k)) });
+    const groups = [
+      { label: 'Development', href: '/admin/projects', active: on('projects') },
+      g('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers', 'Factories and contacts (view)'], ['requests', '/admin/requests', 'RFQs & requests', 'Info requests to suppliers (view)'], ['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
+      g('Catalog', [['products', '/admin/products', 'Products', 'Supplier products (view)']]),
+    ];
+    return { home: '/admin/projects', label: 'Development', groups, settings: null, items: groups.flatMap((x) => x.items || [x]), admin: true };
   }
   const group = (label, items) => {
     const list = items.map(([k, href, l, d]) => ({ href, label: l, desc: d, active: on(k) }));

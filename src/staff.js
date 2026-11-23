@@ -4,11 +4,13 @@
 //   director everything except users, settings and deleting; can read the audit log
 //   manager  day-to-day work; pricing and logistics are view-only; cannot delete
 //   accountant only the Finance pages (payments to make, documents to check, mark paid, reports)
+//   development new products: edits Development (projects) and Samples; reads Suppliers, RFQs and Products.
+//              No orders, logistics, pricing, payments, bank details; no deleting.
 // The ADMIN_PASSWORD "owner" login always works as an emergency Admin, even before the staff table exists.
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { sign, unsign } = require('./lib/http');
 
-const ROLES = { admin: 'Admin', director: 'Director', manager: 'Manager', accountant: 'Accountant' };
+const ROLES = { admin: 'Admin', director: 'Director', manager: 'Manager', accountant: 'Accountant', development: 'Development' };
 const SESSION_DAYS = 14;
 const als = new AsyncLocalStorage();
 const current = () => als.getStore()?.staff || null;
@@ -16,12 +18,15 @@ const runAs = (staff, fn) => als.run({ staff }, fn);
 
 /** What a role may do (used to hide buttons; the server enforces it in `deny`). */
 const CAN = {
-  admin: { users: true, settings: true, delete: true, audit: true, costs: true, bank: true },
-  director: { users: false, settings: false, delete: false, audit: true, costs: true, bank: true },
-  manager: { users: false, settings: false, delete: false, audit: false, costs: false, bank: false },
-  accountant: { users: false, settings: false, delete: false, audit: false, costs: false, bank: true },
+  admin: { users: true, settings: true, delete: true, audit: true, costs: true, bank: true, orders: true },
+  director: { users: false, settings: false, delete: false, audit: true, costs: true, bank: true, orders: true },
+  manager: { users: false, settings: false, delete: false, audit: false, costs: false, bank: false, orders: true },
+  accountant: { users: false, settings: false, delete: false, audit: false, costs: false, bank: true, orders: false },
+  development: { users: false, settings: false, delete: false, audit: false, costs: false, bank: false, orders: false },
 };
 const can = (role, what) => !!(CAN[role] && CAN[role][what]);
+/** Landed cost, margins, wholesale: everyone on the admin side except Development (they see the factory price only). */
+const seesLanded = (role) => role !== 'development';
 
 /** Returns a reason string when this role may not make this request, else null. */
 function deny(role, method, path) {
@@ -34,6 +39,19 @@ function deny(role, method, path) {
     if (get && (/^\/admin\/logistics\/planning\/files\/[^/]+$/.test(path) || /^\/admin\/orders\/shipping\/fwd\/[^/]+\/files\/\d+$/.test(path))) return null;
     return 'The accountant account can open the Finance pages only.';
   }
+  if (role === 'development') {
+    if (/^\/admin\/(profile|logout)(\/|\.|$)/.test(path)) return null;
+    if (/^\/admin\/(projects|samples|suppliers|products)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
+    // edit: Development (projects) and Samples
+    if (/^\/admin\/(projects|dev-files|samples|sample-files|samples-carriers)(\/|\.|$)/.test(path)) return null;
+    // read only: Suppliers, RFQs & requests, Products (+ their files, compare, quick jump)
+    if (get && /^\/admin(\/(suppliers|requests|request-files|products|archive|categories|compare|documents|quick|activities)(\/|\.|$)|\/?$)/.test(path)) {
+      if (/^\/admin\/suppliers\/[^/]+\/bank(\/|\.|$)/.test(path)) return 'Bank details are for Admin, Director and Accountant.';
+      return null;
+    }
+    if (!get && /^\/admin\/(suppliers|requests|products|archive|categories)(\/|\.|$)/.test(path)) return 'The Development role can view suppliers, RFQs and products but not change them — Development projects and Samples can be edited.';
+    return 'Not available for the Development role. Orders, logistics, pricing and payments are managed by the operations team — ask an Admin if you need access.';
+  }
   if (/^\/admin\/suppliers\/[^/]+\/bank(\/|\.|$)/.test(path) && !can(role, 'bank')) return 'Only an Admin, Director or Accountant can see bank details.';
   if (/^\/admin\/(users|settings|api-log)(\/|$)/.test(path) || /^\/admin\/crm\/telegram\//.test(path)) return 'Only an Admin can open this page.';
   if (/^\/admin\/audit(\/|$)/.test(path)) return can(role, 'audit') ? null : 'Only an Admin or Director can view the audit log.';
@@ -44,7 +62,7 @@ function deny(role, method, path) {
 
 // ── "View as": an Admin sees the portal with another role's menu and limits (testing / troubleshooting).
 //    Actions still count as the Admin, recorded as "Name (as Role)". Only a real Admin can switch; it ends on sign-out.
-const VIEW_ROLES = ['director', 'manager', 'accountant'];
+const VIEW_ROLES = ['director', 'manager', 'accountant', 'development'];
 function viewAs(config, req, staff) {
   if (!staff || staff.role !== 'admin') return staff;
   const v = unsign(req.cookies.lb_viewas, config.sessionSecret);
@@ -106,4 +124,4 @@ function autoLabel(path) {
   return 'POST ' + path;
 }
 
-module.exports = { VIEW_ROLES, viewAs, setViewAs, ROLES, CAN, can, deny, current, runAs, currentStaff, startSession, startOwnerSession, audit, autoLabel, OWNER, SESSION_DAYS };
+module.exports = { seesLanded, VIEW_ROLES, viewAs, setViewAs, ROLES, CAN, can, deny, current, runAs, currentStaff, startSession, startOwnerSession, audit, autoLabel, OWNER, SESSION_DAYS };

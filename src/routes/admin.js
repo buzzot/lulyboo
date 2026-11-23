@@ -281,7 +281,12 @@ function guard(config, fn) {
     // switching "View as" on / off always runs as the real account
     const staff = /^\/admin\/view-as(\/|$)/.test(path) ? real : ST.viewAs(config, req, real);
     if (staff.role === 'accountant' && path === '/admin') return res.redirect('/admin/finance');
+    if (staff.role === 'development' && (path === '/admin' || path === '/admin/')) return res.redirect('/admin/projects');
     const why = ST.deny(staff.role, req.method, path);
+    if (why && staff.role === 'development' && req.method === 'GET') {
+      // a friendly page in their own layout, with the way back to their work
+      return ST.runAs(staff, async () => { res.html(page({ title: 'Not available', nav: adminNav(''), req, body: html`<section class="card ro-deny"><h2>Not available for the Development role</h2><p class="muted">${why.replace(/^Not available for the Development role\. /, '')}</p><p><a class="btn" href="/admin/projects">Go to Development</a> <a class="btn ghost" href="/admin/samples">Samples</a></p></section>` }), 403); });
+    }
     if (why) throw new HttpError(403, why);
     req.staff = staff;
     return ST.runAs(staff, async () => {
@@ -437,7 +442,7 @@ function filterBar(q, ctx, suppliers, action = '/admin/products') {
     ${sel('status', F.STATUSES.map((s) => [s, s]), 'All statuses')}
     ${sel('supplier', suppliers.map((s) => [s.id, s.name]).sort((a, b) => a[1].localeCompare(b[1])), 'All suppliers')}
     ${sel('store', F.STORES.map((s) => [s, s]), 'Any store')}
-    ${sel('sort', [['newest', 'Newest'], ['landed', 'Landed cost ↑'], ['margin', 'Margin ↓'], ['price', 'Factory price ↑'], ['score', 'Score ↓'], ['moq', 'MOQ ↑']], 'Sort')}
+    ${sel('sort', [['newest', 'Newest'], ...(ST.seesLanded(ST.current()?.role) ? [['landed', 'Landed cost ↑'], ['margin', 'Margin ↓']] : []), ['price', 'Factory price ↑'], ['score', 'Score ↓'], ['moq', 'MOQ ↑']], 'Sort')}
     <label class="chk"><input type="checkbox" name="issues" value="1" ${q.issues === '1' ? raw('checked') : ''}> Has issues</label>
     <button class="btn small">Apply</button>
   </form>`;
@@ -690,7 +695,7 @@ module.exports = function adminRoutes(router, { db, config }) {
         ${archiveButtons()}
       </div>
       <div class="table-wrap"><table class="list">
-        <thead><tr><th><input type="checkbox" data-checkall></th><th></th><th>Product</th><th>Category</th><th class="r">Factory price</th><th class="r">Landed</th><th class="r">Sugg. wholesale</th><th class="r">Margin</th><th class="r">MOQ</th><th class="r">Units/40HQ</th><th>Status</th><th>Score</th></tr></thead>
+        <thead><tr><th><input type="checkbox" data-checkall></th><th></th><th>Product</th><th>Category</th><th class="r">Factory price</th>${ST.seesLanded(ST.current()?.role) ? html`<th class="r">Landed</th><th class="r">Sugg. wholesale</th><th class="r">Margin</th>` : ''}<th class="r">MOQ</th><th class="r">Units/40HQ</th><th>Status</th><th>Score</th></tr></thead>
         <tbody>${slice.map(({ product: p, analysis: a }) => html`<tr>
           <td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td>
           <td class="thumb-cell">${imgs[p.id]?.[0] ? html`<img src="${urls[imgs[p.id][0].thumb_path] || ''}" alt="" loading="lazy">` : html`<span class="noimg">—</span>`}</td>
@@ -698,9 +703,9 @@ module.exports = function adminRoutes(router, { db, config }) {
             <div class="sub"><a href="/admin/suppliers/${p.supplier_id}">${p.supplier_name}</a>${p.supplier_sku ? ` · ${p.supplier_sku}` : ''}</div></td>
           <td>${p.category || '—'}<div class="sub">${p.subcategory || ''}</div></td>
           <td class="r">${fmt.money(p.unit_price, p.currency)}${p.currency !== 'USD' && a.unit_price_usd !== null ? html`<div class="sub">${fmt.money(a.unit_price_usd)}</div>` : ''}<div class="sub">${p.incoterm || ''}</div></td>
-          <td class="r"><b>${fmt.money(a.landed_cost)}</b><div class="sub">${a.primary?.mode_label || ''}</div></td>
+          ${ST.seesLanded(ST.current()?.role) ? html`<td class="r"><b>${fmt.money(a.landed_cost)}</b><div class="sub">${a.primary?.mode_label || ''}</div></td>
           <td class="r">${fmt.money(a.pricing.suggested_wholesale)}<div class="sub">@${a.pricing.target_margin_pct}%</div></td>
-          <td class="r ${a.margin_pct !== null && a.margin_pct < a.pricing.target_margin_pct ? 'neg' : ''}">${fmt.pct(a.margin_pct)}</td>
+          <td class="r ${a.margin_pct !== null && a.margin_pct < a.pricing.target_margin_pct ? 'neg' : ''}">${fmt.pct(a.margin_pct)}</td>` : ''}
           <td class="r">${fmt.num(p.moq)}</td>
           <td class="r">${fmt.num(a.fits['40HQ']?.units)}</td>
           <td>${statusPill(p.status)}</td><td>${p.score ? '★'.repeat(p.score) : ''}</td></tr>`)}</tbody>
@@ -773,7 +778,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       ['Units / carton', ({ p }) => fmt.num(p.units_per_carton)], ['Units / 40HQ', ({ a }) => fmt.num(a.fits['40HQ']?.units)],
       ['Unit CBM', ({ a }) => a.unit_cbm ?? '—'], ['Payment', ({ p }) => p.payment_terms],
       ['Issues', ({ a }) => a.issues.length ? html`<ul class="tight">${a.issues.map((i) => html`<li>${i}</li>`)}</ul>` : '—'],
-    ];
+    ].filter(([k]) => ST.seesLanded(ST.current()?.role) || !['Landed cost', 'Freight / unit', 'Sugg. wholesale', 'Our margin'].includes(k));
     res.html(page({
       title: 'Compare', nav: adminNav('products'), wide: true,
       body: html`<div class="head-row"><h1>Compare ${items.length} products</h1>
@@ -898,7 +903,7 @@ module.exports = function adminRoutes(router, { db, config }) {
     const docs = await db.list('supplier_documents', { filters: { product_id: p.id }, order: 'created_at.desc' }).then((r) => ({ ok: true, r })).catch(() => ({ ok: false, r: [] }));
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
-      body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis,
+      body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis, lite: !ST.seesLanded(ST.current()?.role),
         dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }), customsHtml: html`${htsCard({ ...p, _htsOpen: req.query.hts === '1' }, customs, { aiOn: AI.enabled(), broker: await brokerFor(db, customs) })}${await customsCard(db, p, customs, realA)}`, customsN: customs.length }),
     }));
   }));
@@ -1202,13 +1207,14 @@ module.exports = function adminRoutes(router, { db, config }) {
         const lastAct = acts[0];
         const lastLogin = users.map((u) => u.last_login_at).filter(Boolean).sort().pop();
         const money0 = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
+        const seeOrders = ST.can(ST.current()?.role, 'orders');
         const kpi = [
           ['Open POs', openPos.length ? `${openPos.length}` : '—', openPos.length ? `${money0(openPos.reduce((a, p) => a + val(p), 0))} · ${openPos.reduce((a, p) => a + p.cbm, 0).toFixed(1)} m³` : 'none open', '#orders'],
           ['Next ready', openPos.find((p) => p.first) ? PL.short(openPos.find((p) => p.first).first) : '—', openPos.find((p) => p.first) ? `PO ${openPos.find((p) => p.first).po}` : '', '#orders'],
           ['To pay', toPay ? money0(toPay) : '—', nextPay ? `next ${nextPay.d ? PL.short(nextPay.d) : 'date tbc'} · ${money0(nextPay.left)}` : 'nothing open', '/admin/orders/payments?supplier=' + s.id],
           ['Products', `${items.length}`, `${items.filter(({ product: p }) => p.status === 'Selected').length} selected${archivedCount ? ` · ${archivedCount} archived` : ''}`, '#products'],
           ['Last contact', lastAct ? fmt.date(lastAct.activity_date || lastAct.created_at) : '—', lastAct ? `${lastAct.type}` : 'no activity yet', '#activity'],
-        ];
+        ].filter(([k]) => seeOrders || !['Open POs', 'Next ready', 'To pay'].includes(k));
         const web = s.website ? (/^https?:/.test(s.website) ? s.website : `https://${s.website}`) : null;
         return html`
       <div class="sp-head">
@@ -1222,7 +1228,8 @@ module.exports = function adminRoutes(router, { db, config }) {
       </div>
       <div class="sp-kpi">${kpi.map(([k, v, sub, href]) => html`<a href="${href}"><span>${k}</span><b>${v}</b><small>${sub}</small></a>`)}</div>
       <div class="sp-lay"><div class="sp-main">
-        <section class="card sp-card" id="orders"><div class="head-row"><h2>Orders <span class="sub">${openPos.length} open${pos.length > openPos.length ? ` · ${pos.length - openPos.length} shipped` : ''}</span></h2>
+        ${seeOrders ? '' : html`<div class="sp-hidden">🔒 Purchase orders, payment terms and bank details are visible to Admin, Director and Manager only.</div>`}
+        ${!seeOrders ? '' : html`<section class="card sp-card" id="orders"><div class="head-row"><h2>Orders <span class="sub">${openPos.length} open${pos.length > openPos.length ? ` · ${pos.length - openPos.length} shipped` : ''}</span></h2>
           <span class="rh-seg"><a href="/admin/suppliers/${s.id}#orders" class="${showAll ? '' : 'on'}">Open</a><a href="/admin/suppliers/${s.id}?orders=all#orders" class="${showAll ? 'on' : ''}">All ${pos.length}</a></span></div>
           ${shown.length ? html`<div class="table-wrap"><table class="list compact sp-ord"><thead><tr><th>PO</th><th>Products</th><th class="r">Qty</th><th class="r">Value</th><th class="r">m³</th><th>Ready</th><th>Status</th><th>Next payment</th></tr></thead><tbody>
             ${shown.map((p) => { const np = myPay.find((r) => PL.normPo(r.po) === PL.normPo(p.po)); return html`<tr class="${p.st === 'shipped' ? 'done' : ''}"><td><a href="/admin/orders/view?supplier=${s.id}&po=${encodeURIComponent(p.po)}"><b>${p.po}</b></a></td>
@@ -1231,7 +1238,7 @@ module.exports = function adminRoutes(router, { db, config }) {
               <td>${p.first ? PL.short(p.first) : '—'}</td><td>${OR.tag(p.st)}</td>
               <td>${np ? html`<span class="${np.d && np.d < today0 ? 'neg' : ''}">${money0(np.left)} · ${np.d ? PL.short(np.d) : 'tbc'}</span>` : html`<span class="sub">—</span>`}</td></tr>`; })}
           </tbody></table></div>` : html`<p class="sub">${pos.length ? 'No open orders.' : 'No orders yet.'} <a href="/admin/logistics/planning/import?supplier=${s.id}">Import a PO</a></p>`}
-        </section>
+        </section>`}
         <section class="card sp-card" id="products"><div class="head-row"><h2>Products <span class="sub">${items.length}</span></h2>
           <div class="actions"><details class="sp-imp"><summary class="btn small ghost">⬆ Import products</summary>
             <form method="post" enctype="multipart/form-data" action="/admin/suppliers/${s.id}/import" class="import-form sp-imp-f">
@@ -1247,8 +1254,8 @@ module.exports = function adminRoutes(router, { db, config }) {
             <button class="btn small" name="action" value="status" formaction="/admin/products/bulk">Apply</button>
             <button class="btn small ghost" title="Ask the supplier for a dieline, checklist, samples…">Request information</button>
             ${archiveButtons('/admin/products/bulk')}</div>
-          <table class="list compact sp-prod"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th>${hasSku ? html`<th>SKU</th>` : ''}<th>Product</th><th>Category</th><th class="r">Price</th><th class="r">Landed</th><th>Status</th></tr></thead>
-          <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td>${hasSku ? html`<td class="sku-cell">${p.supplier_sku || '—'}</td>` : ''}<td><a href="/admin/products/${p.id}">${skuless(p)}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td><td class="r">${fmt.money(a.landed_cost)}</td><td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>` : html`<p class="sub">No products yet — import a price list or quotation.</p>`}
+          <table class="list compact sp-prod"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all"></th><th></th>${hasSku ? html`<th>SKU</th>` : ''}<th>Product</th><th>Category</th><th class="r">Price</th>${ST.seesLanded(ST.current()?.role) ? html`<th class="r">Landed</th>` : ''}<th>Status</th></tr></thead>
+          <tbody>${items.map(({ product: p, analysis: a }) => html`<tr><td><input type="checkbox" name="ids" value="${p.id}" ${dup.byId.get(p.id)?.extra ? raw('data-dupextra') : ''}></td><td class="thumb-cell"><a href="/admin/products/${p.id}" tabindex="-1">${imgs[p.id]?.[0] && urls[imgs[p.id][0].thumb_path] ? html`<img src="${urls[imgs[p.id][0].thumb_path]}" alt="" loading="lazy">` : html`<span class="noimg" title="No photo yet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg></span>`}</a></td>${hasSku ? html`<td class="sku-cell">${p.supplier_sku || '—'}</td>` : ''}<td><a href="/admin/products/${p.id}">${skuless(p)}</a>${dupPill(dup, p.id)}</td><td>${p.category || '—'}</td><td class="r">${fmt.money(p.unit_price, p.currency)}</td>${ST.seesLanded(ST.current()?.role) ? html`<td class="r">${fmt.money(a.landed_cost)}</td>` : ''}<td>${statusPill(p.status)}</td></tr>`)}</tbody></table></form>` : html`<p class="sub">No products yet — import a price list or quotation.</p>`}
         </section>
         <section class="card sp-card" id="activity"><div class="head-row"><h2>Activity <span class="sub">${acts.length}</span></h2></div>
           <form method="post" action="/admin/suppliers/${s.id}/activities" class="sp-log">

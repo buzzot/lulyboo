@@ -44,7 +44,7 @@ function pricingTag(p, supplier) {
 }
 
 function renderWorkspace(c) {
-  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, customsHtml = '', customsN = 0, renderAnalysis } = c;
+  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, customsHtml = '', customsN = 0, renderAnalysis, lite = false } = c;   // lite: Development role — read only, factory price but no landed cost / margins
   const v = (x) => (x === null || x === undefined ? '' : x);
   const stars = p.score ? '★'.repeat(p.score) + '☆'.repeat(5 - p.score) : '';
   const money = (x) => (x === null || x === undefined ? '—' : fmt.money(x));
@@ -68,7 +68,7 @@ function renderWorkspace(c) {
     <nav class="crumb" aria-label="Breadcrumb"><a href="/admin/products">Products</a><span>›</span><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name || 'Supplier'}</a></nav>
     <div class="pw-top">
       <div class="pp-title"><h1>${p.product_name}</h1>${statusPill(p.status)}${stars ? html`<span class="stars" title="Score ${p.score} of 5">${stars}</span>` : ''}${p.archived_at ? html`<span class="pill s-closed">Archived</span>` : ''}</div>
-      <div class="pp-actions">
+      ${lite ? html`<div class="pp-actions"><span class="sub">View only</span></div>` : html`<div class="pp-actions">
         <form method="post" action="/admin/products/${p.id}/ai-similar" data-go-tab="review"><button class="btn ghost small" data-busy>Find similar</button></form>
         <form method="post" action="/admin/products/${p.id}/ai-review" data-go-tab="review"><button class="btn small" data-busy>AI review</button></form>
         <details class="more-menu"><summary class="btn ghost small icon-only" aria-label="More actions">${icon('more', 16)}</summary>
@@ -77,7 +77,7 @@ function renderWorkspace(c) {
             <form method="post" action="/admin/products/bulk" data-confirm="${p.archived_at ? 'Restore this product from the archive?' : 'Archive this product? It is hidden from the lists and the supplier portal. You can restore it later.'}"><input type="hidden" name="ids" value="${p.id}"><input type="hidden" name="back" value="/admin/products/${p.id}"><button name="action" value="${p.archived_at ? 'unarchive' : 'archive'}">${p.archived_at ? 'Restore from archive' : 'Archive'}</button></form>
             ${canDelete ? html`<form method="post" action="/admin/products/${p.id}/delete" data-confirm="Delete this product and its photos? This cannot be undone."><button class="danger">Delete product</button></form>` : ''}
           </div></details>
-      </div>
+      </div>`}
     </div>
     <ul class="pp-meta">
       <li><a href="/admin/suppliers/${p.supplier_id}">${supplier?.name}</a></li>
@@ -87,7 +87,7 @@ function renderWorkspace(c) {
       ${srcDoc ? html`<li><a href="/admin/documents/${srcDoc.id}" download title="Original quotation file: ${srcDoc.name}" class="src-chip">${icon('download', 13)}<span class="trunc">Source file: ${srcDoc.name}</span></a></li>` : ''}
     </ul>
     <div class="pw-tabs" role="tablist" aria-label="Product sections">
-      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${tab('costing', 'Costing')}${tab('logistics', 'Logistics')}${tab('customs', 'Customs records', customsN ? { text: customsN } : null)}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
+      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${lite ? '' : tab('costing', 'Costing')}${tab('logistics', 'Logistics')}${lite ? '' : tab('customs', 'Customs records', customsN ? { text: customsN } : null)}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
     </div>
   </div>`;
 
@@ -108,7 +108,7 @@ function renderWorkspace(c) {
       <div class="ov-main">
         <div class="facts">
           <div class="fact"><span>Factory price</span><b>${has(p.unit_price) ? fmt.money(p.unit_price, p.currency) : '—'}</b><small>${[p.incoterm, p.fob_port].filter(Boolean).join(' · ') || 'Incoterm not given'}</small></div>
-          <div class="fact strong"><span>Landed estimate ${dutyVerified ? status('ok', 'duty verified') : status('est', 'estimate')}</span><b>${money(a.landed_cost)}</b><small>${a.primary?.name || 'No logistics option'}</small></div>
+          ${lite ? '' : html`<div class="fact strong"><span>Landed estimate ${dutyVerified ? status('ok', 'duty verified') : status('est', 'estimate')}</span><b>${money(a.landed_cost)}</b><small>${a.primary?.name || 'No logistics option'}</small></div>`}
           <div class="fact"><span>MOQ</span><b>${has(p.moq) ? fmt.num(p.moq) : '—'}</b><small>${a.moq_cartons ? `${a.moq_cartons} cartons` : 'units'}</small></div>
           <div class="fact"><span>Lead time</span><b>${has(p.production_lead_days) ? `${p.production_lead_days} d` : '—'}</b><small>${has(p.sample_lead_days) ? `samples ${p.sample_lead_days} d` : 'production'}</small></div>
         </div>
@@ -235,7 +235,7 @@ function renderWorkspace(c) {
           <ul class="plain">${['20GP', '40GP', '40HQ'].map((cn) => { const f = fit[cn]; return f ? html`<li><b>${cn}</b>: ${fmt.num(f.cartons)} cartons, limited by ${f.limitedBy}, carton orientation ${f.orientation.join(' × ')} cm</li>` : html`<li><b>${cn}</b>: needs carton size</li>`; })}</ul></details>
       </section>
     </div>
-    <section class="card"><div class="sec-row"><h2 class="sec">Shipping scenarios</h2><a class="small" href="/admin/logistics">Edit rates in Logistics</a></div>
+    ${lite ? '' : html`<section class="card"><div class="sec-row"><h2 class="sec">Shipping scenarios</h2><a class="small" href="/admin/logistics">Edit rates in Logistics</a></div>
       <div class="table-wrap"><table class="list compact">
         <thead><tr><th>Option</th><th class="r">Shipment qty</th><th class="r">Freight total</th><th class="r">Freight / unit</th><th class="r">Landed / unit</th><th class="r">Transit</th></tr></thead>
         <tbody>${a.scenarios.map((s) => html`<tr class="${s.option_id === a.primary?.option_id ? 'hl' : ''}">
@@ -244,7 +244,7 @@ function renderWorkspace(c) {
           <td class="r">${fmt.money(s.freight_total)}</td><td class="r">${fmt.money(s.freight_per_unit)}</td>
           <td class="r"><b>${fmt.money(s.landed_cost)}</b></td><td class="r">${s.transit_days ? `${s.transit_days} d` : '—'}</td></tr>`)}</tbody></table></div>
       <p class="sub">The highlighted row is used for the landed cost. Change it in Costing.</p>
-    </section>
+    </section>`}
   </section>`;
 
   // ── Review ────────────────────────────────────────────────
@@ -264,10 +264,10 @@ function renderWorkspace(c) {
       <aside class="card"><h2 class="sec">Summary (read-only)</h2>
         <dl class="specs one">
           ${spec('Factory price', has(p.unit_price) ? fmt.money(p.unit_price, p.currency) : none)}
-          ${spec('Landed estimate', html`${money(a.landed_cost)} ${dutyVerified ? status('ok', 'duty verified') : status('est', 'estimate')}`)}
+          ${lite ? '' : html`${spec('Landed estimate', html`${money(a.landed_cost)} ${dutyVerified ? status('ok', 'duty verified') : status('est', 'estimate')}`)}
           ${spec('Suggested wholesale', money(a.pricing.suggested_wholesale))}
           ${spec('Our wholesale', has(p.our_wholesale_usd) ? fmt.money(p.our_wholesale_usd) : none)}
-          ${spec('Margin', a.margin_pct !== null ? html`<span class="${a.margin_pct < a.pricing.target_margin_pct ? 'neg' : 'pos'}">${fmt.pct(a.margin_pct)}</span> <span class="sub">target ${a.pricing.target_margin_pct}%</span>` : none)}
+          ${spec('Margin', a.margin_pct !== null ? html`<span class="${a.margin_pct < a.pricing.target_margin_pct ? 'neg' : 'pos'}">${fmt.pct(a.margin_pct)}</span> <span class="sub">target ${a.pricing.target_margin_pct}%</span>` : none)}`}
           ${spec('MOQ', has(p.moq) ? `${fmt.num(p.moq)} units` : none)}
           ${spec('Per 40HQ', fit['40HQ'] ? fmt.num(fit['40HQ'].units) : none)}
           ${spec('Certifications', val(p.certifications))}
@@ -306,7 +306,7 @@ function renderWorkspace(c) {
   </section>`;
 
   const customs = html`<section class="pw-panel" role="tabpanel" id="tab-customs" aria-labelledby="tabbtn-customs" data-panel="customs" hidden>${customsHtml}</section>`;
-  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${costing}${logistics}${customs}${review}${documents}</div>`;
+  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${lite ? '' : costing}${logistics}${lite ? '' : customs}${review}${documents}</div>`;
 }
 
 module.exports = { renderWorkspace, normSize, DOC_KINDS, UPLOAD_KINDS };
