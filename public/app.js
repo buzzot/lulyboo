@@ -1736,6 +1736,23 @@
   });
   // Confirm booking: booking no., forwarder, cut-off, ETD and the confirmed cartons / m³ / kg per PO (planned values prefilled).
   var bd = document.createElement('dialog'); bd.className = 'rp-modal lp-bkdlg'; bd.setAttribute('aria-labelledby', 'lp-bk-t'); document.body.appendChild(bd);
+  // Forwarder: custom dropdown from the Forwarders list (+ earlier bookings); "Other…" opens a text box
+  function fwPick(cur) {
+    var list = (D.forwarders || []).slice(); if (cur && list.indexOf(cur) < 0) list.unshift(cur);
+    var v = cur || '', lab = cur || 'Choose forwarder…';
+    return '<details class="dd dd-sel" data-dd data-ddsel data-lp-fwpick><summary class="dd-field"><span data-ddsel-label>' + esc(lab) + '</span><span class="dd-car" aria-hidden="true">▾</span></summary><div class="dd-menu">' +
+      list.map(function (n) { return '<button type="button" data-v="' + esc(n) + '" class="' + (n === cur ? 'on' : '') + '">' + esc(n) + '</button>'; }).join('') +
+      '<button type="button" data-v="_other" class="dd-other">Other…</button></div><input type="hidden" name="forwarder" value="' + esc(v) + '"></details>' +
+      '<input name="forwarder_other" class="lp-fwother" placeholder="Forwarder name" hidden aria-label="Other forwarder">' +
+      (list.length ? '' : '<span class="sub">No forwarders yet — <a class="link small" href="/admin/logistics/forwarders" target="_blank" rel="noopener">add them</a> or choose Other.</span>');
+  }
+  bdFw();
+  function bdFw() {
+    document.addEventListener('change', function (e) {
+      var inp = e.target; if (!inp.closest || !inp.closest('[data-lp-fwpick]') || inp.name !== 'forwarder') return;
+      var other = inp.closest('.lp-bkfw').querySelector('.lp-fwother'); other.hidden = inp.value !== '_other'; if (!other.hidden) other.focus();
+    });
+  }
   function openBook(c) {
     if (!c) return; var f = c.fwd || {}, k = f.confirmed || {}, gs = groupBy(itemsOf(c)), lcl = D.box[c.box] && D.box[c.box].lcl;
     var prev = function (po, key) { var x = (k.lines || []).filter(function (l) { return l.po === po; })[0]; return x && x[key] != null ? x[key] : null; };
@@ -1747,7 +1764,7 @@
     }).join('');
     bd.innerHTML = '<form data-lp-bk-form><div class="rp-top"><h2 id="lp-bk-t">Confirm booking · ' + esc(cName(c)) + '</h2><button type="button" class="icon-btn" data-lp-bk-close aria-label="Close">×</button></div>' +
       '<p class="sub rp-ctx">What the forwarder confirmed. Saving locks this container: its POs move to <b>Booked</b> and nothing can be dragged in or out until you unlock it.</p>' +
-      '<div class="lp-bkf"><label>Booking no. <input name="booking" value="' + esc(f.booking || '') + '" autocomplete="off"></label><label>Forwarder <input name="forwarder" value="' + esc(f.forwarder || '') + '"></label>' +
+      '<div class="lp-bkf"><label>Booking no. <input name="booking" value="' + esc(f.booking || '') + '" autocomplete="off"></label><div class="lp-bkfw"><span class="lp-bkl">Forwarder</span>' + fwPick(f.forwarder || '') + '</div>' +
       '<label>' + (lcl ? 'CFS cut-off' : 'CY cut-off') + ' <input type="date" name="cutoff" value="' + esc(f.cutDay || c.loading || '') + '"></label><label>ETD <input type="date" name="etd" value="' + esc(f.etdDay || (sById(c.sailing) ? sById(c.sailing).etd : '')) + '"></label></div>' +
       '<div class="table-wrap"><table class="list compact lp-bkt"><thead><tr><th>PO</th><th class="r">Planned ctns</th><th class="r">Confirmed ctns</th><th class="r">m³</th><th class="r">kg</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="rp-actions"><button class="btn">Confirm &amp; lock</button><button type="button" class="btn ghost" data-lp-bk-close>Cancel</button><span class="sub">Forwarder emails and PDFs: use ＋ Forwarder update — AI reads them.</span></div></form>';

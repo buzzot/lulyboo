@@ -3275,3 +3275,5 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .cp-tag.bk{background:#e8f0fb;color:#24508f}
 @media (max-width:900px){.lp-bkstats{grid-template-columns:repeat(2,1fr)}.lp-bkf{grid-template-columns:1fr}}
 .or-table .or-chip-t small{white-space:normal;display:block}.or-table .or-chip-t small .or-dot{margin-right:4px;vertical-align:1px}
+.lp-bkfw{display:flex;flex-direction:column;gap:4px}.lp-bkl{font-weight:600;font-size:13px}.lp-bkfw .dd-sel{width:100%}.lp-bkfw .dd-field{width:100%;justify-content:space-between}.lp-bkfw .dd-menu{max-height:260px;overflow:auto;min-width:100%}
+.lp-bkfw .dd-other{border-top:1px solid #ece9e5;color:#c4574b;font-weight:600}.lp-fwother{margin-top:6px}

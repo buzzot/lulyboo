@@ -4925,4 +4925,10 @@ test('Load containers: Confirm booking locks the container, its POs show Booked,
   assert.equal(un.status, 200); assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).status, 'planned');
   assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.confirmed.ctns, 50);
   assert.equal((await req(base, 'POST', `${B}/assign`, { cookie, form: { order: free.id, container: c.id } })).status, 200);
+  // forwarder picked from the list, or typed via "Other…"; the list includes names from earlier bookings
+  await req(base, 'POST', `${B}/containers/${c.id}/book`, { cookie, form: { forwarder: '_other', forwarder_other: 'Panda Logistics', ctns_0: '50' } });
+  assert.equal(db.tables.plan_containers.find((x) => x.id === c.id).fwd.forwarder, 'Panda Logistics');
+  await db.insert('forwarders', { company: 'Affinity Logistics' });
+  const pg = (await req(base, 'GET', `${B}/load?port=CNYTN`, { cookie })).text;
+  assert.match(pg, /&quot;forwarders&quot;:\[&quot;Affinity Logistics&quot;,&quot;Panda Logistics&quot;\]/);
 });

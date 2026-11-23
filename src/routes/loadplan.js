@@ -94,6 +94,9 @@ function loadPlanRoutes(router, { db, config }) {
     const port = ports.includes(req.query.port) ? req.query.port : (req.query.port && /^[A-Z]{5}$/.test(req.query.port) ? req.query.port : ports[0]);
     if (!ports.includes(port)) ports.push(port);
 
+    // forwarders for Confirm booking: the Forwarders list + names used on earlier bookings
+    const fwNames = [...new Set([...(await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((f) => f.active !== false).map((f) => f.company || f.name),
+      ...containers.map((c) => c.fwd?.forwarder)].map((x) => String(x || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const supIds = [...new Set(lines.map((l) => l.supplier_id))];
     const sups = Object.fromEntries((await Promise.all(supIds.map((id) => db.get('suppliers', id).catch(() => null)))).filter(Boolean).map((s) => [s.id, s]));
     const numbered = containers.filter((c) => c.port === port).map((c, i) => ({ ...c, no: i + 1 }));
@@ -122,7 +125,7 @@ function loadPlanRoutes(router, { db, config }) {
     const pkOf = (o) => `${o.supplier_id}|${PL.normPo(o.po)}`;
     const pkeys = [...new Set(here.map(pkOf))];
     const data = {
-      base: BASE, port, portName: portName(port), today: day, box: BOX,
+      base: BASE, port, portName: portName(port), today: day, box: BOX, forwarders: fwNames,
       orders: here.map((o, i) => ({
         id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', sku: o.sku || '', qty: Number(o.qty) || 0,
         cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,
@@ -226,7 +229,7 @@ function loadPlanRoutes(router, { db, config }) {
     const cutKey = c.box === 'LCL' ? 'cfs_cutoff' : 'cy_cutoff';
     const fwd = { ...(c.fwd || {}), confirmed: { at: now(), by: req.staff?.name || 'Owner', lines: conf, ctns: tot('ctns'), cbm: tot('cbm'), kg: tot('kg') } };
     const bk = String(f.booking || '').trim().slice(0, 60); if (bk) fwd.booking_no = bk;
-    const fw = String(f.forwarder || '').trim().slice(0, 80); if (fw) fwd.forwarder = fw;
+    const fw = String((f.forwarder === '_other' ? f.forwarder_other : f.forwarder) || '').trim().slice(0, 80); if (fw) fwd.forwarder = fw;
     const cut = PL.isoDay(f.cutoff); if (cut) fwd[cutKey] = cut;
     const etd = PL.isoDay(f.etd); if (etd) fwd.etd = etd;
     await db.update('plan_containers', { id: c.id }, { status: 'booked', fwd, ...(cut ? { loading_date: cut } : {}), updated_at: now() });
