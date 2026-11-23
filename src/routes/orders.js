@@ -102,6 +102,29 @@ module.exports = function orderRoutes(router, { db, config }) {
   };
   const ctn = (ci, ls) => { const seen = new Set(); return ls.map((l) => ci.labelFor(l)).filter((x) => x && !seen.has(x.c.id) && seen.add(x.c.id)); };
 
+  // PO page: the inspection step — alert to request it, or the inspection(s) with stage, date, result and invoice
+  async function inspSection(supplier, p, ls, back) {
+    const IN = require('../inspections');
+    const { list, missing } = await IN.forPo(db, supplier.id, p.po);
+    if (missing) return '';
+    const shown = list.filter((i) => !['cancelled'].includes(i.status));
+    const skipped = shown.length && shown.every((i) => i.status === 'skipped');
+    const allShipped = ls.every((l) => l.shipped);
+    if (!shown.length && (allShipped || supplier.inspection_off)) return '';
+    const ready = ls.map((l) => l.ready_date).filter(Boolean).sort().pop();
+    const t = IN.timing(ready); const today = PL.today();
+    const B = '/admin/orders/inspections';
+    const todo = shown.find((i) => i.status === 'todo');
+    const alert = (!shown.length || todo) && !allShipped ? html`<div class="in-alert">🔍 <span><b>Schedule the inspection.</b> ${t.target ? html`Ready ${PL.short(ready)} → inspect around <b>${PL.short(t.target)}</b>. Book it by <b class="${t.bookBy < today ? 'in-late' : ''}">${PL.short(t.bookBy)}</b>${t.bookBy < today ? ' — that was ' + (Math.round((Date.parse(today) - Date.parse(t.bookBy)) / 864e5)) + ' days ago' : ' (a month ahead)'}.` : 'Set the ready date to get a suggested day.'}</span>
+      <span class="in-alert-a"><a class="btn small" href="${todo ? `${B}/new?id=${todo.id}` : `${B}/new?supplier=${supplier.id}&po=${encodeURIComponent(p.po)}`}">Request inspection</a>
+      <form method="post" action="${`${B}/skip`}" class="inline"><input type="hidden" name="back" value="${back}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}">`}<button class="link small">Not needed for this PO</button></form></span></div>` : '';
+    const card = (i) => html`<a class="in-po-card" href="${`${B}/${i.id}`}"><span><b>${i.ref} · ${IN.TYPES[i.type] || 'Inspection'}</b> ${require('./inspections').tagOf(i)}${i.invoice_amount ? html` <span class="cp-tag ${i.paid_at ? 'ok' : 'warn'}">${i.paid_at ? 'Invoice paid' : 'Invoice to pay'}</span>` : ''}</span>
+      <span class="sub">${[i.inspection_date ? PL.short(i.inspection_date) : '', IN.posOf(i).length > 1 ? `with PO ${IN.posOf(i).filter((x) => PL.normPo(x) !== PL.normPo(p.po)).join(', ')}` : '', i.confirm_sent_at && ['requested', 'scheduled'].includes(i.status) ? `inspector ${i.inspector_confirm || '—'} · supplier ${i.supplier_confirm || '—'}` : '', i.ai?.summary && ['report', 'passed', 'failed'].includes(i.status) ? i.ai.summary : '', i.decision_note || ''].filter(Boolean).join(' · ')}</span></a>`;
+    const real = shown.filter((i) => !['todo', 'skipped'].includes(i.status));
+    return html`<section class="card in-po" id="inspection"><div class="head-row"><h2>Inspection ${skipped ? html`<span class="cp-tag done">Not needed</span>` : ''}</h2>${real.length ? html`<a class="btn ghost small" href="${`${B}/new?supplier=${supplier.id}&po=${encodeURIComponent(p.po)}`}">+ Inspection</a>` : ''}</div>
+      ${skipped ? html`<p class="sub">Marked as not needed for this PO.</p>` : ''}${alert}${real.map(card)}</section>`;
+  }
+
   router.get('/admin/orders', G(async (req, res) => {
     const { lines, files, sups, missing, ci } = await load();
     const day = PL.today();
@@ -281,6 +304,7 @@ module.exports = function orderRoutes(router, { db, config }) {
           return html`<p class="or-recs">${recs.map((c) => html`<a class="or-ctn" href="/admin/orders/shipments/${c.id}">📦 Record · ${(c.record || {}).name || SN.shipName(c)}</a>`)}</p>`; })()}
         ${await require('./payments').poCard(db, supplier, p?.po || poQ, back).catch(() => '')}
         ${shipSection}
+        ${p ? await inspSection(supplier, p, ls, req.url) : ''}
         ${await (async () => { const list = await require('./customs').forPo(db, p?.po || poQ).catch(() => []); if (!list.length) return ''; return html`<section class="card cu-po" id="customs"><div class="head-row"><h2>Customs</h2></div>${list.map((x) => html`<div class="cu-pr"><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a><span class="sub">${x.date ? String(x.date).slice(0, 10) : ''} · ${x.items.join(', ')}</span><span class="cu-pr-v">duty <b>$${x.duty.toLocaleString('en-US', { minimumFractionDigits: 2 })}</b> + fees $${x.fees.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="sub">for this PO</span></span></div>`)}</section>`; })()}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
           <div class="dc-lay ${docs.length ? '' : 'empty'}">

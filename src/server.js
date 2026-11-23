@@ -58,6 +58,8 @@ function createApp({ db, config }) {
   require('./routes/planning')(router, { db, config });
   require('./routes/loadplan')(router, { db, config });
   require('./routes/forwarders')(router, { db, config });
+  require('./routes/inspections')(router, { db, config });
+  require('./routes/finance-inspections')(router, { db, config });
   require('./routes/rates')(router, { db, config });
   require('./routes/freight')(router, { db, config });
   require('./routes/customs')(router, { db, config });
@@ -130,6 +132,7 @@ if (require.main === module) {
   // Supplier payments + docs-to-broker reminders (once a day after 9:00 local) and the weekly payments PDF.
   { const PM = require('./payments'); const run = () => PM.runReminders({ db, config }).catch((e) => { if (!/po_payments|payment_|PGRST205|PGRST204|column/.test(e.message)) console.error('Payment reminders failed:', e.message); }); setTimeout(run, 75_000); setInterval(run, 30 * 60_000); }
   // Shipment confirmations: schedule, send at 9:00 China time on the loading date, remind after 2 and 4 days.
+  { const IN = require('./inspections'); const run = () => IN.runInspections({ db, config }).catch((e) => { if (!IN.isMissing(e)) console.error('Inspections run failed:', e.message); }); setTimeout(run, 100_000); setInterval(run, 60 * 60_000); }
   { const SD = require('./shipdocs'); const run = () => SD.runShipConfirmations({ db, config }).catch((e) => { if (!/ship_confirmations|PGRST205/.test(e.message)) console.error('Shipment confirmations failed:', e.message); }); setTimeout(run, 60_000); setInterval(run, 60 * 60_000); }
   // Samples: carrier tracking every 10 minutes (each shipment has its own next-check time), reminders hourly.
   { const SM = require('./samples');

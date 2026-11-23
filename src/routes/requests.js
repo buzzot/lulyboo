@@ -462,6 +462,12 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await require('../samples').handleTrackingEmail({ db, config, from, subject, text: String(f['body-plain'] || text), messageId: f['Message-Id'] || f['message-id'], date: f.Date });
       return res.json({ ok: true, samples: true, ...out });
     }
+    // Inspections: replies from the inspection company / supplier (LBI-XXXX) and reports sent to inspect@…
+    const IN = require('../inspections');
+    if (toList.some((x) => /^inspect@/i.test(x.trim())) || IN.REF_RE.test(subject)) {
+      const out = await IN.handleInspectionEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() }).catch((e) => ({ matched: false, error: e.message }));
+      if (out.matched || toList.some((x) => /^inspect@/i.test(x.trim()))) return res.json({ ok: true, inspection: true, ...out });
+    }
     // Shipping documents from suppliers: replies to the shipment confirmation carry LBS-XXXXX in the subject.
     const SD = require('../shipdocs');
     if (SD.CODE_RE.test(subject) || toList.some((x) => /^docs@/i.test(x.trim()))) {

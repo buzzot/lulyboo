@@ -94,6 +94,11 @@ function loadPlanRoutes(router, { db, config }) {
     const port = ports.includes(req.query.port) ? req.query.port : (req.query.port && /^[A-Z]{5}$/.test(req.query.port) ? req.query.port : ports[0]);
     if (!ports.includes(port)) ports.push(port);
 
+    // inspections per PO in a container: Confirm booking warns while a PO has no Pass
+    const IN = require('../inspections');
+    const insRows = (await IN.loadAll(db)).rows;
+    const inspGate = {};
+    for (const l of lines.filter((x) => x.container_id && !x.shipped)) { const k = `${l.supplier_id}|${PL.normPo(l.po)}`; if (!(k in inspGate)) { const g = IN.poGate(insRows, l.supplier_id, l.po); const sup = (await db.get('suppliers', l.supplier_id).catch(() => null)) || {}; inspGate[k] = sup.inspection_off ? { ok: true } : g; } }
     // forwarders for Confirm booking: the Forwarders list + names used on earlier bookings
     const fwNames = [...new Set([...(await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((f) => f.active !== false).map((f) => f.company || f.name),
       ...containers.map((c) => c.fwd?.forwarder)].map((x) => String(x || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -125,7 +130,7 @@ function loadPlanRoutes(router, { db, config }) {
     const pkOf = (o) => `${o.supplier_id}|${PL.normPo(o.po)}`;
     const pkeys = [...new Set(here.map(pkOf))];
     const data = {
-      base: BASE, port, portName: portName(port), today: day, box: BOX, forwarders: fwNames,
+      base: BASE, port, portName: portName(port), today: day, box: BOX, forwarders: fwNames, insp: inspGate,
       orders: here.map((o, i) => ({
         id: o.id, po: o.po, supplier: sups[o.supplier_id]?.name || 'Supplier', product: o.product || '', sku: o.sku || '', qty: Number(o.qty) || 0,
         cartons: Number(o.cartons) || 0, kg: Number(o.gross_kg) || 0, carton: [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].every((x) => Number(x) > 0) ? [o.carton_l_cm, o.carton_w_cm, o.carton_h_cm].map(Number) : null,

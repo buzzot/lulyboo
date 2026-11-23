@@ -4932,3 +4932,111 @@ test('Load containers: Confirm booking locks the container, its POs show Booked,
   const pg = (await req(base, 'GET', `${B}/load?port=CNYTN`, { cookie })).text;
   assert.match(pg, /&quot;forwarders&quot;:\[&quot;Affinity Logistics&quot;,&quot;Panda Logistics&quot;\]/);
 });
+
+test('Inspections: new PO alert → request with requirements file → confirmations (inspector + supplier) → report read by AI on each PO → decision → invoice in Accountant view', async (t) => {
+  const IN = require('../src/inspections');
+  const PL = require('../src/planning');
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  process.env.RESEND_API_KEY = 're_test'; process.env.ANTHROPIC_API_KEY = 'sk-test';
+  const realFetch = global.fetch; const sent = []; let ai = {};
+  global.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.includes('api.resend.com')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: `em_${sent.length}` }), { status: 200 }); }
+    if (u.includes('api.anthropic.com')) return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name: 'read_inspection_email', input: ai }] }), { status: 200 });
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.ANTHROPIC_API_KEY; server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const config = { publicUrl: 'http://t' };
+  const today = PL.today(); const D = (n) => PL.addDays(today, n);
+  const k = await db.insert('suppliers', { name: 'Shenzhen Kean', email: 'sales@kean.cn', address: 'Bao An, Shenzhen' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '900020', product: 'Toothbrush', qty: 5000, units_per_carton: 100, ready_date: D(40), port: 'CNYTN' });
+  await db.insert('plan_orders', { supplier_id: k.id, po: '900021', product: 'Rattle', qty: 2000, ready_date: D(42), port: 'CNYTN' });
+  const co = await db.insert('inspection_companies', { name: 'QIMA', email: 'booking@qima.com', active: true });
+
+  // 1. the hourly run creates a "to request" row per new PO, once
+  assert.equal((await IN.runInspections({ db, config })).created, 2);
+  assert.equal((await IN.runInspections({ db, config })).created, 0);
+  const todo = db.tables.inspections.find((i) => i.pos[0] === '900020');
+  assert.equal(todo.status, 'todo'); assert.equal(todo.target_date, D(37));
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=900020`, { cookie })).text;
+  assert.match(po, /Schedule the inspection\./); assert.match(po, /inspect around <b>/); assert.match(po, /Not needed for this PO/);
+  assert.match((await req(base, 'GET', '/admin/orders/inspections?tab=todo', { cookie })).text, /To request <span class="or-n">2<\/span>/);
+
+  // 2. request: both POs, requirements file required (none yet), then sent with it
+  const post = async (fields, file) => { const fd = new FormData(); for (const [a, b] of fields) fd.append(a, b); if (file) fd.append('req_file', new Blob([Buffer.from('%PDF req')], { type: 'application/pdf' }), file); return fetch(`${base}/admin/orders/inspections/new`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
+  const fields = [['id', todo.id], ['supplier_id', k.id], ['pos', '900020'], ['pos', '900021'], ['company_id', co.id], ['type', 'psi'], ['inspection_date', D(20)], ['aql', 'II · 2.5 / 4.0'], ['confirm_days', '7'], ['send', '1']];
+  await post(fields);
+  assert.equal(db.tables.inspections.find((i) => i.id === todo.id).status, 'todo');   // refused: no requirements
+  const r1 = await post(fields, 'Kean_testing_req.pdf');
+  assert.equal(r1.status, 303);
+  let i = db.tables.inspections.find((x) => x.id === todo.id);
+  assert.equal(i.status, 'requested'); assert.deepEqual(i.pos, ['900020', '900021']); assert.equal(i.req_version, 1);
+  assert.equal(db.tables.inspections.find((x) => x.pos[0] === '900021' && x.id !== i.id).status, 'cancelled');   // replaced
+  const reqMail = sent.at(-1);
+  assert.deepEqual(reqMail.to, ['booking@qima.com']); assert.ok(reqMail.cc.includes('sales@kean.cn'));
+  assert.match(reqMail.subject, new RegExp(`Inspection request ${i.ref} — PO 900020, 900021, Shenzhen Kean, PSI`));
+  assert.ok(reqMail.attachments.some((a) => a.filename === 'Kean_testing_req.pdf'));
+  assert.match(reqMail.text, /Bao An, Shenzhen/); assert.match(reqMail.text, /50 cartons/);
+  assert.deepEqual(reqMail.reply_to, ['inspect@in.lulyboo.space']);
+
+  // 3. confirmations: not yet (20 days out); after moving the date to 6 days out, both emails go
+  assert.equal((await IN.runInspections({ db, config })).confirms, 0);
+  await req(base, 'POST', `/admin/orders/inspections/${i.id}/date`, { cookie, form: { date: D(6) } });
+  const n0 = sent.length;
+  assert.equal((await IN.runInspections({ db, config })).confirms, 1);
+  assert.equal(sent.length, n0 + 2);
+  assert.match(sent[n0].subject, /Please confirm inspection/); assert.deepEqual(sent[n0].to, ['booking@qima.com']);
+  assert.match(sent[n0 + 1].subject, /please confirm the date/); assert.deepEqual(sent[n0 + 1].to, ['sales@kean.cn']); assert.match(sent[n0 + 1].text, /80% packed/);
+  i = db.tables.inspections.find((x) => x.id === i.id);
+  assert.equal(i.inspector_confirm, 'asked'); assert.equal(i.supplier_confirm, 'asked');
+
+  // 4. replies read by AI: supplier has an issue (new date), inspector confirms
+  ai = { sender_role: 'supplier', message_type: 'date_issue', proposed_date: D(9), summary: 'Goods 70% packed — can we move?' };
+  assert.equal((await IN.handleInspectionEmail({ db, config, from: 'Vivi <sales@kean.cn>', subject: `Re: Inspection ${i.ref}`, text: 'can we move?' })).matched, true);
+  ai = { sender_role: 'inspection_company', message_type: 'date_confirmed', summary: 'Confirmed, inspector Li Wei' };
+  await IN.handleInspectionEmail({ db, config, from: 'QIMA <ops@qima.com>', subject: `Re: Please confirm inspection ${i.ref}`, text: 'confirmed' });
+  i = db.tables.inspections.find((x) => x.id === i.id);
+  assert.equal(i.supplier_confirm, 'issue'); assert.equal(i.proposed_date, D(9)); assert.equal(i.inspector_confirm, 'confirmed'); assert.equal(i.status, 'scheduled');
+  const det = (await req(base, 'GET', `/admin/orders/inspections/${i.id}`, { cookie })).text;
+  assert.match(det, /Goods 70% packed/); assert.match(det, new RegExp(`Move to ${PL.short(D(9))}`));
+  // move → both asked again
+  const n1 = sent.length;
+  await req(base, 'POST', `/admin/orders/inspections/${i.id}/move`, { cookie, form: { date: D(9) } });
+  i = db.tables.inspections.find((x) => x.id === i.id);
+  assert.equal(i.inspection_date, D(9)); assert.equal(sent.length, n1 + 2); assert.equal(i.supplier_confirm, 'asked');
+  for (const side of ['inspector', 'supplier']) await req(base, 'POST', `/admin/orders/inspections/${i.id}/confirm`, { cookie, form: { side } });
+  assert.equal(db.tables.inspections.find((x) => x.id === i.id).status, 'confirmed');
+
+  // 5. report + invoice to inspect@ without the ref: found by PO number, filed on both POs
+  ai = { sender_role: 'inspection_company', message_type: 'report_and_invoice', pos: ['900021'], result: 'fail', critical: 0, major: 5, limit_major: 3, minor: 6, limit_minor: 7, sampled: 200, findings: 'missing French warning label', summary: 'Failed on labels.', invoice_no: 'INV-31022', invoice_amount: 298, invoice_due: D(10),
+    documents: [{ file_name: 'QIMA_RPT_88412.pdf', type: 'report' }, { file_name: 'INV-31022.pdf', type: 'invoice' }] };
+  const out = await IN.handleInspectionEmail({ db, config, from: 'reports@qima.com', subject: 'Inspection report', text: 'see attached', files: [{ name: 'QIMA_RPT_88412.pdf', type: 'application/pdf', buffer: Buffer.from('%PDF report'.repeat(4000)) }, { name: 'INV-31022.pdf', type: 'application/pdf', buffer: Buffer.from('%PDF inv'.repeat(4000)) }] });
+  assert.equal(out.matched, true); assert.equal(out.files, 2);
+  i = db.tables.inspections.find((x) => x.id === i.id);
+  assert.equal(i.status, 'report'); assert.equal(i.ai.result, 'fail'); assert.equal(i.invoice_amount, 298); assert.equal(i.invoice_no, 'INV-31022');
+  const rep = db.tables.plan_files.find((f) => f.kind === 'Inspection report');
+  assert.deepEqual(rep.pos, ['900020', '900021']); assert.equal(rep.inspection_id, i.id);
+  const po2 = (await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=900021`, { cookie })).text;
+  assert.match(po2, /QIMA_RPT_88412\.pdf/); assert.match(po2, /Report in — your decision/); assert.match(po2, /Failed on labels\./);
+  assert.match((await req(base, 'GET', `/admin/orders/inspections/${i.id}`, { cookie })).text, /AI summary — suggests FAIL:<\/b> 0 critical · 5 \(limit 3\) major · 6 \(limit 7\) minor · 200 pcs sampled — missing French warning label/);
+  // 6. your decision; the booking check sees it
+  await req(base, 'POST', `/admin/orders/inspections/${i.id}/decide`, { cookie, form: { decision: 'fail', note: 'labels' } });
+  i = db.tables.inspections.find((x) => x.id === i.id);
+  assert.equal(i.status, 'failed');
+  assert.deepEqual(IN.poGate(db.tables.inspections, k.id, '900020'), { need: true, ok: false, text: 'failed', ref: i.ref, id: i.id });
+  // 7. Accountant view → Inspection invoices: row, file, mark paid, CSV, ZIP
+  let fin = (await req(base, 'GET', '/admin/finance/inspections', { cookie })).text;
+  assert.match(fin, /<td>Shenzhen Kean<\/td><td>900020, 900021<\/td><td>QIMA<\/td><td>INV-31022<\/td>\s*<td class="r">\$298\.00<\/td>/);
+  assert.match(fin, /📎 INV-31022\.pdf/); assert.match(fin, /To pay ▾/);
+  const csv = (await req(base, 'GET', '/admin/finance/inspections/export.csv', { cookie })).text;
+  assert.match(csv, /Failed,Shenzhen Kean,900020 900021,QIMA,LBI-\w+,INV-31022,298/);
+  const z = await fetch(`${base}/admin/finance/inspections/invoices.zip`, { headers: { cookie } });
+  assert.equal(z.headers.get('content-type'), 'application/zip'); const zb = Buffer.from(await z.arrayBuffer()); assert.equal(zb.subarray(0, 2).toString(), 'PK');
+  assert.ok(zb.includes(Buffer.from('INV-31022.pdf')));
+  await req(base, 'POST', `/admin/finance/inspections/${i.id}/paid`, { cookie, form: { date: today, ref: 'TT-1' } });
+  assert.equal(db.tables.inspections.find((x) => x.id === i.id).paid_at, today);
+  fin = (await req(base, 'GET', '/admin/finance/inspections', { cookie })).text;
+  assert.match(fin, new RegExp(`Paid ${PL.short(today)}`));
+});

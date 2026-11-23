@@ -1753,6 +1753,12 @@
       var other = inp.closest('.lp-bkfw').querySelector('.lp-fwother'); other.hidden = inp.value !== '_other'; if (!other.hidden) other.focus();
     });
   }
+  // POs in this container without a passed inspection: warn (booking still allowed)
+  function inspWarn(gs) {
+    var bad = gs.map(function (ls) { return ls[0]; }).filter(function (o) { var g = (D.insp || {})[o.pk]; return g && !g.ok; });
+    if (!bad.length) return '';
+    return '<div class="lp-inspw" role="alert">⚠ <span><b>Inspection not passed:</b> ' + bad.map(function (o) { var g = D.insp[o.pk]; return esc(o.po) + ' (' + esc(g.text) + ')'; }).join(', ') + '. You can still confirm the booking — ship only after a Pass, or decide to ship anyway.</span></div>';
+  }
   function openBook(c) {
     if (!c) return; var f = c.fwd || {}, k = f.confirmed || {}, gs = groupBy(itemsOf(c)), lcl = D.box[c.box] && D.box[c.box].lcl;
     var prev = function (po, key) { var x = (k.lines || []).filter(function (l) { return l.po === po; })[0]; return x && x[key] != null ? x[key] : null; };
@@ -1766,6 +1772,7 @@
       '<p class="sub rp-ctx">What the forwarder confirmed. Saving locks this container: its POs move to <b>Booked</b> and nothing can be dragged in or out until you unlock it.</p>' +
       '<div class="lp-bkf"><label>Booking no. <input name="booking" value="' + esc(f.booking || '') + '" autocomplete="off"></label><div class="lp-bkfw"><span class="lp-bkl">Forwarder</span>' + fwPick(f.forwarder || '') + '</div>' +
       '<label>' + (lcl ? 'CFS cut-off' : 'CY cut-off') + ' <input type="date" name="cutoff" value="' + esc(f.cutDay || c.loading || '') + '"></label><label>ETD <input type="date" name="etd" value="' + esc(f.etdDay || (sById(c.sailing) ? sById(c.sailing).etd : '')) + '"></label></div>' +
+      inspWarn(gs) +
       '<div class="table-wrap"><table class="list compact lp-bkt"><thead><tr><th>PO</th><th class="r">Planned ctns</th><th class="r">Confirmed ctns</th><th class="r">m³</th><th class="r">kg</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<div class="rp-actions"><button class="btn">Confirm &amp; lock</button><button type="button" class="btn ghost" data-lp-bk-close>Cancel</button><span class="sub">Forwarder emails and PDFs: use ＋ Forwarder update — AI reads them.</span></div></form>';
     bd.setAttribute('data-c', c.id); bd.showModal();

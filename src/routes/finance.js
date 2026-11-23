@@ -85,7 +85,7 @@ module.exports = function financeRoutes(router, { db, config }) {
         </div>
         <div class="fn-lay ${sel ? 'has-panel' : ''}">
           <section class="card fn-q">
-            <div class="fn-top"><nav class="fn-tabs" aria-label="Queue">${TABS.map(([k, l]) => html`<a href="${`${BASE}?tab=${k}`}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l}${k === 'paid' ? '' : html` <span>${lists[k].length}</span>`}</a>`)}</nav>
+            <div class="fn-top"><nav class="fn-tabs" aria-label="Queue">${TABS.map(([k, l]) => html`<a href="${`${BASE}?tab=${k}`}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l}${k === 'paid' ? '' : html` <span>${lists[k].length}</span>`}</a>`)}<a href="/admin/finance/inspections" class="fn-ins">Inspection invoices →</a></nav>
               ${tab === 'paid' ? html`<form method="get" action="${BASE}" class="fn-month"><input type="hidden" name="tab" value="paid"><select name="month" data-autosubmit aria-label="Month">${months.map((m) => html`<option value="${m}" ${m === month ? raw('selected') : ''}>${monthName(m)}</option>`)}</select></form>` : ''}</div>
             ${list.length ? html`<div class="fn-head"><span>${tab === 'paid' ? 'Paid' : 'Due'}</span><span>Supplier</span><span>Installment</span><span>Docs</span><span class="r">${tab === 'paid' ? 'Amount' : 'To pay'}</span></div>${list.map(row)}
               ${tab !== 'paid' ? html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'}</span><b>${usd(sum(list))}</b></div>` : html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'} in ${monthName(month)}</span><b>${usd(sum(list, 'paid'))}</b></div>`}`

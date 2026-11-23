@@ -291,4 +291,4 @@ ${received.length ? `<tr><td style="padding:16px 0 0;">${label('Already received
   };
 }
 
-module.exports = { paymentsDigest, shipmentEmail, noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
+module.exports = { layout, esc, paymentsDigest, shipmentEmail, noticeEmail, adminEmail, projectEmail, staffInviteEmail, sendEmail, codeEmail, inviteEmail, requestEmail, REQUEST_ITEMS, emailConfigured };
