@@ -289,7 +289,7 @@ function guard(config, fn) {
     }
     if (why) throw new HttpError(403, why);
     req.staff = staff;
-    return ST.runAs(staff, async () => {
+    return ST.runAs({ ...staff, path }, async () => {
       const out = await fn(req, res);
       if (req.method === 'POST' && res.statusCode < 400) { const label = ST.autoLabel(path); if (label) await ST.audit(config, label, path); }
       return out;

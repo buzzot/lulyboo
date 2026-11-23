@@ -77,7 +77,7 @@ ${isAdmin && STAFF.current()?.viewing ? html`<div class="va-bar"><span>Viewing a
   ${isAdmin ? html`<div class="top-right">${nav?.groups && !nav.finance ? html`<button type="button" class="qk-btn" data-qk-open aria-label="Quick jump (⌘K)">${icon('search', 15)}<span>Jump to…</span><kbd data-qk-key>⌘K</kbd></button>` : ''}${nav?.settings ? html`<a class="settings-link ${nav.settings.active ? 'on' : ''}" href="${nav.settings.href}" title="Settings">${icon('settings', 16)}<span>Settings</span></a>` : ''}${userMenu()}</div>` : ''}
 </div>${isAdmin && nav?.groups ? subNav(nav, wide) : ''}</header>
 ${isAdmin && nav?.groups ? quickJump(nav) : ''}
-<main class="${wide ? 'wide' : ''}" ${isAdmin && STAFF.current()?.role === 'development' && !/^\/admin\/(projects|samples|dev-files|sample-files|profile)(\/|\?|$)/.test(String(req?.url || '')) ? raw('data-ro') : ''}>
+<main class="${wide ? 'wide' : ''}" ${isAdmin && STAFF.current()?.role === 'development' && !/^\/admin\/(projects|samples|dev-files|sample-files|profile)(\/|\?|$)/.test(String(STAFF.current()?.path || req?.url || '')) ? raw('data-ro') : ''}>
 ${flashHtml}
 ${body}
 </main>

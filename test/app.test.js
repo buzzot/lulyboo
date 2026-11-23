@@ -5073,6 +5073,12 @@ test('Development role: edits Development and Samples, reads Suppliers / RFQs / 
   const pp = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie: dana })).text;
   assert.match(pp, /Factory price/); assert.doesNotMatch(pp, /Landed estimate/); assert.doesNotMatch(pp, /data-tab="costing"/); assert.match(pp, /View only/);
   assert.doesNotMatch((await req(base, 'GET', '/admin/products', { cookie: dana })).text, /<th class="r">Landed<\/th>/);
+  // view-only styling on suppliers / products, never on Development or Samples pages (their forms stay usable)
+  assert.match(sp, /<main[^>]*data-ro/);
+  const proj = await db.insert('dev_projects', { code: 'DP-1005', name: 'Salon Teether set of 3', status: 'sourcing', created_at: new Date().toISOString() });
+  const pj = await req(base, 'GET', `/admin/projects/${proj.id}`, { cookie: dana });
+  assert.equal(pj.status, 200); assert.doesNotMatch(pj.text, /<main[^>]*data-ro/);
+  assert.doesNotMatch((await req(base, 'GET', '/admin/samples', { cookie: dana })).text, /<main[^>]*data-ro/);
   // the owner still sees everything
   assert.match((await req(base, 'GET', `/admin/products/${p.id}`, { cookie: owner })).text, /Landed estimate/);
 });
