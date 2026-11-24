@@ -2238,7 +2238,9 @@ test('container planning: AI import (Benno sheet + status table), review, save, 
   assert.match(docsPage.text, /Documents for PO200016/); assert.match(docsPage.text, /PO200016\.pdf/); assert.match(docsPage.text, /POs-Ningbo_Benno_20261110\.xlsx/);
   const dl = await fetch(`${base}/admin/logistics/planning/files/${pdf.id}`, { headers: { cookie } });
   assert.equal(dl.status, 200); assert.equal(await dl.text(), '%PDF-1.4 PO');
-  await fetch(`${base}/admin/logistics/planning/files/${pdf.id}/delete`, { method: 'POST', headers: { cookie }, redirect: 'manual' });
+  { const po = await req(base, 'GET', `/admin/orders/view?supplier=${pdf.supplier_id}&po=PO200016`, { cookie }); assert.equal(po.status, 200); assert.match(po.text, new RegExp(`dc-del-${pdf.id}`)); }
+  const del = await fetch(`${base}/admin/logistics/planning/files/${pdf.id}/delete`, { method: 'POST', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: `back=${encodeURIComponent('/admin/orders?po=PO200016')}`, redirect: 'manual' });
+  assert.equal(del.headers.get('location'), '/admin/orders?po=PO200016#docs');
   assert.ok(!db.tables.plan_files.find((f) => f.id === pdf.id)); assert.ok(!db.files.has('docs/' + pdf.path));
   // suggestion maths
   const PL = require('../src/planning');

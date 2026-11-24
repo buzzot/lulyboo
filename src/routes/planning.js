@@ -310,7 +310,7 @@ function planningRoutes(router, { db, config }) {
               <div class="sub">${f.kind || 'Document'} · ${sups[f.supplier_id]?.name || ''} · ${fmt.date(f.created_at)}${f.size ? ` · ${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</div>
               ${(f.pos || []).length ? html`<div class="cp-pos">${f.pos.slice(0, 12).map((x) => html`<a href="${BASE}?view=docs&po=${encodeURIComponent(x)}">${x}</a>`)}${f.pos.length > 12 ? html`<span class="sub">+${f.pos.length - 12}</span>` : ''}</div>` : ''}</div>
             <div class="cp-facts"><a class="icon-btn" href="${BASE}/files/${f.id}" title="Download" aria-label="Download ${f.name}">⬇</a>
-              <form method="post" action="${BASE}/files/${f.id}/delete" class="inline" data-confirm="Delete this document?"><button class="icon-btn" title="Delete" aria-label="Delete ${f.name}">×</button></form></div></li>`)}</ul>`
+              ${require('../staff').can(require('../staff').current()?.role, 'delete') ? html`<span data-armbox><button type="button" class="bd-del" data-arm title="Delete" aria-label="Delete ${f.name}">×</button><button type="submit" class="bd-yes" form="cp-del-${f.id}">Delete</button><form id="cp-del-${f.id}" method="post" action="${BASE}/files/${f.id}/delete" hidden></form></span>` : ''}</div></li>`)}</ul>`
           : html`<p class="muted">No documents yet. Upload POs here, or they are kept automatically when you import orders.</p>`}</section></div>`;
     } else {
       body = html`<div class="card"><div class="table-wrap"><table class="list cp-table"><thead><tr><th>Supplier</th><th>PO</th><th>Product</th><th class="r">Qty</th><th class="r">CBM</th><th>Ready</th><th>Inspection</th><th>Port</th><th>Status</th><th>Docs</th><th></th></tr></thead>
@@ -684,11 +684,13 @@ function planningRoutes(router, { db, config }) {
     res.end(buf);
   }));
   router.post(`${BASE}/files/:id/delete`, G(async (req, res) => {
-    await parseForm(req).catch(() => null);
+    const { fields } = await parseForm(req).catch(() => ({ fields: {} }));
+    const ST = require('../staff'); if (!ST.can(ST.current()?.role, 'delete')) throw new HttpError(403, 'Only an admin can delete documents');
     const f = await db.get('plan_files', req.params.id);
     if (f) { await db.docs.remove([f.path]).catch(() => null); await db.remove('plan_files', { id: f.id }); }
-    flash(res, 'ok', 'Document deleted');
-    res.redirect(`${BASE}?view=docs${f ? `&supplier=${f.supplier_id}` : ''}`);
+    flash(res, 'ok', f ? `Deleted ${f.name}` : 'Document deleted');
+    const b = String(fields?.back || '');
+    res.redirect(b.startsWith('/admin/orders') ? `${b.split('#')[0]}#docs` : `${BASE}?view=docs${f ? `&supplier=${f.supplier_id}` : ''}`);
   }));
 
   router.get(`${BASE}.csv`, G(async (req, res) => {
