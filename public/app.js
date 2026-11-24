@@ -3075,3 +3075,10 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { pop.hidden = true; cur = null; } });
   window.addEventListener('scroll', function () { if (cur && !pop.hidden) place(cur); }, true);
 })();
+
+// Textareas that grow with their text (<textarea data-grow>), so short fields stay compact.
+(function () {
+  var fit = function (t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 420) + 'px'; };
+  document.querySelectorAll('textarea[data-grow]').forEach(fit);
+  document.addEventListener('input', function (e) { if (e.target.matches && e.target.matches('textarea[data-grow]')) fit(e.target); });
+})();

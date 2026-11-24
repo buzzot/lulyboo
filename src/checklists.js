@@ -181,8 +181,10 @@ function diffStates(a, b) {
   }
   const set = (field, label, xs, ys, id, title) => {
     const A = new Map((xs || []).map((x) => [id(x), x])); const B = new Map((ys || []).map((y) => [id(y), y])); const items = [];
-    for (const [k, y] of B) if (!A.has(k)) items.push({ t: 'add', text: title(y) });
-    for (const [k, x] of A) if (!B.has(k)) items.push({ t: 'del', text: title(x) });
+    const adds = [...B].filter(([k]) => !A.has(k)).map(([, y]) => y); const dels = [...A].filter(([k]) => !B.has(k)).map(([, x]) => x);
+    const many = (n) => `${n} ${field === 'checklist' ? 'questions' : 'items'}`;
+    if (adds.length > 6) items.push({ t: 'add', text: many(adds.length) }); else for (const y of adds) items.push({ t: 'add', text: title(y) });
+    if (dels.length > 6) items.push({ t: 'del', text: many(dels.length) }); else for (const x of dels) items.push({ t: 'del', text: title(x) });
     if (field === 'checklist') for (const [k, y] of B) { const x = A.get(k); if (x && (title(x) !== title(y) || x.type !== y.type)) items.push({ t: 'chg', before: '', old: title(x), new: title(y), after: '' }); }
     if (items.length) out.push({ field, label, items });
   };

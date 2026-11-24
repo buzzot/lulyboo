@@ -327,27 +327,27 @@ module.exports = function projectRoutes(router, { db, config }) {
     if (tab === 'spec') {
       const extra = (p.extra_fields || []).map((f) => f.label).join('\n');
       const ckc = CK.categoryChanges(p, cat);
-      body = html`${!p.category_id ? html`<div class="flash warn"><b>Choose a category for this project.</b> It brings the document checklist (certificates, test reports) suppliers must answer before quoting.</div>` : ''}
+      body = html`${!p.category_id ? html`<div class="flash warn"><b>Choose a category for this project.</b> It loads the factory checklist suppliers must answer before quoting.</div>` : ''}
         ${ckc ? html`<div class="ck-upd"><span><b>${cat.name} checklist v${ckc.version} is available.</b> ${[ckc.added && `${ckc.added} new`, ckc.changed && `${ckc.changed} changed`, ckc.removed && `${ckc.removed} removed`, ckc.fileChanged && 'new file'].filter(Boolean).join(' · ') || 'Small changes'}. Your own items and switched-off items are kept.</span>
           <form method="post" action="/admin/projects/${p.id}/checklist/refresh"><button class="btn small">Update checklist</button></form></div>` : ''}
         <form method="post" action="/admin/projects/${p.id}" class="dp-grid" data-guard><div class="dp-main">
-        <section class="card"><h2 class="sec">What suppliers see</h2><div class="fields">
-          <label class="frow"><span>Product name</span><input name="name" value="${p.name}" required></label>
-          <div class="frow"><span>Category</span>${ddSel('category_id', p.category_id || '', catOpts(cats))}</div>
-          <label class="frow top"><span>Summary</span><textarea name="summary" rows="3">${p.summary || ''}</textarea></label>
-          <label class="frow top"><span>Requirements</span><textarea name="requirements" rows="9" placeholder="Materials, dimensions and tolerances, colours, functions, packaging, labelling, quantity expectations…">${p.requirements || ''}</textarea></label>
-          <label class="frow top"><span>Certifications / standards</span><textarea name="certifications" rows="3" placeholder="e.g. ASTM F963, CPSIA, 16 CFR 1250 (one per line)">${p.certifications || ''}</textarea></label>
-          <label class="frow top"><span>Extra quote questions</span><textarea name="extra_fields" rows="3" placeholder="One per line, e.g. Motor warranty period&#10;Recycled material %">${extra}</textarea></label>
-          <p class="sub fl-note">The quote form always asks for price tiers, tooling, MOQ, sample and production lead times, validity, payment terms and material. Questions added here appear as extra fields.</p></div></section>
+        <section class="card"><h2 class="sec">What suppliers see</h2><div class="sg">
+          <label class="sg-2"><span class="lbl">Product name</span><input name="name" value="${p.name}" required></label>
+          <div><span class="lbl">Category</span>${ddSel('category_id', p.category_id || '', catOpts(cats))}</div>
+          <label class="sg-3"><span class="lbl">Summary</span><textarea name="summary" rows="2" data-grow placeholder="What it is and who it is for">${p.summary || ''}</textarea></label>
+          <label class="sg-3"><span class="lbl">Requirements</span><textarea name="requirements" rows="5" data-grow placeholder="Materials, dimensions and tolerances, colours, functions, packaging, labelling, quantity expectations…">${p.requirements || ''}</textarea></label>
+          <label class="sg-15"><span class="lbl">Certifications / standards</span><textarea name="certifications" rows="2" data-grow placeholder="e.g. ASTM F963, CPSIA (one per line)">${p.certifications || ''}</textarea></label>
+          <label class="sg-15"><span class="lbl">Extra quote questions</span><textarea name="extra_fields" rows="2" data-grow placeholder="One per line, e.g. Motor warranty period">${extra}</textarea></label>
+          <p class="sub sg-3">The quote form always asks for price tiers, tooling, MOQ, sample and production lead times, validity, payment terms and material. Extra questions are added to it.</p></div></section>
         ${checklistCard(p, cat)}</div>
-        <aside class="dp-side"><section class="card"><h2 class="sec">Internal only</h2><div class="fields">
-          <label class="frow"><span>Status</span><select name="status">${P.PROJECT_STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
-          <label class="frow"><span>Target price</span><span class="inp-unit"><input name="target_price_usd" type="number" step="0.01" min="0" value="${p.target_price_usd ?? ''}"><i>USD</i></span></label>
-          <label class="frow"><span>Target MOQ</span><span class="inp-unit"><input name="target_moq" type="number" step="1" min="0" value="${p.target_moq ?? ''}"><i>pcs</i></span></label>
-          <label class="frow top"><span>Notes</span><textarea name="internal_notes" rows="4">${p.internal_notes || ''}</textarea></label></div>
-          <p class="sub">Never shown to suppliers.</p></section>
-          <section class="card"><h2 class="sec">NDA</h2><div class="fields"><label class="chk"><input type="checkbox" name="nda_required" value="1" ${p.nda_required ? raw('checked') : ''}> Suppliers must accept an NDA before seeing the spec and files</label>
-          <label class="frow top"><span>NDA text</span><textarea name="nda_text" rows="5" placeholder="Leave empty for the standard confidentiality wording.">${p.nda_text || ''}</textarea></label></div></section>
+        <aside class="dp-side"><section class="card"><h2 class="sec">Internal only</h2><div class="sg sg-side">
+          <div class="sg-3"><span class="lbl">Status</span>${ddSel('status', p.status, P.PROJECT_STATUSES.map((x) => [x, x]))}</div>
+          <label><span class="lbl">Target price</span><span class="inp-unit"><input name="target_price_usd" type="number" step="0.01" min="0" value="${p.target_price_usd ?? ''}"><i>USD</i></span></label>
+          <label><span class="lbl">Target MOQ</span><span class="inp-unit"><input name="target_moq" type="number" step="1" min="0" value="${p.target_moq ?? ''}"><i>pcs</i></span></label>
+          <label class="sg-3"><span class="lbl">Notes</span><textarea name="internal_notes" rows="2" data-grow>${p.internal_notes || ''}</textarea></label></div>
+          <p class="sub">Never shown to suppliers.</p>
+          <div class="nda-row"><label class="chk"><input type="checkbox" name="nda_required" value="1" ${p.nda_required ? raw('checked') : ''}> Suppliers accept an NDA before seeing the spec</label>
+            <details class="q-more" ${p.nda_text ? raw('open') : ''}><summary>Custom NDA text</summary><textarea name="nda_text" rows="4" placeholder="Leave empty for the standard confidentiality wording.">${p.nda_text || ''}</textarea></details></div></section>
           <div class="form-actions"><button class="btn" data-save>Save</button><span class="dirty-note" data-dirty-note hidden>Unsaved changes</span></div></aside></form>`;
     } else if (tab === 'files') {
       const titles = P.fileTitles(files);
@@ -438,7 +438,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     if ('category_id' in f || 'category' in f) {
       const cat = await pickCategory(f);
       if (!cat) { if (!p.category_id) note = ' Choose a category to load its document checklist.'; }
-      else if (cat.id !== p.category_id) { Object.assign(patch, CK.fromCategory(cat, p.checklist)); note = ` Category ${cat.name}: its document checklist is loaded.`; }
+      else if (cat.id !== p.category_id) { Object.assign(patch, CK.fromCategory(cat, p.checklist)); note = ` Category ${cat.name}: its factory checklist is loaded.`; }
     }
     if (f.ck_form === '1' && !patch.checklist) {
       const on = new Set([].concat(f.ck_on || []));
