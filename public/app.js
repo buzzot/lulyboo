@@ -3132,3 +3132,59 @@
     }).catch(function (e) { meta.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; }).then(function () { busy = false; btn.disabled = false; btn.textContent = label; out.classList.remove('busy'); });
   });
 })();
+
+// Notes tab (internal team chat): drop or paste files anywhere on the chat, chips with remove, ⌘↩ posts, search, edit own note.
+(function () {
+  var nc = document.querySelector('[data-nc]'); if (!nc) return;
+  var form = nc.querySelector('[data-nc-form]'), input = nc.querySelector('[data-nc-file]'), chips = nc.querySelector('[data-nc-chips]'), note = nc.querySelector('[data-nc-note]');
+  var ta = nc.querySelector('[data-nc-text-in]'), drop = nc.querySelector('[data-nc-drop]'), scroll = nc.querySelector('[data-nc-scroll]');
+  var dt = window.DataTransfer ? new DataTransfer() : null, MAXB = 20 * 1024 * 1024;
+  var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var size = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; };
+  var stamp = function () { var d = new Date(), q = function (n) { return ('0' + n).slice(-2); }; return d.getFullYear() + q(d.getMonth() + 1) + q(d.getDate()) + '-' + q(d.getHours()) + q(d.getMinutes()) + q(d.getSeconds()); };
+  function render() {
+    chips.innerHTML = Array.prototype.map.call(dt.files, function (f, i) { return '<li><span>' + (/^image\//.test(f.type) ? '🖼' : '📄') + ' ' + esc(f.name) + ' <small>' + size(f.size) + '</small></span><button type="button" data-i="' + i + '" aria-label="Remove">×</button></li>'; }).join('');
+    input.files = dt.files;
+  }
+  function add(files) {
+    if (!dt) return; var skipped = [];
+    Array.prototype.forEach.call(files, function (f) {
+      if (/^image\/(png|jpeg)$/.test(f.type) && /^image\.(png|jpe?g)$/i.test(f.name)) f = new File([f], 'pasted-image-' + stamp() + (f.type === 'image/png' ? '.png' : '.jpg'), { type: f.type });
+      if (f.size > MAXB) { skipped.push(f.name + ' (over 20 MB)'); return; }
+      if (dt.files.length >= 12) { skipped.push(f.name + ' (max 12 files)'); return; }
+      dt.items.add(f);
+    });
+    note.textContent = skipped.length ? 'Skipped: ' + skipped.join(', ') : ''; render(); ta.focus();
+  }
+  chips.addEventListener('click', function (e) { var b = e.target.closest('button[data-i]'); if (!b) return; var n = new DataTransfer(), k = +b.getAttribute('data-i'); Array.prototype.forEach.call(dt.files, function (f, i) { if (i !== k) n.items.add(f); }); dt = n; render(); });
+  nc.querySelector('[data-nc-attach]').addEventListener('click', function () { var pick = document.createElement('input'); pick.type = 'file'; pick.multiple = true; pick.accept = input.accept; pick.addEventListener('change', function () { add(pick.files); }); pick.click(); });
+  var hasFiles = function (e) { var t = e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0; };
+  var depth = 0;
+  nc.addEventListener('dragenter', function (e) { if (!hasFiles(e)) return; e.preventDefault(); depth++; drop.hidden = false; });
+  nc.addEventListener('dragover', function (e) { if (hasFiles(e)) e.preventDefault(); });
+  nc.addEventListener('dragleave', function () { depth = Math.max(0, depth - 1); if (!depth) drop.hidden = true; });
+  nc.addEventListener('drop', function (e) { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); depth = 0; drop.hidden = true; add(e.dataTransfer.files); });
+  document.addEventListener('paste', function (e) { var cd = e.clipboardData; if (!cd || !cd.files || !cd.files.length) return; if (e.target.closest && e.target.closest('[data-nc-editform]')) return; e.preventDefault(); add(cd.files); });
+  ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (form.requestSubmit) form.requestSubmit(); else form.submit(); } });
+  ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 260) + 'px'; });
+  form.addEventListener('submit', function (e) {
+    if (!ta.value.trim() && !(dt && dt.files.length)) { e.preventDefault(); note.textContent = 'Write a note or attach a file.'; return; }
+    input.files = dt ? dt.files : input.files; var b = form.querySelector('[data-nc-post]'); b.textContent = 'Posting…'; setTimeout(function () { b.disabled = true; }, 0);
+  });
+  // search
+  var q = nc.querySelector('[data-nc-q]');
+  if (q) q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase(), shown = 0;
+    nc.querySelectorAll('.nc-m').forEach(function (m) { var ok = !v || m.getAttribute('data-nc-text').indexOf(v) >= 0; m.hidden = !ok; if (ok) shown++; });
+    nc.querySelectorAll('.nc-day').forEach(function (d) { d.hidden = !!v; });
+    nc.querySelector('[data-nc-none]').hidden = !(v && !shown);
+  });
+  // edit own note
+  nc.addEventListener('click', function (e) {
+    var eb = e.target.closest('[data-nc-editbtn]'), cb = e.target.closest('[data-nc-cancel]');
+    if (eb || cb) { var m = (eb || cb).closest('.nc-m'), f = m.querySelector('[data-nc-editform]'), body = m.querySelector('.nc-body'); f.hidden = !!cb; if (body) body.hidden = !cb; if (eb) f.querySelector('textarea').focus(); }
+  });
+  // open at the latest note, or the one in the address
+  var target = location.hash && /^#n-/.test(location.hash) ? document.querySelector(location.hash) : null;
+  if (target) { target.scrollIntoView({ block: 'center' }); target.classList.add('flash-hl'); } else if (scroll) scroll.scrollTop = scroll.scrollHeight;
+})();

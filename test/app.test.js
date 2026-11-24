@@ -5132,7 +5132,7 @@ test('Development: factory checklist Excel → category → project; supplier do
     const fd = new FormData(); fd.append('name', 'Ref bowl'); fd.append('category_id', cat.id); fd.append('summary', 'A bowl'); fd.append('notes', 'target $1.80');
     fd.append('files', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'ref.png');
     assert.equal((await fetch(`${base}/admin/projects`, { method: 'POST', headers: { cookie: admin }, body: fd, redirect: 'manual' })).status, 303);
-    const rp = db.tables.dev_projects.find((x) => x.name === 'Ref bowl'); assert.equal(rp.internal_notes, 'target $1.80');
+    const rp = db.tables.dev_projects.find((x) => x.name === 'Ref bowl'); assert.equal(db.tables.dev_notes.find((n) => n.project_id === rp.id).body, 'target $1.80');
     const rf = db.tables.dev_files.filter((x) => x.project_id === rp.id); assert.equal(rf.length, 1); assert.equal(rf[0].internal, false);
     db.tables.dev_projects.splice(db.tables.dev_projects.indexOf(rp), 1); db.tables.dev_spec_versions.length = 0;
     const AI = require('../src/ai'); const old = { call: AI.callTool, key: process.env.ANTHROPIC_API_KEY }; let sent;
@@ -5189,6 +5189,24 @@ test('Development: factory checklist Excel → category → project; supplier do
   view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text; assert.match(view, /Wall 2\.0 mm/); assert.match(view, /updated to v2/);
   assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/versions?cmp=2`, { cookie: admin })).status, 200);
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Factory Checklist - Pet Bowls\.xlsx/);
+  // internal notes: team chat with files, old Notes field becomes the first note, admin-only delete; never on the portal
+  await db.update('dev_projects', { id: p.id }, { internal_notes: 'Old note text' });
+  let nt = (await req(base, 'GET', `/admin/projects/${p.id}?tab=notes`, { cookie: admin })).text; assert.match(nt, /Old note text/); assert.match(nt, /Earlier notes/); assert.equal(p.internal_notes, null);
+  const nf = new FormData(); nf.append('body', 'Pazit wants smaller cutlery'); nf.append('files', new Blob([Buffer.from('%PDF-1.4')]), 'color-spec.pdf');
+  assert.equal((await fetch(`${base}/admin/projects/${p.id}/notes`, { method: 'POST', headers: { cookie: admin }, body: nf, redirect: 'manual' })).status, 303);
+  const note = db.tables.dev_notes.find((n) => n.body === 'Pazit wants smaller cutlery'); assert.equal(note.attachments.length, 1);
+  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/notes/${note.id}/0`, { cookie: admin })).status, 200);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Pazit wants smaller cutlery/, 'last note on the Spec side panel');
+  assert.doesNotMatch((await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text, /Pazit|Old note text/);
+  await req(base, 'POST', `/admin/projects/${p.id}/notes`, { cookie: admin, form: { body: '' } }); assert.equal(db.tables.dev_notes.filter((n) => n.project_id === p.id).length, 2);
+  await req(base, 'POST', `/admin/projects/${p.id}/notes/${note.id}/pin`, { cookie: admin, form: {} }); assert.equal(note.pinned, true);
+  await req(base, 'POST', `/admin/projects/${p.id}/notes/${note.id}/decision`, { cookie: admin, form: {} }); assert.equal(note.decision, true);
+  await req(base, 'POST', `/admin/projects/${p.id}/notes/${note.id}/edit`, { cookie: admin, form: { body: 'Pazit wants 10% smaller cutlery' } }); assert.equal(note.body, 'Pazit wants 10% smaller cutlery'); assert.ok(note.edited_at);
+  nt = (await req(base, 'GET', `/admin/projects/${p.id}?tab=notes`, { cookie: admin })).text; assert.match(nt, /nc-pin/); assert.match(nt, /Decisions · 1/); assert.match(nt, /Files in notes · 1/);
+  await req(base, 'POST', `/admin/projects/${p.id}/notes`, { cookie: admin, form: { body: 'Go with blister', decision: '1' } }); assert.equal(db.tables.dev_notes.find((n) => n.body === 'Go with blister').decision, true);
+  const old = db.tables.dev_notes.find((n) => n.body === 'Go with blister'); old.created_at = new Date(Date.now() - 20 * 60e3).toISOString();
+  await req(base, 'POST', `/admin/projects/${p.id}/notes/${old.id}/edit`, { cookie: admin, form: { body: 'changed' } }); assert.equal(old.body, 'Go with blister', 'edit window is 15 minutes');
+  await req(base, 'POST', `/admin/projects/${p.id}/notes/${note.id}/delete`, { cookie: admin, form: {} }); assert.ok(!db.tables.dev_notes.some((n) => n.id === note.id));
   // a new Excel for the category → Update banner → the project gets the new file
   const x2 = mkXlsx('Factory Checklist - Pet Bowls', [...rows1, ['MATERIAL & SAFETY', 'Lead-Free', '', '', '', 'Lead_Free', 'Required', 'Yes / No']], lists);
   const imp2 = new FormData(); imp2.append('file', new Blob([x2]), 'Factory Checklist - Pet Bowls v2.xlsx');

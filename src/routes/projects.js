@@ -305,15 +305,16 @@ module.exports = function projectRoutes(router, { db, config }) {
     const { fields, files } = await parseForm(req, { limitBytes: maxBytes * 12 });
     const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects/new'); }
     const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it attaches the checklist Excel'); return res.redirect('/admin/projects/new'); }
-    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), internal_notes: str(fields.notes), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
+    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
     await db.insert('dev_spec_versions', { project_id: p.id, version: 1, change_note: 'First version', snapshot: {}, created_at: now() });
+    if (str(fields.notes)) await db.insert('dev_notes', { project_id: p.id, author: ST.current()?.name || 'Admin', body: str(fields.notes, 10000), attachments: [], created_at: now() }).catch(() => {});
     const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
     for (const a of r.saved) await saveFile({ project_id: p.id, name: a.name, kind: P.guessKind(a.name), label: null, mime: a.mime, bytes: a.size, path: a.path, version: 1, controlling: false, internal: false, created_at: now() });
     flash(res, r.errors.length ? 'warn' : 'ok', `Project ${p.ref} created${r.saved.length ? ` with ${r.saved.length} file${r.saved.length === 1 ? '' : 's'}` : ''}. Add the requirements, then invite suppliers.${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`);
     res.redirect(`/admin/projects/${p.id}`);
   }));
 
-  const TABS = [['spec', 'Spec'], ['files', 'Files'], ['suppliers', 'Suppliers'], ['quotes', 'Compare quotes'], ['milestones', 'Milestones']];
+  const TABS = [['spec', 'Spec'], ['files', 'Files'], ['suppliers', 'Suppliers'], ['quotes', 'Compare quotes'], ['milestones', 'Milestones'], ['notes', 'Notes']];
   router.get('/admin/projects/:id', G(async (req, res) => {
     const p = await loadProject(req.params.id);
     const tab = TABS.some(([k]) => k === req.query.tab) ? req.query.tab : 'spec';
@@ -323,6 +324,7 @@ module.exports = function projectRoutes(router, { db, config }) {
       db.list('suppliers', { select: 'id,name,country,email,active', order: 'name.asc' }), db.list('dev_quotes', { order: 'revision.desc' }), db.list('dev_messages', { order: 'created_at.desc' }),
     ]);
     const cats = await db.list('categories', { order: 'sort.asc,name.asc' }); const cat = cats.find((c) => c.id === p.category_id) || null;
+    const notes = await loadNotes(p);
     const pub = await published(p, files, invs); const changes = activeInvs(invs).length ? CK.diffStates(pub, CK.specState(p, files)) : [];
     const sname = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     const invIds = new Set(invs.map((i) => i.id));
@@ -333,7 +335,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const header = html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
       <div class="head-row"><div><h1>${p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li><span class="pill s-reviewing">${p.status}</span></li><li>Spec v${p.current_version}</li><li>${invs.length} supplier${invs.length === 1 ? '' : 's'} invited</li></ul></div>
       <div class="actions">${canDelete ? html`<form method="post" action="/admin/projects/${p.id}/delete" data-confirm="Delete this project, its files, threads and quotes? This cannot be undone."><button class="btn small ghost danger">Delete project</button></form>` : ''}</div></div>
-      <nav class="dp-tabs" aria-label="Project sections">${TABS.map(([k, l]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'cur' : ''}">${l}${k === 'suppliers' && invs.length ? html` <b>${invs.length}</b>` : ''}${k === 'files' && files.length ? html` <b>${files.length}</b>` : ''}</a>`)}</nav>
+      <nav class="dp-tabs" aria-label="Project sections">${TABS.map(([k, l]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'cur' : ''}">${l}${k === 'suppliers' && invs.length ? html` <b>${invs.length}</b>` : ''}${k === 'files' && files.length ? html` <b>${files.length}</b>` : ''}${k === 'notes' && notes.length ? html` <b>${notes.length}</b>` : ''}</a>`)}</nav>
       ${['spec', 'files'].includes(tab) || changes.length ? versionBar(p, versions, invs, changes, sname) : ''}`;
 
     let body;
@@ -357,11 +359,13 @@ module.exports = function projectRoutes(router, { db, config }) {
           <div class="sg-3"><span class="lbl">Status</span>${ddSel('status', p.status, P.PROJECT_STATUSES.map((x) => [x, x]))}</div>
           <label><span class="lbl">Target price</span><span class="inp-unit"><input name="target_price_usd" type="number" step="0.01" min="0" value="${p.target_price_usd ?? ''}"><i>USD</i></span></label>
           <label><span class="lbl">Target MOQ</span><span class="inp-unit"><input name="target_moq" type="number" step="1" min="0" value="${p.target_moq ?? ''}"><i>pcs</i></span></label>
-          <label class="sg-3"><span class="lbl">Notes</span><textarea name="internal_notes" rows="2" data-grow>${p.internal_notes || ''}</textarea></label></div>
+          <a class="sg-3 nt-link" href="${tabHref('notes')}"><span class="lbl">🔒 Notes${notes.length ? html` <b>${notes.length}</b>` : ''}</span>${notes.length ? html`<span class="nt-last"><b>${notes[notes.length - 1].author || 'Team'}:</b> ${String(notes[notes.length - 1].body || (notes[notes.length - 1].attachments || []).map((a) => a.name).join(', ')).slice(0, 90)}</span>` : html`<span class="sub">Team chat with files. Open →</span>`}</a></div>
           <p class="sub">Never shown to suppliers.</p>
           <div class="nda-row"><label class="chk"><input type="checkbox" name="nda_required" value="1" ${p.nda_required ? raw('checked') : ''}> Suppliers accept an NDA before seeing the spec</label>
             <details class="q-more" ${p.nda_text ? raw('open') : ''}><summary>Custom NDA text</summary><textarea name="nda_text" rows="4" placeholder="Leave empty for the standard confidentiality wording.">${p.nda_text || ''}</textarea></details></div></section>
           <div class="form-actions"><button class="btn" data-save>Save</button><span class="dirty-note" data-dirty-note hidden>Unsaved changes</span></div></aside></form>`;
+    } else if (tab === 'notes') {
+      body = notesView(p, notes, { canDelete, me: ST.current()?.name || 'Admin' });
     } else if (tab === 'files') {
       const titles = P.fileTitles(files);
       const groups = P.KIND_ORDER.map((k) => [k, files.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
@@ -445,7 +449,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const p = await loadProject(req.params.id); const { fields: f } = await parseForm(req);
     const extra = String(f.extra_fields || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 12).map((l) => ({ key: P.slug(l), label: l.slice(0, 120) }));
     const patch = { name: str(f.name, 160) || p.name, summary: str(f.summary), requirements: str(f.requirements, 12000), certifications: str(f.certifications), extra_fields: extra, nda_required: f.nda_required === '1', nda_text: str(f.nda_text, 8000), updated_at: now() };
-    if ('status' in f) { if (P.PROJECT_STATUSES.includes(f.status)) patch.status = f.status; patch.target_price_usd = num(f.target_price_usd); patch.target_moq = int(f.target_moq); patch.internal_notes = str(f.internal_notes); }
+    if ('status' in f) { if (P.PROJECT_STATUSES.includes(f.status)) patch.status = f.status; patch.target_price_usd = num(f.target_price_usd); patch.target_moq = int(f.target_moq); }
     let note = '';
     if ('category_id' in f || 'category' in f) {
       const cat = await pickCategory(f);
@@ -545,6 +549,100 @@ module.exports = function projectRoutes(router, { db, config }) {
 
   // `label` (the plain-language description) needs the dev_files.label column; until the SQL is run, files still save without it.
   const saveFile = async (row) => { try { return await db.insert('dev_files', row); } catch (e) { if (/label/i.test(String(e.message)) && 'label' in row) { const { label, ...rest } = row; return db.insert('dev_files', rest); } throw e; } };
+  // ── Notes: internal team chat with files (never shown to suppliers) ─────────────────────────────
+  // The old single "Notes" field becomes the first note. Pin, Decision tag, edit own note for 15 minutes, admin delete.
+  const TZ = process.env.BUSINESS_TZ || 'America/Los_Angeles'; const EDIT_MIN = 15;
+  const dayKey = (iso) => { try { return new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ }); } catch { return String(iso).slice(0, 10); } };
+  const dayLabel = (iso) => { const k = dayKey(iso); const today = dayKey(new Date().toISOString()); const yest = dayKey(new Date(Date.now() - 864e5).toISOString());
+    if (k === today) return 'Today'; if (k === yest) return 'Yesterday';
+    try { return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: k.slice(0, 4) === today.slice(0, 4) ? undefined : 'numeric', timeZone: TZ }); } catch { return k; } };
+  const clock = (iso) => { try { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ }); } catch { return ''; } };
+  const AV = ['#c0645a', '#7a8fb5', '#6f9b7a', '#b08a4f', '#8a6fb0', '#5f9aa6'];
+  const avColor = (n) => AV[[...String(n || '')].reduce((a, c) => a + c.charCodeAt(0), 0) % AV.length];
+  const canEdit = (n, me) => n.author === me && Date.now() - new Date(n.created_at).getTime() < EDIT_MIN * 60e3;
+  const noteFile = (p, n, a, i) => { const href = `/admin/projects/${p.id}/notes/${n.id}/${i}`; const ext = P.extOf(a.name).slice(1).toUpperCase() || 'FILE';
+    return THUMB_OK.test(a.name) ? html`<button type="button" class="nf-img" data-preview="${href}?inline=1" data-type="image" data-dl="${href}" title="${a.name}"><img src="${href}?inline=1" alt="${a.name}" loading="lazy"></button>`
+      : html`<a class="nf-doc" href="${href}" ${P.INLINE_OK.test(a.name) ? raw(`data-preview="${href}?inline=1" data-type="doc" data-dl="${href}"`) : raw('download')}><span class="nf-ic">${ext.slice(0, 4)}</span><span><b>${a.name}</b><small>${ext} · ${bytes(a.size)}</small></span></a>`; };
+  function notesView(p, notes, { canDelete, me }) {
+    const base = `/admin/projects/${p.id}/notes`; const pinned = notes.filter((n) => n.pinned); const decisions = notes.filter((n) => n.decision);
+    const allFiles = notes.flatMap((n) => (n.attachments || []).map((a, i) => ({ n, a, i }))).reverse();
+    let lastDay = ''; let prev = null;
+    const rows = notes.map((n) => {
+      const d = dayKey(n.created_at); const day = d !== lastDay ? html`<div class="nc-day"><span>${dayLabel(n.created_at)}</span></div>` : ''; lastDay = d;
+      const cont = !day && prev && prev.author === n.author && !n.pinned && !n.decision && !prev.decision && new Date(n.created_at) - new Date(prev.created_at) < 10 * 60e3; prev = n;
+      const text = `${n.author || ''} ${n.body || ''} ${(n.attachments || []).map((a) => a.name).join(' ')}`.toLowerCase();
+      return html`${day}<article class="nc-m ${cont ? 'cont' : ''} ${n.pinned ? 'is-pin' : ''}" id="n-${n.id}" data-nc-text="${text}">
+        <span class="nc-av" style="${raw(`background:${avColor(n.author)}`)}" aria-hidden="true">${cont ? '' : initials(n.author || 'T')}</span>
+        <div class="nc-main">${cont ? '' : html`<div class="nc-hd"><b>${n.author || 'Team'}</b><time datetime="${n.created_at}" title="${dayLabel(n.created_at)}">${clock(n.created_at)}</time>${n.decision ? html`<span class="nc-tag">Decision</span>` : ''}${n.pinned ? html`<span class="nc-pintag">📌 Pinned</span>` : ''}${n.edited_at ? html`<span class="nc-ed">edited</span>` : ''}</div>`}
+          ${n.body ? html`<p class="nc-body">${n.body}</p>` : ''}
+          ${(n.attachments || []).length ? html`<div class="nc-files">${n.attachments.map((a, i) => noteFile(p, n, a, i))}</div>` : ''}
+          ${canEdit(n, me) ? html`<form method="post" action="${base}/${n.id}/edit" class="nc-edit" hidden data-nc-editform><textarea name="body" rows="2" data-grow>${n.body || ''}</textarea><div class="nc-edit-a"><button class="btn small">Save</button><button type="button" class="btn small ghost" data-nc-cancel>Cancel</button></div></form>` : ''}</div>
+        <div class="nc-acts" data-armbox>
+          <form method="post" action="${base}/${n.id}/pin" class="inline"><button class="nc-ab" title="${n.pinned ? 'Unpin' : 'Pin to the top'}" aria-label="${n.pinned ? 'Unpin' : 'Pin'}">📌</button></form>
+          <form method="post" action="${base}/${n.id}/decision" class="inline"><button class="nc-ab ${n.decision ? 'on' : ''}" title="${n.decision ? 'Not a decision' : 'Mark as decision'}" aria-label="Decision">✓</button></form>
+          ${canEdit(n, me) ? html`<button type="button" class="nc-ab" data-nc-editbtn title="Edit (for ${EDIT_MIN} minutes after posting)" aria-label="Edit">✎</button>` : ''}
+          ${canDelete ? html`<button type="button" class="nc-ab bd-del" data-arm title="Delete note" aria-label="Delete">×</button><button type="submit" class="bd-yes" form="nc-del-${n.id}">✓ Delete</button><form id="nc-del-${n.id}" method="post" action="${base}/${n.id}/delete" hidden></form>` : ''}</div></article>`;
+    });
+    return html`<div class="nw">
+      <section class="nc" data-nc>
+        <div class="nc-head"><h2>Notes</h2><span class="nc-lock">🔒 Team only · never shown to suppliers</span><span class="nc-sp"></span>${notes.length ? html`<input type="search" placeholder="Search notes" aria-label="Search notes" data-nc-q>` : ''}</div>
+        ${pinned.length ? html`<div class="nc-pins">${pinned.map((n) => html`<a href="#n-${n.id}" class="nc-pin">📌 <b>${n.author || 'Team'}:</b> <span>${String(n.body || (n.attachments || []).map((a) => a.name).join(', ')).slice(0, 160)}</span></a>`)}</div>` : ''}
+        <div class="nc-body-wrap" data-nc-scroll>${notes.length ? rows : html`<div class="nc-empty"><b>No notes yet</b><span>Write what was discussed, decisions, internal emails, costs, sample feedback. Paste screenshots or drop files anywhere here.</span></div>`}
+          <p class="nc-none" data-nc-none hidden>No notes match.</p></div>
+        <form method="post" enctype="multipart/form-data" action="${base}" class="nc-comp" data-nc-form>
+          <div class="nc-box"><textarea name="body" rows="2" placeholder="Write a note… paste or drop files anywhere" aria-label="Note" data-nc-text-in></textarea>
+            <ul class="nc-chips" data-nc-chips></ul>
+            <input type="file" name="files" multiple hidden accept="${FILE_ACCEPT}" data-nc-file>
+            <div class="nc-bar"><button type="button" class="nc-tool" data-nc-attach>📎 Attach</button><label class="nc-tool nc-dec"><input type="checkbox" name="decision" value="1"> ✓ Decision</label><span class="nc-sp"></span><span class="nc-hint">⌘↩ to post</span><button class="btn small" data-nc-post>Post</button></div></div>
+          <p class="nc-note" data-nc-note role="status"></p></form>
+        <div class="nc-drop" data-nc-drop hidden><span>Drop files to attach</span></div>
+      </section>
+      <aside class="nw-side">
+        <section class="card"><h3>Files in notes · ${allFiles.length}</h3>${allFiles.length ? html`<ul class="nw-list">${allFiles.slice(0, 30).map(({ n, a, i }) => html`<li><a href="/admin/projects/${p.id}/notes/${n.id}/${i}" ${P.INLINE_OK.test(a.name) ? raw(`data-preview="/admin/projects/${p.id}/notes/${n.id}/${i}?inline=1" data-type="${THUMB_OK.test(a.name) ? 'image' : 'doc'}" data-dl="/admin/projects/${p.id}/notes/${n.id}/${i}"`) : raw('download')}><span class="nf-ic">${(P.extOf(a.name).slice(1).toUpperCase() || 'FILE').slice(0, 4)}</span><span class="nw-n">${a.name}</span></a><small>${dayLabel(n.created_at)}</small></li>`)}</ul>` : html`<p class="sub">Files you post appear here.</p>`}</section>
+        <section class="card"><h3>Decisions · ${decisions.length}</h3>${decisions.length ? html`<ul class="nw-list">${decisions.slice().reverse().map((n) => html`<li><a href="#n-${n.id}" class="nw-dec">${String(n.body || '').slice(0, 140) || '(file)'}</a><small>${dayLabel(n.created_at)}</small></li>`)}</ul>` : html`<p class="sub">Tick ✓ on a note to list it here.</p>`}</section>
+      </aside></div>`;
+  }
+  async function loadNotes(p) {
+    let list = await db.list('dev_notes', { filters: { project_id: p.id }, order: 'created_at.asc' }).catch(() => null);
+    if (list === null) return [];
+    if (p.internal_notes && String(p.internal_notes).trim()) {
+      const n = await db.insert('dev_notes', { project_id: p.id, author: 'Earlier notes', body: String(p.internal_notes).trim(), attachments: [], created_at: p.updated_at || p.created_at || now() });
+      await db.update('dev_projects', { id: p.id }, { internal_notes: null }); p.internal_notes = null;
+      list = [n, ...list].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    }
+    return list;
+  }
+  const toNotes = (res, pid, nid) => res.redirect(`/admin/projects/${pid}?tab=notes${nid ? `#n-${nid}` : ''}`);
+  const loadNote = async (req) => { const n = await db.get('dev_notes', req.params.nid); if (!n || n.project_id !== req.params.id) throw new HttpError(404, 'Note not found'); return n; };
+  router.post('/admin/projects/:id/notes', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 5 });
+    const body = str(f.body, 10000); const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
+    if (!body && !r.saved.length) { flash(res, 'error', r.errors.join(' · ') || 'Write a note or attach a file'); return toNotes(res, p.id); }
+    const row = { project_id: p.id, author: ST.current()?.name || 'Admin', body, attachments: r.saved.map((a) => ({ name: a.name, path: a.path, size: a.size, mime: a.mime })), created_at: now() };
+    if (f.decision === '1') row.decision = true;
+    const n = await db.insert('dev_notes', row);
+    if (r.errors.length) flash(res, 'warn', r.errors.join(' · '));
+    toNotes(res, p.id, n.id);
+  }));
+  router.post('/admin/projects/:id/notes/:nid/pin', G(async (req, res) => { const n = await loadNote(req); await db.update('dev_notes', { id: n.id }, { pinned: !n.pinned }); toNotes(res, req.params.id, n.id); }));
+  router.post('/admin/projects/:id/notes/:nid/decision', G(async (req, res) => { const n = await loadNote(req); await db.update('dev_notes', { id: n.id }, { decision: !n.decision }); toNotes(res, req.params.id, n.id); }));
+  router.post('/admin/projects/:id/notes/:nid/edit', G(async (req, res) => {
+    const n = await loadNote(req); const { fields: f } = await parseForm(req);
+    if (!canEdit(n, ST.current()?.name || 'Admin')) { flash(res, 'error', `Notes can be edited by their author for ${EDIT_MIN} minutes after posting`); return toNotes(res, req.params.id, n.id); }
+    const body = str(f.body, 10000);
+    if (!body && !(n.attachments || []).length) { flash(res, 'error', 'A note cannot be empty'); return toNotes(res, req.params.id, n.id); }
+    if (body !== n.body) await db.update('dev_notes', { id: n.id }, { body, edited_at: now() });
+    toNotes(res, req.params.id, n.id);
+  }));
+  router.get('/admin/projects/:id/notes/:nid/:idx', G(async (req, res) => {
+    const n = await loadNote(req); const a = (n.attachments || [])[Number(req.params.idx)];
+    if (!a) throw new HttpError(404, 'File not found'); serve(res, await db.docs.download(a.path), a.name, a.mime, req.query.inline === '1');
+  }));
+  router.post('/admin/projects/:id/notes/:nid/delete', G(async (req, res) => {
+    if (!ST.can(ST.current()?.role, 'delete')) throw new HttpError(403, 'Only an admin can delete notes');
+    const n = await loadNote(req); await db.docs.remove((n.attachments || []).map((a) => a.path)).catch(() => {}); await db.remove('dev_notes', { id: n.id });
+    flash(res, 'ok', 'Note deleted'); toNotes(res, req.params.id);
+  }));
   router.post('/admin/projects/:id/files', G(async (req, res) => {
     const p = await loadProject(req.params.id); const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 5 });
     const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
