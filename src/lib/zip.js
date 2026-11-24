@@ -8,11 +8,11 @@ function crc32(buf) {
   return ~c >>> 0;
 }
 
-/** files: [{ name, data: Buffer }] → Buffer of a .zip. Duplicate names get " (2)". */
-function zip(files) {
+/** files: [{ name, data: Buffer }] → Buffer of a .zip. Duplicate names get " (2)". { paths: true } keeps folders in names (a/b.xml). */
+function zip(files, { paths = false } = {}) {
   const parts = []; const central = []; let offset = 0; const seen = new Map();
   for (const f of files) {
-    let name = String(f.name || 'file').replace(/[\\/:*?"<>|]+/g, '_');
+    let name = String(f.name || 'file').replace(paths ? /[\\:*?"<>|]+/g : /[\\/:*?"<>|]+/g, '_');
     const n = (seen.get(name) || 0) + 1; seen.set(name, n);
     if (n > 1) name = name.replace(/(\.[^.]*)?$/, ` (${n})$1`);
     const nameBuf = Buffer.from(name, 'utf8');

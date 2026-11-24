@@ -48,18 +48,22 @@ module.exports = function toolRoutes(router, { db, config }) {
       body: html`<h1>Categories</h1>
       <p class="muted">Default duty % and HS code apply to products without their own. Target margin drives the suggested wholesale price. Check duty rates on <a href="https://hts.usitc.gov" target="_blank" rel="noopener">hts.usitc.gov</a>, plus any Section 301 tariff for China-origin goods.</p>
       <form method="post" action="/admin/categories"><div class="table-wrap"><table class="list edit">
-        <thead><tr><th>Name</th><th>Default HS code</th><th>Default duty %</th><th>Target margin %</th><th>Notes</th><th>Order</th><th class="r">Products</th><th>Delete</th></tr></thead>
+        <thead><tr><th>Name</th><th>Default HS code</th><th>Default duty %</th><th>Target margin %</th><th>Notes</th><th>Factory checklist</th><th>Order</th><th class="r">Products</th><th>Delete</th></tr></thead>
         <tbody>${ctx.categories.map((c) => html`<tr>
           <td><input name="name_${c.id}" value="${c.name}" required></td>
           <td><input name="hs_${c.id}" value="${c.default_hs_code || ''}" size="10"></td>
           <td><input name="duty_${c.id}" type="number" step="0.01" min="0" value="${c.default_duty_pct ?? ''}"></td>
           <td><input name="margin_${c.id}" type="number" step="0.1" min="0" max="95" value="${c.target_margin_pct ?? ''}"></td>
           <td><input name="notes_${c.id}" value="${c.notes || ''}"></td>
+          <td><a class="ck-link" href="/admin/categories/${c.id}/checklist">${(c.checklist || []).length ? `${c.checklist.length} questions · v${c.checklist_version || 0}` : 'Import'}</a></td>
           <td><input name="sort_${c.id}" type="number" step="1" value="${c.sort}" class="tiny"></td>
           <td class="r">${count(c.name)}</td>
           <td>${count(c.name) ? '' : html`<input type="checkbox" name="del" value="${c.id}">`}</td></tr>`)}
-          <tr class="new"><td><input name="name_new" placeholder="New category"></td><td><input name="hs_new" size="10"></td><td><input name="duty_new" type="number" step="0.01" min="0"></td><td><input name="margin_new" type="number" step="0.1" min="0" max="95"></td><td><input name="notes_new"></td><td><input name="sort_new" type="number" class="tiny" value="${ctx.categories.length + 1}"></td><td></td><td></td></tr>
+          <tr class="new"><td><input name="name_new" placeholder="New category"></td><td><input name="hs_new" size="10"></td><td><input name="duty_new" type="number" step="0.01" min="0"></td><td><input name="margin_new" type="number" step="0.1" min="0" max="95"></td><td><input name="notes_new"></td><td></td><td><input name="sort_new" type="number" class="tiny" value="${ctx.categories.length + 1}"></td><td></td><td></td></tr>
         </tbody></table></div><div class="form-actions"><button class="btn">Save categories</button></div></form>
+      <section class="card mt"><h2 class="sec">Import factory checklists</h2>
+        <form method="post" enctype="multipart/form-data" action="/admin/categories/import" class="ck-file"><input type="file" name="files" accept=".xlsx" multiple required aria-label="Factory checklist Excel files"><button class="btn small">Import</button></form>
+        <p class="sub">Choose one or more "Factory Checklist - &lt;Category&gt;.xlsx" files. Each one sets that category's checklist (the category is created if it is missing). Development projects in the category ask suppliers these questions.</p></section>
       ${orphan.length ? html`<p class="muted">Used by products but not in this list: ${orphan.join(', ')}</p>` : ''}`,
     }));
   }));

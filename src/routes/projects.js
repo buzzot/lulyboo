@@ -16,6 +16,9 @@ const F = require('../fields');
 const P = require('../projects');
 const DM = require('../dev-manual');
 const DD = require('../dev-draft');
+const CK = require('../checklists');
+const { ddSel } = require('./logistics-costs');
+const { serveFile: serveCk } = require('./category-checklists');
 
 const num = (x) => { if (x === undefined || x === null || String(x).trim() === '') return null; const n = Number(String(x).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
 const int = (x) => { const n = num(x); return n === null ? null : Math.round(n); };
@@ -169,11 +172,102 @@ module.exports = function projectRoutes(router, { db, config }) {
     if (!inv || inv.project_id !== projectId) throw new HttpError(404, 'Invitation not found');
     return inv;
   }
+  // ── Spec versions: suppliers see the last PUBLISHED state; saved edits are a draft until "Publish vN".
+  // Before anyone is invited (or when every invitation is closed) edits are live: the current version just follows them.
+  const activeInvs = (invs) => invs.filter((i) => !['Declined', 'Closed'].includes(i.status));
+  const stateOf = (v) => v?.snapshot?.state || null;
+  async function published(p, files, invs) {
+    files = files || await db.list('dev_files', { filters: { project_id: p.id }, order: 'created_at.asc' });
+    invs = invs || await db.list('dev_invitations', { filters: { project_id: p.id } });
+    const v = (await db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc', limit: 1 }))[0]; const cur = CK.specState(p, files);
+    if (!v) return cur;
+    if (!stateOf(v) || !activeInvs(invs).length) {
+      if (JSON.stringify(stateOf(v)) !== JSON.stringify(cur)) await db.update('dev_spec_versions', { id: v.id }, { snapshot: { ...(v.snapshot || {}), state: cur } });
+      return cur;
+    }
+    return stateOf(v);
+  }
+  const extraOf = (pub) => (pub.extra || []).map((l) => ({ key: P.slug(l), label: l }));
+  const chgItem = (i) => (i.t === 'add' ? html`<ins>+ ${i.text}</ins>` : i.t === 'del' ? html`<del>${i.text}</del>` : html`${i.before ? `${i.before} ` : ''}${i.old ? html`<del>${i.old}</del> → ` : ''}<ins>${i.new}</ins>${i.after ? ` ${i.after}` : ''}`);
+  const chgList = (changes, max = 4) => html`<ul class="vd-chg">${changes.map((c) => html`<li><b>${c.label}</b><span>${c.items.slice(0, max).map((i, n) => html`${n ? ' · ' : ''}${chgItem(i)}`)}${c.items.length > max ? html` <span class="sub">+${c.items.length - max} more</span>` : ''}</span></li>`)}</ul>`;
+  function versionBar(p, versions, invs, changes, sname) {
+    const act = activeInvs(invs); const cur = versions.find((v) => v.version === p.current_version) || versions[0];
+    if (changes.length) {
+      const n = p.current_version + 1;
+      return html`<div class="vdraft"><h3><span class="vd-tag">Draft v${n}</span> Unpublished changes · suppliers still see v${p.current_version}</h3>
+        ${chgList(changes)}
+        <div class="vd-row"><form method="post" action="/admin/projects/${p.id}/publish" class="vd-pub"><input name="change_note" required maxlength="500" value="${CK.autoNote(changes)}" aria-label="What changed">
+          <label class="chk"><input type="checkbox" name="notify" value="1" checked> Email ${act.length} supplier${act.length === 1 ? '' : 's'}</label><button class="btn small">Publish v${n}</button></form>
+          <form method="post" action="/admin/projects/${p.id}/discard" data-confirm="Discard the draft and go back to what suppliers see in v${p.current_version}?"><button class="link">Discard draft</button></form></div>
+        <p class="sub">The note is written from the changes, edit it if you like. Target price, status and internal notes never create a version.</p></div>`;
+    }
+    const conf = act.filter((i) => i.ack_version >= p.current_version);
+    return html`<div class="vbar"><span class="vb-v">v${p.current_version}</span><span class="vb-m">${cur ? html`Published ${fmt.date(cur.created_at)} · ${cur.change_note || ''}` : ''}</span>
+      ${act.length ? html`<span class="${conf.length === act.length ? 'vb-ok' : 'vb-wn'}"><span class="vb-dots" aria-hidden="true">${act.map((i) => html`<i class="${i.ack_version >= p.current_version ? '' : 'o'}" title="${sname[i.supplier_id] || ''}"></i>`)}</span>${conf.length} of ${act.length} supplier${act.length === 1 ? '' : 's'} confirmed</span>` : html`<span class="vb-m">Not sent yet · edits are live until you invite suppliers</span>`}
+      <span class="vb-fill"></span><a href="/admin/projects/${p.id}/versions">History</a></div>`;
+  }
+
   const latestQuote = async (invId) => (await db.list('dev_quotes', { filters: { invitation_id: invId }, order: 'revision.desc', limit: 1 }))[0] || null;
+
+  const catOpts = (cats) => [['', 'Choose a category…'], ...cats.map((c) => [c.id, html`${c.name}${(c.checklist || []).length ? html` <span class="sub">· ${c.checklist.length} questions</span>` : ''}`])];
+  // category_id from the dropdown (or a category name, for API/old forms)
+  async function pickCategory(f) {
+    const cats = await db.list('categories');
+    if (f.category_id) return cats.find((c) => c.id === f.category_id) || null;
+    const n = String(f.category || '').trim().toLowerCase(); return n ? cats.find((c) => c.name.toLowerCase() === n) || null : null;
+  }
+
+  const { typeTag, reqTag } = require('./category-checklists');
+  const docCell = (st) => html`<td><b class="${!st.reqLeft.length ? 'pos' : st.done ? '' : 'neg'}">${st.done} / ${st.total}</b><div class="sub">${st.reqLeft.length ? `${st.reqLeft.length} required left` : 'All required answered'} · files ${st.files.ready}/${st.files.total}</div></td>`;
+  const fileLinks = (r, url) => r.files.map((f, n) => html`<a class="dk-file" href="${url(r, n)}" ${P.INLINE_OK.test(f.name) ? raw(`data-preview="${url(r, n)}?inline=1" data-type="${THUMB_OK.test(f.name) ? 'image' : 'doc'}" data-dl="${url(r, n)}"`) : ''}>${icon('download', 14)} ${f.name}</a>`);
+  // Supplier thread: its checklist answers by section, with the files.
+  function docsCard(p, inv, pub) {
+    if (!pub.checklist?.length) return '';
+    const st = CK.docStatus(pub.checklist, inv.doc_answers); const url = (r, n) => `/admin/projects/${p.id}/suppliers/${inv.id}/docs/${r.key}/${n}`;
+    return html`<section class="card"><h2 class="sec">Factory checklist <span class="count">${st.done} / ${st.total}</span></h2>
+      <p class="sub">${st.reqLeft.length ? html`<span class="neg">${st.reqLeft.length} required left</span>` : 'All required questions answered'} · files ${st.files.ready} / ${st.files.total}</p>
+      ${st.sections.map((s) => html`<details class="ck-sec"><summary><b>${s.title}</b> <span class="count">${s.done} / ${s.rows.length}</span></summary>
+        <dl class="ans-list">${s.rows.map((r) => html`<div class="${r.done ? '' : r.req === 'required' ? 'miss' : 'open'}"><dt>${r.name}</dt><dd>${r.done ? html`${CK.answerText(r, r.a)} ${fileLinks(r, url)}` : html`<span class="none">${r.req === 'required' ? 'Required · not answered' : '—'}</span>`}</dd></div>`)}</dl></details>`)}</section>`;
+  }
+  // Compare quotes: every supplier side by side, question by question.
+  function checklistCompare(p, pub, invs, sname) {
+    if (!pub.checklist?.length || !invs.length) return '';
+    const sts = invs.map((i) => ({ i, st: CK.docStatus(pub.checklist, i.doc_answers) }));
+    const url = (inv) => (r, n) => `/admin/projects/${p.id}/suppliers/${inv.id}/docs/${r.key}/${n}`;
+    return html`<section class="card"><h2 class="sec">Factory checklist answers</h2>
+      <div class="table-wrap"><table class="list compact cmp ck-cmp"><thead><tr><th>Question</th>${sts.map(({ i }) => html`<th><a href="/admin/projects/${p.id}/suppliers/${i.id}">${sname[i.supplier_id] || 'Supplier'}</a></th>`)}</tr></thead><tbody>
+        <tr class="ck-tot"><td><b>Answered</b></td>${sts.map(({ st }) => docCell(st))}</tr></tbody>
+        ${CK.sections(CK.normItems(pub.checklist)).map((s) => html`<tbody class="ck-grp"><tr><th colspan="${sts.length + 1}">${s.title}</th></tr>${s.rows.map((it) => html`<tr><td>${it.name}${it.req === 'required' ? html` <span class="rq rq-required" title="Required">*</span>` : ''}</td>${sts.map(({ i, st }) => { const r = st.rows.find((x) => x.key === it.key); return html`<td>${r?.done ? html`${CK.answerText(r, r.a)} ${it.type === 'file' ? fileLinks(r, url(i)) : ''}` : html`<span class="none">—</span>`}</td>`; })}</tr>`)}</tbody>`)}
+      </table></div></section>`;
+  }
+  // A published state, read-only (version history and the supplier preview).
+  const specView = (st) => html`${st.summary ? html`<p class="pd-desc">${st.summary}</p>` : ''}
+    ${st.requirements ? html`<h3 class="sec2">Requirements</h3><p class="pd-desc pre">${st.requirements}</p>` : ''}
+    ${st.certifications ? html`<h3 class="sec2">Certifications / standards</h3><p class="pd-desc pre">${st.certifications}</p>` : ''}
+    ${(st.extra || []).length ? html`<h3 class="sec2">Extra quote questions</h3><ul class="plain">${st.extra.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
+    <h3 class="sec2">Files <span class="count">${(st.files || []).length}</span></h3>${(st.files || []).length ? html`<ul class="plain">${st.files.map((x) => html`<li>${x.title}</li>`)}</ul>` : html`<p class="sub">None</p>`}
+    <h3 class="sec2">Factory checklist <span class="count">${(st.checklist || []).length}</span></h3>${(st.checklist || []).length ? CK.sections(CK.normItems(st.checklist)).map((s) => html`<details class="ck-sec"><summary><b>${s.title}</b> <span class="count">${s.rows.length}</span></summary>
+      <table class="list compact ck-q"><tbody>${s.rows.map((it) => html`<tr><td>${it.name}</td><td>${typeTag(it)}</td><td class="r">${reqTag(it)}</td></tr>`)}</tbody></table></details>`) : html`<p class="sub">None</p>`}`;
+  const newTypeOpts = [['text', 'Text answer'], ['file', 'File upload'], ['yesno', 'Yes / No']];
+  const reqOpts = [['required', 'Required'], ['preferred', 'Preferred'], ['optional', 'Optional']];
+  // Spec tab: the factory checklist suppliers answer (copied from the category; switch questions off or add your own).
+  function checklistCard(p, cat) {
+    const items = CK.normItems(p.checklist, { project: true }); const on = items.filter((x) => x.on).length;
+    return html`<section class="card" id="docs"><div class="sec-row"><h2 class="sec">Factory checklist <span class="count">${on}</span></h2>
+        <a class="btn ghost small" href="/admin/projects/${p.id}/preview">Preview what suppliers see</a></div>
+      <p class="sub">${cat ? html`From the <a href="/admin/categories/${cat.id}/checklist">${cat.name} checklist</a> v${p.checklist_version || 0}.` : 'Choose a category to load its checklist.'} Suppliers answer it in the portal; every <b>Required</b> question must be answered before they can quote.${p.checklist_file ? html` <a href="/admin/projects/${p.id}/checklist-file" download>Download Excel</a>` : ''}</p>
+      <input type="hidden" name="ck_form" value="1">
+      ${items.length ? CK.sections(items).map((s) => html`<details class="ck-sec"><summary><b>${s.title}</b> <span class="count">${s.rows.filter((x) => x.on).length} / ${s.rows.length}</span></summary>
+        <ul class="ck-list">${s.rows.map((x) => html`<li class="${x.on ? '' : 'off'}"><label class="ck-on"><input type="checkbox" name="ck_on" value="${x.key}" ${x.on ? raw('checked') : ''} aria-label="Ask: ${x.name}"></label>
+          <span class="ck-name"><b>${x.name}</b>${x.custom ? html` <span class="pill">This project</span>` : ''}</span><span>${typeTag(x)}</span><span class="r">${reqTag(x)}</span></li>`)}</ul></details>`)
+      : html`<p class="d-empty">${cat ? html`The ${cat.name} category has no checklist yet. <a href="/admin/categories/${cat.id}/checklist">Import it</a> or add questions for this project below.` : 'No questions yet.'}</p>`}
+      <div class="ck-add"><input name="ck_new_name" maxlength="200" placeholder="Add a question for this project only, e.g. FCC ID test report" aria-label="New question">${ddSel('ck_new_type', 'text', newTypeOpts, { cls: 'dd-sm' })}${ddSel('ck_new_req', 'required', reqOpts, { cls: 'dd-sm' })}</div>
+      <p class="sub">Unticked questions are not asked. Changes go to suppliers when you publish the next version.</p></section>`;
+  }
 
   // ═════════════════════════ ADMIN ═════════════════════════
   router.get('/admin/projects', G(async (req, res) => {
-    const [projects, invs, quotes, miles, suppliers] = await Promise.all([db.list('dev_projects', { order: 'created_at.desc' }), db.list('dev_invitations'), db.list('dev_quotes'), db.list('dev_milestones', { filters: { done_at: null } }), db.list('suppliers', { select: 'id,name' })]);
+    const [projects, invs, quotes, miles, suppliers, cats] = await Promise.all([db.list('dev_projects', { order: 'created_at.desc' }), db.list('dev_invitations'), db.list('dev_quotes'), db.list('dev_milestones', { filters: { done_at: null } }), db.list('suppliers', { select: 'id,name' }), db.list('categories', { order: 'sort.asc,name.asc' })]);
     const q = String(req.query.q || '').toLowerCase(); const st = req.query.status || '';
     const shown = projects.filter((p) => (!st || p.status === st) && (!q || `${p.ref} ${p.name} ${p.category || ''}`.toLowerCase().includes(q)));
     res.html(page({
@@ -189,7 +283,8 @@ module.exports = function projectRoutes(router, { db, config }) {
           <td>${nm ? html`<span class="${nm.due_date < P.today() ? 'neg' : ''}">${fmt.date(nm.due_date)}</span><div class="sub">${nm.title}</div>` : html`<span class="none">—</span>`}</td></tr>`; })}</tbody></table></div>` : html`<div class="card empty-state"><p><b>${projects.length ? 'No projects match.' : 'No development projects yet.'}</b></p><p class="muted">Start with a name and a short description. You add requirements, drawings and suppliers next.</p></div>`}
       <details class="card fold" id="new-project" ${projects.length ? '' : raw('open')}><summary><h2 class="inline">New project</h2></summary>
         <form method="post" action="/admin/projects" class="fields"><label class="frow"><span>Product name</span><input name="name" required maxlength="160" placeholder="e.g. Cat water fountain v1"></label>
-          <label class="frow"><span>Category</span><input name="category" maxlength="80" placeholder="e.g. Pet"></label>
+          <div class="frow"><span>Category</span>${ddSel('category_id', '', catOpts(cats))}</div>
+          <p class="sub fl-note">Required. The category brings its document checklist (certificates, test reports) that suppliers must answer.</p>
           <label class="frow top"><span>Short description</span><textarea name="summary" rows="3" placeholder="What is it, who is it for?"></textarea></label>
           <div class="form-actions"><button class="btn">Create project</button></div></form></details>`,
     }));
@@ -197,8 +292,9 @@ module.exports = function projectRoutes(router, { db, config }) {
 
   router.post('/admin/projects', G(async (req, res) => {
     const { fields } = await parseForm(req);
-    const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects'); }
-    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, category: str(fields.category, 80), summary: str(fields.summary), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
+    const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects#new-project'); }
+    const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it sets the document checklist'); return res.redirect('/admin/projects#new-project'); }
+    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
     await db.insert('dev_spec_versions', { project_id: p.id, version: 1, change_note: 'First version', snapshot: {}, created_at: now() });
     flash(res, 'ok', `Project ${p.ref} created. Add the requirements and files, then invite suppliers.`);
     res.redirect(`/admin/projects/${p.id}`);
@@ -213,6 +309,8 @@ module.exports = function projectRoutes(router, { db, config }) {
       db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc' }), db.list('dev_milestones', { filters: { project_id: p.id }, order: 'sort.asc,due_date.asc' }),
       db.list('suppliers', { select: 'id,name,country,email,active', order: 'name.asc' }), db.list('dev_quotes', { order: 'revision.desc' }), db.list('dev_messages', { order: 'created_at.desc' }),
     ]);
+    const cats = await db.list('categories', { order: 'sort.asc,name.asc' }); const cat = cats.find((c) => c.id === p.category_id) || null;
+    const pub = await published(p, files, invs); const changes = activeInvs(invs).length ? CK.diffStates(pub, CK.specState(p, files)) : [];
     const sname = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     const invIds = new Set(invs.map((i) => i.id));
     const quotesBy = {}; for (const q of allQuotes) if (invIds.has(q.invitation_id) && !quotesBy[q.invitation_id]) quotesBy[q.invitation_id] = q;
@@ -222,20 +320,26 @@ module.exports = function projectRoutes(router, { db, config }) {
     const header = html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
       <div class="head-row"><div><h1>${p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li><span class="pill s-reviewing">${p.status}</span></li><li>Spec v${p.current_version}</li><li>${invs.length} supplier${invs.length === 1 ? '' : 's'} invited</li></ul></div>
       <div class="actions">${canDelete ? html`<form method="post" action="/admin/projects/${p.id}/delete" data-confirm="Delete this project, its files, threads and quotes? This cannot be undone."><button class="btn small ghost danger">Delete project</button></form>` : ''}</div></div>
-      <nav class="dp-tabs" aria-label="Project sections">${TABS.map(([k, l]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'cur' : ''}">${l}${k === 'suppliers' && invs.length ? html` <b>${invs.length}</b>` : ''}${k === 'files' && files.length ? html` <b>${files.length}</b>` : ''}</a>`)}</nav>`;
+      <nav class="dp-tabs" aria-label="Project sections">${TABS.map(([k, l]) => html`<a href="${tabHref(k)}" class="${tab === k ? 'cur' : ''}">${l}${k === 'suppliers' && invs.length ? html` <b>${invs.length}</b>` : ''}${k === 'files' && files.length ? html` <b>${files.length}</b>` : ''}</a>`)}</nav>
+      ${['spec', 'files'].includes(tab) || changes.length ? versionBar(p, versions, invs, changes, sname) : ''}`;
 
     let body;
     if (tab === 'spec') {
       const extra = (p.extra_fields || []).map((f) => f.label).join('\n');
-      body = html`<form method="post" action="/admin/projects/${p.id}" class="dp-grid" data-guard>
+      const ckc = CK.categoryChanges(p, cat);
+      body = html`${!p.category_id ? html`<div class="flash warn"><b>Choose a category for this project.</b> It brings the document checklist (certificates, test reports) suppliers must answer before quoting.</div>` : ''}
+        ${ckc ? html`<div class="ck-upd"><span><b>${cat.name} checklist v${ckc.version} is available.</b> ${[ckc.added && `${ckc.added} new`, ckc.changed && `${ckc.changed} changed`, ckc.removed && `${ckc.removed} removed`, ckc.fileChanged && 'new file'].filter(Boolean).join(' · ') || 'Small changes'}. Your own items and switched-off items are kept.</span>
+          <form method="post" action="/admin/projects/${p.id}/checklist/refresh"><button class="btn small">Update checklist</button></form></div>` : ''}
+        <form method="post" action="/admin/projects/${p.id}" class="dp-grid" data-guard><div class="dp-main">
         <section class="card"><h2 class="sec">What suppliers see</h2><div class="fields">
           <label class="frow"><span>Product name</span><input name="name" value="${p.name}" required></label>
-          <label class="frow"><span>Category</span><input name="category" value="${p.category || ''}"></label>
+          <div class="frow"><span>Category</span>${ddSel('category_id', p.category_id || '', catOpts(cats))}</div>
           <label class="frow top"><span>Summary</span><textarea name="summary" rows="3">${p.summary || ''}</textarea></label>
           <label class="frow top"><span>Requirements</span><textarea name="requirements" rows="9" placeholder="Materials, dimensions and tolerances, colours, functions, packaging, labelling, quantity expectations…">${p.requirements || ''}</textarea></label>
           <label class="frow top"><span>Certifications / standards</span><textarea name="certifications" rows="3" placeholder="e.g. ASTM F963, CPSIA, 16 CFR 1250 (one per line)">${p.certifications || ''}</textarea></label>
           <label class="frow top"><span>Extra quote questions</span><textarea name="extra_fields" rows="3" placeholder="One per line, e.g. Motor warranty period&#10;Recycled material %">${extra}</textarea></label>
           <p class="sub fl-note">The quote form always asks for price tiers, tooling, MOQ, sample and production lead times, validity, payment terms and material. Questions added here appear as extra fields.</p></div></section>
+        ${checklistCard(p, cat)}</div>
         <aside class="dp-side"><section class="card"><h2 class="sec">Internal only</h2><div class="fields">
           <label class="frow"><span>Status</span><select name="status">${P.PROJECT_STATUSES.map((s) => html`<option ${s === p.status ? raw('selected') : ''}>${s}</option>`)}</select></label>
           <label class="frow"><span>Target price</span><span class="inp-unit"><input name="target_price_usd" type="number" step="0.01" min="0" value="${p.target_price_usd ?? ''}"><i>USD</i></span></label>
@@ -244,11 +348,7 @@ module.exports = function projectRoutes(router, { db, config }) {
           <p class="sub">Never shown to suppliers.</p></section>
           <section class="card"><h2 class="sec">NDA</h2><div class="fields"><label class="chk"><input type="checkbox" name="nda_required" value="1" ${p.nda_required ? raw('checked') : ''}> Suppliers must accept an NDA before seeing the spec and files</label>
           <label class="frow top"><span>NDA text</span><textarea name="nda_text" rows="5" placeholder="Leave empty for the standard confidentiality wording.">${p.nda_text || ''}</textarea></label></div></section>
-          <div class="form-actions"><button class="btn" data-save>Save</button><span class="dirty-note" data-dirty-note hidden>Unsaved changes</span></div></aside></form>
-        <section class="card"><h2 class="sec">Spec versions</h2><p class="sub">Currently v${p.current_version}. Publishing a new version tells every active supplier what changed; they confirm it before quoting again.</p>
-          <form method="post" action="/admin/projects/${p.id}/publish" class="inline-form mt"><input name="change_note" required maxlength="500" placeholder="What changed in v${p.current_version + 1}? e.g. Wall thickness 2.0 mm, new drawing rev B" style="flex:1 1 360px">
-            <label class="chk"><input type="checkbox" name="notify" value="1" checked> Email suppliers</label><button class="btn small">Publish v${p.current_version + 1}</button></form>
-          <ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></section>`;
+          <div class="form-actions"><button class="btn" data-save>Save</button><span class="dirty-note" data-dirty-note hidden>Unsaved changes</span></div></aside></form>`;
     } else if (tab === 'files') {
       const titles = P.fileTitles(files);
       const groups = P.KIND_ORDER.map((k) => [k, files.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
@@ -272,9 +372,10 @@ module.exports = function projectRoutes(router, { db, config }) {
       const invited = new Set(invs.map((i) => i.supplier_id));
       const pickList = suppliers.filter((x) => (x.active !== false && !/^pending:/i.test(String(x.name || '').trim())) || invited.has(x.id));
       body = html`<section class="card"><h2 class="sec">Invited suppliers</h2>
-        ${invs.length ? html`<div class="table-wrap"><table class="list"><thead><tr><th>Supplier</th><th>Status</th><th>Spec</th><th>Quote</th><th>Last message</th><th></th></tr></thead><tbody>
+        ${invs.length ? html`<div class="table-wrap"><table class="list"><thead><tr><th>Supplier</th><th>Status</th><th>Spec</th>${pub.checklist?.length ? html`<th>Checklist</th>` : ''}<th>Quote</th><th>Last message</th><th></th></tr></thead><tbody>
           ${invs.map((i) => { const q = quotesBy[i.id]; const lm = lastMsg[i.id]; return html`<tr><td><a class="sp-name" href="/admin/projects/${p.id}/suppliers/${i.id}">${sname[i.supplier_id] || 'Supplier'}</a>${p.nda_required ? html`<div class="sub">${i.nda_accepted_at ? `NDA accepted ${fmt.date(i.nda_accepted_at)}` : html`<span class="neg">NDA not accepted</span>`}</div>` : ''}</td>
             <td><span class="pill ${pillCls(i.status)}">${i.status}</span></td><td>${i.ack_version >= p.current_version ? html`v${i.ack_version} confirmed` : html`<span class="neg">v${p.current_version} not confirmed</span>`}</td>
+            ${pub.checklist?.length ? docCell(CK.docStatus(pub.checklist, i.doc_answers)) : ''}
             <td>${q ? html`${fmt.money(q.tiers?.[0]?.price, q.currency)}<div class="sub">rev ${q.revision}${q.spec_version < p.current_version ? ` · on v${q.spec_version}` : ''}</div>` : html`<span class="none">—</span>`}</td>
             <td>${lm ? html`<span class="sub">${lm.direction === 'supplier' ? 'Supplier' : 'You'} · ${fmt.date(lm.created_at)}</span>` : html`<span class="none">—</span>`}</td><td class="r"><a class="btn ghost small" href="/admin/projects/${p.id}/suppliers/${i.id}">Open thread</a></td></tr>`; })}</tbody></table></div>` : html`<p class="d-empty">No suppliers invited yet.</p>`}</section>
         <section class="card"><h2 class="sec">Invite suppliers</h2>
@@ -302,12 +403,14 @@ module.exports = function projectRoutes(router, { db, config }) {
       const p1 = (q) => (q.tiers?.[0]?.price ?? null); const bp = best(p1); const bt = best((q) => q.tooling_cost); const bl = best((q) => q.production_lead_days);
       const cell = (v, b, show) => html`<td class="r ${b !== null && v === b ? 'best' : ''}">${v === null || v === undefined ? html`<span class="none">—</span>` : show}</td>`;
       body = html`<section class="card"><h2 class="sec">Quote comparison</h2><p class="sub">Latest quote from each supplier. Best values are highlighted. Prices are in each supplier's own currency.${p.target_price_usd ? ` Your target: ${fmt.money(p.target_price_usd)}.` : ''}</p>
-        ${rows.length ? html`<div class="table-wrap"><table class="list compact cmp"><thead><tr><th>Supplier</th><th class="r">Unit price (tier 1)</th><th class="r">vs target</th><th class="r">Tooling</th><th class="r">MOQ</th><th class="r">Sample</th><th class="r">Sample lead</th><th class="r">Production lead</th><th>Valid until</th><th>Spec</th>${labels.map((l) => html`<th>${l}</th>`)}</tr></thead><tbody>
+        ${rows.length ? html`<div class="table-wrap"><table class="list compact cmp"><thead><tr><th>Supplier</th><th class="r">Unit price (tier 1)</th><th class="r">vs target</th><th class="r">Tooling</th><th class="r">MOQ</th><th class="r">Sample</th><th class="r">Sample lead</th><th class="r">Production lead</th><th>Valid until</th><th>Spec</th>${pub.checklist?.length ? html`<th>Checklist</th>` : ''}${labels.map((l) => html`<th>${l}</th>`)}</tr></thead><tbody>
           ${rows.map(({ i, q }) => { const pr = p1(q); const vs = p.target_price_usd && pr && (q.currency || 'USD') === 'USD' ? ((pr - p.target_price_usd) / p.target_price_usd) * 100 : null; return html`<tr><td><a class="sp-name" href="/admin/projects/${p.id}/suppliers/${i.id}">${sname[i.supplier_id]}</a><div class="sub"><span class="pill ${pillCls(i.status)}">${i.status}</span> rev ${q.revision}</div></td>
             ${cell(pr, bp, html`<b>${fmt.money(pr, q.currency)}</b>${q.incoterm ? html`<div class="sub">${q.incoterm}</div>` : ''}`)}<td class="r ${vs !== null && vs > 0 ? 'neg' : ''}">${vs === null ? html`<span class="none">—</span>` : `${vs > 0 ? '+' : ''}${vs.toFixed(1)}%`}</td>
             ${cell(q.tooling_cost, bt, fmt.money(q.tooling_cost, q.currency))}<td class="r">${q.moq ? fmt.num(q.moq) : html`<span class="none">—</span>`}</td><td class="r">${q.sample_cost !== null && q.sample_cost !== undefined ? fmt.money(q.sample_cost, q.currency) : html`<span class="none">—</span>`}</td><td class="r">${q.sample_lead_days ? `${q.sample_lead_days} d` : html`<span class="none">—</span>`}</td>
             ${cell(q.production_lead_days, bl, `${q.production_lead_days} d`)}<td>${q.validity_date ? fmt.date(q.validity_date) : html`<span class="none">—</span>`}${q.validity_date && q.validity_date < P.today() ? html` <span class="neg">expired</span>` : ''}</td><td>${q.spec_version < p.current_version ? html`<span class="neg">v${q.spec_version}</span>` : `v${q.spec_version}`}</td>
-            ${labels.map((l) => html`<td>${(q.custom || []).find((c) => c.label === l)?.value || html`<span class="none">—</span>`}</td>`)}</tr>`; })}</tbody></table></div>` : html`<p class="d-empty">No quotes have been submitted yet.</p>`}</section>`;
+            ${pub.checklist?.length ? docCell(CK.docStatus(pub.checklist, i.doc_answers)) : ''}
+            ${labels.map((l) => html`<td>${(q.custom || []).find((c) => c.label === l)?.value || html`<span class="none">—</span>`}</td>`)}</tr>`; })}</tbody></table></div>` : html`<p class="d-empty">No quotes have been submitted yet.</p>`}</section>
+        ${checklistCompare(p, pub, activeInvs(invs), sname)}`;
     } else {
       const day = P.today();
       body = html`<section class="card"><div class="sec-row"><h2 class="sec">Milestones</h2><form method="post" action="/admin/projects/${p.id}/milestones/standard" data-confirm="Add the standard development milestones, dated from today?"><button class="btn ghost small">Add standard plan</button></form></div>
@@ -331,16 +434,91 @@ module.exports = function projectRoutes(router, { db, config }) {
     const extra = String(f.extra_fields || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 12).map((l) => ({ key: P.slug(l), label: l.slice(0, 120) }));
     const patch = { name: str(f.name, 160) || p.name, category: str(f.category, 80), summary: str(f.summary), requirements: str(f.requirements, 12000), certifications: str(f.certifications), extra_fields: extra, nda_required: f.nda_required === '1', nda_text: str(f.nda_text, 8000), updated_at: now() };
     if ('status' in f) { if (P.PROJECT_STATUSES.includes(f.status)) patch.status = f.status; patch.target_price_usd = num(f.target_price_usd); patch.target_moq = int(f.target_moq); patch.internal_notes = str(f.internal_notes); }
+    let note = '';
+    if ('category_id' in f || 'category' in f) {
+      const cat = await pickCategory(f);
+      if (!cat) { if (!p.category_id) note = ' Choose a category to load its document checklist.'; }
+      else if (cat.id !== p.category_id) { Object.assign(patch, CK.fromCategory(cat, p.checklist)); note = ` Category ${cat.name}: its document checklist is loaded.`; }
+    }
+    if (f.ck_form === '1' && !patch.checklist) {
+      const on = new Set([].concat(f.ck_on || []));
+      const list = (p.checklist || []).map((x) => ({ ...x, on: on.has(x.key) }));
+      const nn = str(f.ck_new_name, 200);
+      if (nn) { const type = f.ck_new_type === 'file' ? 'file' : f.ck_new_type === 'yesno' ? 'choice' : 'text'; const req = ['required', 'preferred', 'optional'].includes(f.ck_new_req) ? f.ck_new_req : 'required';
+        list.push({ key: CK.newKey(), name: nn, section: 'This project', type, options: type === 'choice' ? ['Yes', 'No', 'Other - specify in Details'] : [], req, req_label: CK.REQ[req], hint: '', on: true, custom: true }); }
+      if (JSON.stringify(list) !== JSON.stringify(p.checklist || [])) patch.checklist = list;
+    }
     await db.update('dev_projects', { id: p.id }, patch);
-    flash(res, 'ok', 'Saved. Suppliers see the changes now. Publish a new version if the change matters for quotes.');
+    const shared = activeInvs(await db.list('dev_invitations', { filters: { project_id: p.id } })).length;
+    flash(res, 'ok', `Saved.${shared ? ` Suppliers still see v${p.current_version}: publish v${p.current_version + 1} when you are ready.` : ''}${note}`);
     res.redirect(`/admin/projects/${p.id}?tab=spec`);
+  }));
+
+  // Newer category checklist → bring it into the project (project's own items and switched-off items are kept).
+  router.post('/admin/projects/:id/checklist/refresh', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const cat = p.category_id ? await db.get('categories', p.category_id) : null;
+    if (cat) { await db.update('dev_projects', { id: p.id }, { ...CK.refreshFromCategory(p, cat), updated_at: now() }); flash(res, 'ok', `Checklist updated to ${cat.name} v${cat.checklist_version || 0}. Publish the next version to send it to suppliers.`); }
+    res.redirect(`/admin/projects/${p.id}?tab=spec#docs`);
+  }));
+  router.get('/admin/projects/:id/checklist-file', G(async (req, res) => {
+    const p = await loadProject(req.params.id); if (!p.checklist_file?.path) throw new HttpError(404, 'No checklist file');
+    serveCk(res, await db.docs.download(p.checklist_file.path), p.checklist_file, req.query.inline === '1');
+  }));
+
+  // Discard the draft: back to what suppliers see. Files added since are set to Internal only (never deleted here).
+  router.post('/admin/projects/:id/discard', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const files = await db.list('dev_files', { filters: { project_id: p.id } }); const pub = await published(p, files);
+    const keep = new Set((pub.checklist || []).map((x) => x.key)); const byKey = Object.fromEntries((p.checklist || []).map((x) => [x.key, x]));
+    const checklist = [...(pub.checklist || []).map((x) => ({ ...byKey[x.key], ...x, on: true })), ...(p.checklist || []).filter((x) => !keep.has(x.key)).map((x) => ({ ...x, on: false }))];
+    await db.update('dev_projects', { id: p.id }, { name: pub.name || p.name, summary: pub.summary || null, requirements: pub.requirements || null, certifications: pub.certifications || null, extra_fields: extraOf(pub), checklist, checklist_file: pub.ckfile || null, updated_at: now() });
+    const pubIds = new Set((pub.files || []).map((x) => x.id)); let hidden = 0;
+    for (const f of files) {
+      if (!f.internal && !pubIds.has(f.id)) { await db.update('dev_files', { id: f.id }, { internal: true }); hidden++; }
+      else if (f.internal && pubIds.has(f.id)) await db.update('dev_files', { id: f.id }, { internal: false });
+    }
+    flash(res, 'ok', `Draft discarded: back to v${p.current_version}.${hidden ? ` ${hidden} file${hidden === 1 ? '' : 's'} added since ${hidden === 1 ? 'was' : 'were'} set to Internal only.` : ''}`);
+    res.redirect(`/admin/projects/${p.id}?tab=spec`);
+  }));
+
+  // History: every version, who confirmed it, compare with the one before.
+  router.get('/admin/projects/:id/versions', G(async (req, res) => {
+    const p = await loadProject(req.params.id);
+    const [versions, invs, suppliers] = await Promise.all([db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc' }), db.list('dev_invitations', { filters: { project_id: p.id } }), db.list('suppliers', { select: 'id,name' })]);
+    const sname = Object.fromEntries(suppliers.map((x) => [x.id, x.name])); const act = activeInvs(invs);
+    const cmp = Number(req.query.cmp) || 0; const view = Number(req.query.view) || 0;
+    const vOf = (n) => versions.find((v) => v.version === n);
+    let detail = '';
+    if (cmp && vOf(cmp)) {
+      const a = stateOf(vOf(cmp - 1)); const b = stateOf(vOf(cmp)); const d = a && b ? CK.diffStates(a, b) : null;
+      detail = html`<section class="card"><h2 class="sec">v${cmp - 1} → v${cmp}</h2>${d ? (d.length ? chgList(d, 20) : html`<p class="d-empty">No differences in what suppliers see.</p>`) : html`<p class="d-empty">Published before the full history was kept: only the note is known.</p>`}</section>`;
+    } else if (view && vOf(view)) {
+      const st = stateOf(vOf(view));
+      detail = st ? html`<section class="card"><h2 class="sec">v${view} as suppliers saw it</h2>${specView(st)}</section>` : html`<section class="card"><p class="d-empty">Published before the full history was kept.</p></section>`;
+    }
+    const chips = (v) => (v.version === p.current_version
+      ? act.map((i) => html`<span class="${i.ack_version >= v.version ? '' : 'o'}">${sname[i.supplier_id] || 'Supplier'}${i.ack_version >= v.version ? ' ✓' : ` · on v${i.ack_version}`}</span>`)
+      : html`<span>${act.filter((i) => i.ack_version >= v.version).length} confirmed</span>`);
+    res.html(page({ title: `${p.name} · versions`, nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
+      body: html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><a href="/admin/projects/${p.id}?tab=spec">${p.name}</a></nav>
+      <div class="head-row"><div><h1>Spec versions</h1><ul class="pp-meta"><li>${p.ref}</li><li>Current v${p.current_version}</li></ul></div></div>
+      <section class="card vh">${versions.map((v) => html`<div class="vh-row${v.version === cmp || v.version === view ? ' cur' : ''}"><b>v${v.version}</b><span class="sub">${fmt.date(v.created_at)}</span><span>${v.change_note || ''}</span><span class="vh-chips">${act.length ? chips(v) : ''}</span>
+        <span class="vh-act"><a href="?view=${v.version}">View</a>${v.version > 1 && vOf(v.version - 1) ? html` · <a href="?cmp=${v.version}">Compare v${v.version - 1}</a>` : ''}</span></div>`)}</section>
+      ${detail}` }));
+  }));
+  // What a supplier sees right now (the published version), without logging in as one.
+  router.get('/admin/projects/:id/preview', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const pub = await published(p);
+    res.html(page({ title: `${p.name} · supplier view`, nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
+      body: html`<nav class="crumb"><a href="/admin/projects">Development</a><span>›</span><a href="/admin/projects/${p.id}?tab=spec">${p.name}</a></nav>
+      <div class="head-row"><div><h1>${pub.name}</h1><ul class="pp-meta"><li>${p.ref}</li><li>Spec v${p.current_version}</li><li>What suppliers see</li></ul></div></div>
+      <section class="card">${specView(pub)}</section>` }));
   }));
 
   router.post('/admin/projects/:id/publish', G(async (req, res) => {
     const p = await loadProject(req.params.id); const { fields: f } = await parseForm(req);
     const note = str(f.change_note, 500); if (!note) { flash(res, 'error', 'Describe what changed'); return res.redirect(`/admin/projects/${p.id}?tab=spec`); }
-    const v = p.current_version + 1;
-    await db.insert('dev_spec_versions', { project_id: p.id, version: v, change_note: note, snapshot: { summary: p.summary, requirements: p.requirements, certifications: p.certifications }, created_at: now() });
+    const v = p.current_version + 1; const state = CK.specState(p, await db.list('dev_files', { filters: { project_id: p.id }, order: 'created_at.asc' }));
+    await db.insert('dev_spec_versions', { project_id: p.id, version: v, change_note: note, snapshot: { summary: p.summary, requirements: p.requirements, certifications: p.certifications, state }, created_at: now() });
     await db.update('dev_projects', { id: p.id }, { current_version: v, updated_at: now() });
     let sent = 0;
     if (f.notify === '1') {
@@ -403,7 +581,7 @@ module.exports = function projectRoutes(router, { db, config }) {
   }));
 
   router.post('/admin/projects/:id/invite', G(async (req, res) => {
-    const p = await loadProject(req.params.id); const { fields: f } = await parseForm(req);
+    const p = await loadProject(req.params.id); const { fields: f } = await parseForm(req); await published(p);
     const ids = [].concat(f.supplier_ids || []).filter(Boolean); if (!ids.length) { flash(res, 'warn', 'Tick at least one supplier'); return res.redirect(`/admin/projects/${p.id}?tab=suppliers`); }
     const have = new Set((await db.list('dev_invitations', { filters: { project_id: p.id } })).map((i) => i.supplier_id)); let n = 0; let mailed = 0;
     for (const sid of ids) {
@@ -436,9 +614,13 @@ module.exports = function projectRoutes(router, { db, config }) {
         <form method="post" enctype="multipart/form-data" action="/admin/projects/${p.id}/suppliers/${inv.id}/message" class="fields mt" data-rpane="reply" ${req.query.log ? raw('hidden') : ''}><div class="ad-bar"><button type="button" class="btn small ghost ad-open" data-ad-open>✦ Draft with AI</button><span class="sub">Follow up, ask for a quote, sample, files or a timeline — you check the email first</span></div>
           <label class="frow top"><span>Reply</span><textarea name="body" rows="4" required data-reply-body placeholder="Ask for more information or answer a question. The supplier is emailed."></textarea></label>
           <label class="frow"><span>Attach</span>${multiFile('files')}</label><label class="chk"><input type="checkbox" name="notify" value="1" checked> Email the supplier</label><div class="form-actions"><button class="btn">Send</button></div></form></section>
-        <aside class="dp-side"><section class="card em-addr"><h2 class="sec">Follow up by email</h2><p class="sub">One mailbox for all projects. This conversation is found by the code in the subject, so keep it when you reply or write.</p><div class="em-copy"><span class="em-k">Code</span><code>[${DE.threadCode(p, inv)}]</code><button type="button" class="btn small ghost" data-copy-text="[${DE.threadCode(p, inv)}]">Copy</button></div><div class="em-copy"><span class="em-k">CC</span><code>${DE.threadAddress()}</code><button type="button" class="btn small ghost" data-copy-text="${DE.threadAddress()}">Copy</button></div><p class="sub">Supplier replies come here automatically. When you email the supplier from Outlook, CC the mailbox and put the code in the subject. Each email is summarised by AI and posted here with name and time.</p></section><section class="card"><div class="head-row"><h2 class="sec">Samples</h2><a class="btn small" href="/admin/samples/new?invitation=${inv.id}">+ Request sample</a></div>${smps.length ? html`<ul class="smp-mini">${smps.map((x) => html`<li><a href="/admin/samples/${x.id}">${x.ref}${x.stage ? ` · ${x.stage}` : ''}</a><span class="stp ${require('../samples').pillCls(x.status)}"><i></i>${x.status}</span></li>`)}</ul>` : html`<p class="muted small">No samples yet.</p>`}</section><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
+        <aside class="dp-side">${docsCard(p, inv, await published(p))}<section class="card em-addr"><h2 class="sec">Follow up by email</h2><p class="sub">One mailbox for all projects. This conversation is found by the code in the subject, so keep it when you reply or write.</p><div class="em-copy"><span class="em-k">Code</span><code>[${DE.threadCode(p, inv)}]</code><button type="button" class="btn small ghost" data-copy-text="[${DE.threadCode(p, inv)}]">Copy</button></div><div class="em-copy"><span class="em-k">CC</span><code>${DE.threadAddress()}</code><button type="button" class="btn small ghost" data-copy-text="${DE.threadAddress()}">Copy</button></div><p class="sub">Supplier replies come here automatically. When you email the supplier from Outlook, CC the mailbox and put the code in the subject. Each email is summarised by AI and posted here with name and time.</p></section><section class="card"><div class="head-row"><h2 class="sec">Samples</h2><a class="btn small" href="/admin/samples/new?invitation=${inv.id}">+ Request sample</a></div>${smps.length ? html`<ul class="smp-mini">${smps.map((x) => html`<li><a href="/admin/samples/${x.id}">${x.ref}${x.stage ? ` · ${x.stage}` : ''}</a><span class="stp ${require('../samples').pillCls(x.status)}"><i></i>${x.status}</span></li>`)}</ul>` : html`<p class="muted small">No samples yet.</p>`}</section><section class="card"><h2 class="sec">Latest quote${quotes[0] ? html` <span class="sub">rev ${quotes[0].revision} · ${fmt.date(quotes[0].created_at)}${quotes[0].spec_version < p.current_version ? ` · on spec v${quotes[0].spec_version}` : ''}</span>` : ''}</h2>${quoteCards(quotes[0], p, { admin: true })}${quotes[0] ? attLinks(quotes[0].attachments, (i) => `/admin/dev-files/quote/${quotes[0].id}/${i}`) : ''}
           ${quotes.length > 1 ? html`<details class="fold mt"><summary><b>Earlier revisions (${quotes.length - 1})</b></summary>${quotes.slice(1).map((q) => html`<h3 class="sec2">Rev ${q.revision} · ${fmt.date(q.created_at)}</h3>${quoteCards(q, p, { admin: true })}`)}</details>` : ''}</section></aside></div>`,
     }));
+  }));
+  router.get('/admin/projects/:id/suppliers/:invId/docs/:key/:idx', G(async (req, res) => {
+    const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId); const f = inv.doc_answers?.[req.params.key]?.files?.[Number(req.params.idx)];
+    if (!f) throw new HttpError(404, 'File not found'); serve(res, await db.docs.download(f.path), f.name, f.mime, req.query.inline === '1');
   }));
   router.post('/admin/projects/:id/suppliers/:invId/status', G(async (req, res) => {
     const p = await loadProject(req.params.id); const inv = await loadInv(p.id, req.params.invId); const { fields: f } = await parseForm(req);
@@ -556,6 +738,49 @@ module.exports = function projectRoutes(router, { db, config }) {
   const nav = () => require('./supplier').nav('projects');
   const ndaGate = (p, inv) => p.nda_required && !inv.nda_accepted_at;
 
+  // Documents Lulyboo needs: for each one Available (upload) · By a date · Not available, plus a comment.
+  // Factory checklist in the portal: sections → questions; files are uploaded next to their question.
+  const PREFILL = { Factory_Name: (c) => c.supplier?.name, Contact_Name: (c) => c.user?.name, Contact_Email: (c) => c.user?.email || c.supplier?.email, Product_Name: (c) => c.pub?.name, Product_Category: (c) => c.category };
+  const shortOpts = (it) => it.options.length <= 5 && it.options.every((o) => CK.optLabel(o).length <= 16);
+  function portalChecklist(inv, p, pub, ds, locked, ctx) {
+    if (!ds.rows.length) return '';
+    const base = `/portal/projects/${inv.id}/docs`; const furl = (r, n) => `${base}/${r.key}/${n}`;
+    const reqT = (r) => html`<span class="rq rq-${r.req}">${r.req === 'required' ? t('Required', '必填') : r.req_label}</span>`;
+    const answer = (r) => {
+      const a = r.a || {}; const k = r.key;
+      if (locked) return html`<div class="q-ans"><span>${r.done ? CK.answerText(r, r.a) : t('Not answered', '未回复')}</span>${r.type === 'file' ? fileLinks(r, furl) : ''}</div>`;
+      if (r.type === 'file') {
+        const opts = Object.entries(CK.FILE_ANS).filter(([x]) => x !== 'na' || r.req !== 'required');
+        return html`<div class="q-ans dk-ans">
+          ${r.files.length ? html`<ul class="dk-files">${r.files.map((f, n) => html`<li>${fileLinks({ ...r, files: [f] }, () => furl(r, n))}<button class="link danger" formaction="${base}/${k}/${n}/remove" formnovalidate>${t('Remove', '删除')}</button></li>`)}</ul>` : ''}
+          <div class="seg dk-seg" role="radiogroup" aria-label="${r.name}">${opts.map(([x, l]) => html`<label><input type="radio" name="st_${k}" value="${x}" ${a.status === x ? raw('checked') : ''}><span>${x === 'yes' ? t('Upload', '上传') : x === 'na' ? t('N/A', '不适用') : x === 'date' ? t('By date', '预计日期') : t(...l)}</span></label>`)}</div>
+          <div class="dk-more"><input type="file" name="file_${k}" multiple class="dk-up" accept="${FILE_ACCEPT}" aria-label="Upload"><input type="date" name="dt_${k}" class="dk-date" value="${a.date || ''}" aria-label="Date"></div></div>`;
+      }
+      const details = html`<details class="q-more" ${a.details ? raw('open') : ''}><summary>${t('+ Details', '+ 说明')}</summary><input name="d_${k}" maxlength="500" value="${a.details || ''}" placeholder="Details, or what “Other” means · 说明"></details>`;
+      if (r.type === 'multi') {
+        const vals = new Set(Array.isArray(a.value) ? a.value : []);
+        return html`<div class="q-ans"><div class="q-chips">${r.options.map((o) => html`<label class="q-chip"><input type="checkbox" name="v_${k}" value="${o}" ${vals.has(o) ? raw('checked') : ''}><span>${CK.optLabel(o)}</span></label>`)}</div>${details}</div>`;
+      }
+      if (r.type === 'choice') {
+        let v = a.value; if (v === undefined && PREFILL[k]) { const pv = PREFILL[k](ctx); v = r.options.find((o) => o.trim().toLowerCase() === String(pv || '').trim().toLowerCase()); }
+        return html`<div class="q-ans">${shortOpts(r)
+          ? html`<div class="seg q-seg" role="radiogroup" aria-label="${r.name}">${r.options.map((o) => html`<label><input type="radio" name="v_${k}" value="${o}" ${v === o ? raw('checked') : ''}><span>${CK.optLabel(o)}</span></label>`)}</div>`
+          : ddSel(`v_${k}`, v || '', [['', 'Choose…'], ...r.options.map((o) => [o, CK.optLabel(o)])])}${details}</div>`;
+      }
+      const v = a.value ?? (PREFILL[k] ? PREFILL[k](ctx) || '' : '');
+      return html`<div class="q-ans"><input name="v_${k}" maxlength="1000" value="${a.na ? '' : v}" placeholder="${r.hint || ''}" aria-label="${r.name}">${r.req !== 'required' ? html`<label class="chk small"><input type="checkbox" name="na_${k}" value="1" ${a.na ? raw('checked') : ''}> ${t('Not applicable', '不适用')}</label>` : ''}</div>`;
+    };
+    const firstOpen = ds.sections.findIndex((s) => s.rows.some((r) => r.req === 'required' && !r.done));
+    return html`<section class="card" id="docs"><div class="sec-row"><h2 class="sec">${t('Factory checklist', '工厂清单')} <span class="count">${ds.done} / ${ds.total}</span></h2>
+        ${pub.ckfile ? html`<a class="btn ghost small" href="/portal/projects/${inv.id}/checklist-file" download>${t('Download Excel', '下载 Excel')}</a>` : ''}</div>
+      <div class="q-bar"><i style="width:${Math.round((ds.done / Math.max(1, ds.total)) * 100)}%"></i></div>
+      <p class="sub">${ds.reqLeft.length ? t(`${ds.reqLeft.length} required questions left. Answer them to submit your quote. Attach photos, test reports and certificates right next to their question.`, `还有 ${ds.reqLeft.length} 个必填问题。回答后才能提交报价。照片、测试报告和证书请在对应问题旁上传。`) : t('All required questions are answered. You can add the rest any time.', '必填问题已全部回答，其余问题可随时补充。')}</p>
+      <form method="post" enctype="multipart/form-data" action="${base}" class="qform" data-guard>
+        ${ds.sections.map((s, n) => { const left = s.rows.filter((r) => r.req === 'required' && !r.done).length; return html`<details class="q-sec" ${n === (firstOpen < 0 ? 0 : firstOpen) ? raw('open') : ''}><summary><b>${s.title}</b><span class="q-cnt ${left ? 'neg' : s.done === s.rows.length ? 'pos' : ''}">${s.done} / ${s.rows.length}${left ? html` · ${left} ${t('required', '必填')}` : s.done === s.rows.length ? ' ✓' : ''}</span></summary>
+          ${s.rows.map((r) => html`<div class="q ${r.done ? 'done' : ''}"><div class="q-l"><b>${r.name}</b> ${reqT(r)}${r.hint && r.type !== 'text' ? html`<span class="sub">${r.hint}</span>` : ''}</div>${answer(r)}</div>`)}</details>`; })}
+        ${locked ? '' : html`<div class="form-actions q-save"><button class="btn">${t('Save answers', '保存回答')}</button><span class="dirty-note" data-dirty-note hidden>${t('Unsaved changes', '有未保存的更改')}</span></div>`}</form></section>`;
+  }
+
   router.get('/portal/projects', A(async (req, res) => {
     const invs = (await db.list('dev_invitations', { filters: { supplier_id: req.supplier.id }, order: 'created_at.desc' })).filter((i) => i.status !== 'Closed');
     const projects = Object.fromEntries((await db.list('dev_projects')).filter((p) => invs.some((i) => i.project_id === p.id)).map((p) => [p.id, p]));
@@ -577,22 +802,25 @@ module.exports = function projectRoutes(router, { db, config }) {
     }
     if (!inv.viewed_at) { await db.update('dev_invitations', { id: inv.id }, { viewed_at: now(), status: inv.status === 'Invited' ? 'Viewed' : inv.status }); if (req.navBadges) req.navBadges['/portal/projects'] = Math.max(0, (req.navBadges['/portal/projects'] || 1) - 1); }
     const [files, versions, msgs, quotes] = await Promise.all([db.list('dev_files', { filters: { project_id: p.id }, order: 'created_at.asc' }), db.list('dev_spec_versions', { filters: { project_id: p.id }, order: 'version.desc' }), db.list('dev_messages', { filters: { invitation_id: inv.id }, order: 'created_at.asc' }), db.list('dev_quotes', { filters: { invitation_id: inv.id }, order: 'revision.desc' })]);
-    const vis = files.filter((x) => !x.internal); const supTitles = P.fileTitles(vis, true); const q = quotes[0]; const locked = ['Declined', 'Selected', 'Closed'].includes(inv.status);
+    const pub = await published(p, files); const pubIds = new Set((pub.files || []).map((x) => x.id));
+    const vis = files.filter((x) => pubIds.has(x.id)); const supTitles = P.fileTitles(vis, true); const q = quotes[0]; const locked = ['Declined', 'Selected', 'Closed'].includes(inv.status);
+    const ds = CK.docStatus(pub.checklist, inv.doc_answers); const gate = !locked && ds.quoteOpen.length > 0;
     const needAck = inv.ack_version < p.current_version;
     const val = (k) => (q ? q[k] ?? '' : '');
     res.html(page({ title: p.name, nav: nav(), flash: takeFlash(req, res), req, wide: true,
       body: html`<nav class="crumb"><a href="/portal/projects">${t('Development projects', '开发项目')}</a></nav>
-      <div class="head-row"><div><h1>${p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li>${t('Spec', '规格')} v${p.current_version}</li><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li></ul></div></div>
+      <div class="head-row"><div><h1>${pub.name || p.name}</h1><ul class="pp-meta"><li>${p.ref}</li>${p.category ? html`<li>${p.category}</li>` : ''}<li>${t('Spec', '规格')} v${p.current_version}</li><li><span class="pill ${pillCls(inv.status)}">${inv.status}</span></li></ul></div></div>
       ${needAck ? html`<div class="flash warn"><b>${t(`The specification was updated to v${p.current_version}.`, `规格已更新至 v${p.current_version}。`)}</b> ${versions[0]?.change_note || ''}
         <form method="post" action="/portal/projects/${inv.id}/ack" class="inline"><button class="btn small">${t('I have reviewed it', '我已查看')}</button></form></div>` : ''}
       ${inv.message ? html`<div class="notice info"><b>${t('Message from Lulyboo', '来自 Lulyboo 的留言')}</b><p>${inv.message}</p></div>` : ''}
       <div class="dp-thread">
         <div class="dp-main">
-          <section class="card"><h2 class="sec">${t('Specification', '规格要求')}</h2>${p.summary ? html`<p class="pd-desc">${p.summary}</p>` : ''}
-            ${p.requirements ? html`<h3 class="sec2">${t('Requirements', '要求')}</h3><p class="pd-desc pre">${p.requirements}</p>` : ''}
-            ${p.certifications ? html`<h3 class="sec2">${t('Certifications / standards', '认证 / 标准')}</h3><p class="pd-desc pre">${p.certifications}</p>` : ''}
+          <section class="card"><h2 class="sec">${t('Specification', '规格要求')}</h2>${pub.summary ? html`<p class="pd-desc">${pub.summary}</p>` : ''}
+            ${pub.requirements ? html`<h3 class="sec2">${t('Requirements', '要求')}</h3><p class="pd-desc pre">${pub.requirements}</p>` : ''}
+            ${pub.certifications ? html`<h3 class="sec2">${t('Certifications / standards', '认证 / 标准')}</h3><p class="pd-desc pre">${pub.certifications}</p>` : ''}
             ${versions.length > 1 ? html`<details class="fold mt"><summary><b>${t('Change history', '变更记录')}</b></summary><ul class="feed">${versions.map((v) => html`<li><span class="date">${fmt.date(v.created_at)}</span><b>v${v.version}</b> ${v.change_note || ''}</li>`)}</ul></details>` : ''}</section>
           <section class="card"><h2 class="sec">${t('Files', '文件')} <span class="count">${vis.length}</span></h2>${vis.length ? html`<ul class="fl">${vis.map((f) => html`<li class="fl-row"><div class="fl-thumb">${THUMB_OK.test(f.name) ? html`<button type="button" class="fl-thumb-btn" data-preview="/portal/projects/${inv.id}/files/${f.id}?inline=1" data-type="image" data-dl="/portal/projects/${inv.id}/files/${f.id}" aria-label="Preview"><img src="/portal/projects/${inv.id}/files/${f.id}?inline=1" alt="" loading="lazy"></button>` : html`<span aria-hidden="true">${kindIcon(f.kind)}</span>`}</div><div class="fl-main"><div class="fl-title">${supTitles.get(f.id)}${f.controlling ? html` <span class="pill s-selected">${t('Controlling drawing', '主图纸')}</span>` : ''}</div><div class="fl-meta">${t(P.FILE_KINDS[f.kind] || f.kind, P.FILE_KINDS_ZH[f.kind] || f.kind)} · ${P.extOf(f.name).slice(1).toUpperCase()} · ${bytes(f.bytes)} · v${f.version}</div></div><div class="fl-act">${P.INLINE_OK.test(f.name) ? html`<button type="button" class="ic-btn" data-preview="/portal/projects/${inv.id}/files/${f.id}?inline=1" data-type="${THUMB_OK.test(f.name) ? 'image' : 'doc'}" data-dl="/portal/projects/${inv.id}/files/${f.id}" title="Preview · 预览" aria-label="Preview">${icon('eye', 18)}</button>` : ''}<a class="ic-btn" href="/portal/projects/${inv.id}/files/${f.id}" title="Download · 下载" aria-label="Download">${icon('download', 18)}</a></div></li>`)}</ul>` : html`<p class="d-empty">${t('No files yet.', '暂无文件。')}</p>`}</section>
+          ${portalChecklist(inv, p, pub, ds, locked, { supplier: req.supplier, user: req.user, pub, category: p.category })}
           <section class="card"><h2 class="sec">${t('Questions & answers', '问答')}</h2>
             <div class="msgs">${msgs.length ? msgs.map((x) => html`<article class="msg ${x.direction}"><header><b>${x.direction === 'supplier' ? (['email', 'manual'].includes(x.source) ? x.author || t('You', '您') : t('You', '您')) : 'Lulyboo'}</b>${when(x.created_at)}${x.source === 'email' ? html`<span class="via-email">✉ ${t('email', '邮件')}</span>` : ''}${via(x) ? html`<span class="via-email">${via(x)[2]} ${t(via(x)[0], via(x)[1])}</span>` : ''}</header><p>${['email', 'manual'].includes(x.source) && x.email?.text ? x.email.text : x.body}</p>${attLinks(x.attachments, (i) => `/portal/projects/${inv.id}/att/${x.id}/${i}`)}</article>`) : html`<p class="d-empty">${t('Ask Lulyboo anything that is unclear.', '如有不清楚之处，请随时向 Lulyboo 提问。')}</p>`}</div>
             ${locked ? '' : html`<form method="post" enctype="multipart/form-data" action="/portal/projects/${inv.id}/message" class="fields mt"><label class="frow top"><span>${t('Message', '留言')}</span><textarea name="body" rows="3" required></textarea></label><label class="frow"><span>${t('Attach', '附件')}</span>${multiFile('files')}</label><div class="form-actions"><button class="btn">${t('Send', '发送')}</button></div></form>`}</section>
@@ -600,7 +828,8 @@ module.exports = function projectRoutes(router, { db, config }) {
         <aside class="dp-side"><section class="card" id="quote"><h2 class="sec">${t('Your quote', '您的报价')}${q ? html` <span class="sub">rev ${q.revision} · ${fmt.date(q.created_at)}</span>` : ''}</h2>
           ${q ? quoteCards(q, p) : ''}${q ? attLinks(q.attachments, (i) => `/portal/projects/${inv.id}/quote-att/${q.id}/${i}`) : ''}
           ${locked ? html`<p class="muted">${inv.status === 'Declined' ? t('You declined this project.', '您已婉拒此项目。') : t('This project is closed for new quotes.', '此项目已不再接受新报价。')}</p>` : html`
-          <details class="fold mt" ${q ? '' : raw('open')}><summary><b>${q ? t('Submit a revised quote', '提交修订报价') : t('Submit your quote', '提交报价')}</b></summary>
+          ${gate ? html`<div class="notice warn mt"><b>${t('Factory checklist first', '请先完成工厂清单')}</b><p>${t(`Answer the ${ds.reqLeft.length} required checklist questions before you quote:`, `报价前请回答 ${ds.reqLeft.length} 个必填问题：`)} ${ds.reqLeft.slice(0, 5).map((r) => r.name).join(', ')}${ds.reqLeft.length > 5 ? ' …' : ''}. <a href="#docs">${t('Go to the checklist', '前往清单')}</a></p></div>` : ''}
+          <details class="fold mt" ${q || gate ? '' : raw('open')}><summary><b>${q ? t('Submit a revised quote', '提交修订报价') : t('Submit your quote', '提交报价')}</b></summary>
             <form method="post" enctype="multipart/form-data" action="/portal/projects/${inv.id}/quote" class="fields q-form">
               <div class="q-row"><label><span class="lbl">${t('Currency', '币种')}</span><select name="currency">${F.CURRENCIES.map((c) => html`<option ${c === (q?.currency || 'USD') ? raw('selected') : ''}>${c}</option>`)}</select></label>
                 <label><span class="lbl">${t('Incoterm', '贸易术语')}</span><select name="incoterm">${F.INCOTERMS.map((c) => html`<option ${c === (q?.incoterm || 'FOB') ? raw('selected') : ''}>${c}</option>`)}</select></label></div>
@@ -611,10 +840,10 @@ module.exports = function projectRoutes(router, { db, config }) {
               <div class="q-row"><label><span class="lbl">${t('Sample cost', '样品费')}</span><span class="inp-unit"><input name="sample_cost" type="number" min="0" step="0.01" value="${val('sample_cost')}"></span></label><label><span class="lbl">${t('Sample lead time', '样品周期')}</span><span class="inp-unit"><input name="sample_lead_days" type="number" min="0" value="${val('sample_lead_days')}"><i>${t('days', '天')}</i></span></label></div>
               <div class="q-row"><label><span class="lbl">${t('Quote valid until', '报价有效期至')}</span><input type="date" name="validity_date" value="${val('validity_date')}"></label><label><span class="lbl">${t('Payment terms', '付款条款')}</span><input name="payment_terms" value="${val('payment_terms')}" placeholder="30% deposit, 70% before shipment"></label></div>
               <label><span class="lbl">${t('Material quoted', '报价所用材质')}</span><input name="material_notes" value="${val('material_notes')}"></label>
-              ${(p.extra_fields || []).map((x) => html`<label><span class="lbl">${x.label}</span><input name="x_${x.key}" value="${(q?.custom || []).find((c) => c.label === x.label)?.value || ''}"></label>`)}
+              ${extraOf(pub).map((x) => html`<label><span class="lbl">${x.label}</span><input name="x_${x.key}" value="${(q?.custom || []).find((c) => c.label === x.label)?.value || ''}"></label>`)}
               <label><span class="lbl">${t('Notes, assumptions, suggested changes (DFM)', '备注、假设、改进建议（DFM）')}</span><textarea name="notes" rows="4">${val('notes')}</textarea></label>
               <label><span class="lbl">${t('Attach your own quotation or files', '附上您自己的报价单或文件')}</span>${multiFile('files')}</label>
-              <div class="form-actions"><button class="btn">${q ? t('Submit revised quote', '提交修订报价') : t('Submit quote', '提交报价')}</button></div></form></details>
+              <div class="form-actions"><button class="btn" ${gate ? raw('disabled') : ''}>${q ? t('Submit revised quote', '提交修订报价') : t('Submit quote', '提交报价')}</button></div></form></details>
           <form method="post" action="/portal/projects/${inv.id}/decline" class="mt"${confirmAttr('Decline this project? Lulyboo will be told you will not quote.', '婉拒此项目？Lulyboo 将收到您不报价的通知。')}><button class="link danger">${t('Decline this project', '婉拒此项目')}</button></form>`}</section></aside></div>` }));
   }));
 
@@ -639,7 +868,8 @@ module.exports = function projectRoutes(router, { db, config }) {
 
   router.get('/portal/projects/:invId/files/:fid', A(async (req, res) => {
     const { inv, p } = await ownInv(req); if (ndaGate(p, inv)) throw new HttpError(403, NA);
-    const f = await db.get('dev_files', req.params.fid); if (!f || f.project_id !== p.id || f.internal) throw new HttpError(404, NA);
+    const f = await db.get('dev_files', req.params.fid); const pub = f && f.project_id === p.id ? await published(p) : null;
+    if (!f || !pub || !(pub.files || []).some((x) => x.id === f.id)) throw new HttpError(404, NA);
     serve(res, await db.docs.download(f.path), f.name, f.mime, req.query.inline === '1');
   }));
   router.get('/portal/projects/:invId/att/:msgId/:idx', A(async (req, res) => {
@@ -665,17 +895,73 @@ module.exports = function projectRoutes(router, { db, config }) {
   router.post('/portal/projects/:invId/quote', A(async (req, res) => {
     const { inv, p } = await ownInv(req); if (ndaGate(p, inv) || ['Declined', 'Selected', 'Closed'].includes(inv.status)) throw new HttpError(403, NA);
     const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 5 });
+    const pub = await published(p); const open = CK.docStatus(pub.checklist, inv.doc_answers).quoteOpen;
+    if (open.length) { flash(res, 'error', m(`Answer the ${open.length} required checklist questions first: ${open.slice(0, 5).map((r) => r.name).join(', ')}${open.length > 5 ? ' …' : ''}`, `请先回答 ${open.length} 个必填问题：${open.slice(0, 5).map((r) => r.name).join('、')}`)); return toDetail(res, inv.id); }
     const tiers = [0, 1, 2].map((n) => ({ qty: int(f[`qty${n}`]), price: num(f[`price${n}`]) })).filter((x) => x.qty && x.price !== null && x.price >= 0);
     if (!tiers.length) { flash(res, 'error', m('Enter at least one quantity and unit price', '请至少填写一个数量及单价')); return toDetail(res, inv.id); }
     const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
     const prev = await latestQuote(inv.id);
-    const custom = (p.extra_fields || []).map((x) => ({ label: x.label, value: str(f[`x_${x.key}`], 500) })).filter((c) => c.value);
+    const custom = extraOf(pub).map((x) => ({ label: x.label, value: str(f[`x_${x.key}`], 500) })).filter((c) => c.value);
     await db.insert('dev_quotes', { invitation_id: inv.id, revision: (prev?.revision || 0) + 1, spec_version: p.current_version, currency: F.CURRENCIES.includes(f.currency) ? f.currency : 'USD', incoterm: F.INCOTERMS.includes(f.incoterm) ? f.incoterm : null, tiers,
       tooling_cost: num(f.tooling_cost), tooling_lead_days: int(f.tooling_lead_days), moq: int(f.moq), sample_cost: num(f.sample_cost), sample_lead_days: int(f.sample_lead_days), production_lead_days: int(f.production_lead_days),
       validity_date: /^\d{4}-\d{2}-\d{2}$/.test(f.validity_date || '') ? f.validity_date : null, payment_terms: str(f.payment_terms, 300), material_notes: str(f.material_notes, 300), custom, notes: str(f.notes, 4000), attachments: r.saved.length ? r.saved : (prev?.attachments || []), created_at: now() });
     await db.update('dev_invitations', { id: inv.id }, { status: inv.status === 'Sample' ? 'Sample' : 'Quoted', ack_version: p.current_version, updated_at: now() });
     await notifyAdmin(p, inv, prev ? `submitted a revised quote (rev ${prev.revision + 1})` : 'submitted a quote', `Unit price ${tiers[0].price} ${f.currency || 'USD'} at ${tiers[0].qty}+ pcs`, { label: 'Quote', button: 'Review the quote' });
     flash(res, r.errors.length ? 'warn' : 'ok', m('Quote submitted. Thank you!', '报价已提交，谢谢！') + (r.errors.length ? ' · ' + r.errors.join(' · ') : '')); toDetail(res, inv.id);
+  }));
+  router.post('/portal/projects/:invId/docs', A(async (req, res) => {
+    const { inv, p } = await ownInv(req); if (ndaGate(p, inv) || ['Declined', 'Selected', 'Closed'].includes(inv.status)) throw new HttpError(403, NA);
+    const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 10 });
+    const pub = await published(p); const ans = { ...(inv.doc_answers || {}) }; const errors = []; let changed = 0;
+    const same = (a, b) => JSON.stringify({ ...(a || {}), at: 0 }) === JSON.stringify({ ...(b || {}), at: 0 });
+    for (const it of CK.normItems(pub.checklist)) {
+      const k = it.key; const prev = ans[k] || null; let next = null;
+      if (it.type === 'file') {
+        const up = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, `file_${k}`), maxBytes }); errors.push(...up.errors);
+        const st = f[`st_${k}`]; const status = Object.keys(CK.FILE_ANS).includes(st) ? st : (up.saved.length ? 'yes' : prev?.status || null);
+        if (!status) continue;
+        const day = String(f[`dt_${k}`] || '');
+        next = { status, date: status === 'date' ? (/^\d{4}-\d{2}-\d{2}$/.test(day) ? day : prev?.date || null) : null,
+          files: [...(prev?.files || []), ...up.saved.map((x) => ({ name: x.name, path: x.path, size: x.size, mime: x.mime, at: now() }))] };
+      } else {
+        if (!(`v_${k}` in f) && !(`na_${k}` in f) && !(`d_${k}` in f)) continue; // question not on the form
+        const details = str(f[`d_${k}`], 500);
+        if (it.type === 'multi') { const v = [].concat(f[`v_${k}`] || []).filter((x) => it.options.includes(x)); next = v.length || details ? { value: v, details } : null; }
+        else if (it.type === 'choice') { const v = it.options.includes(f[`v_${k}`]) ? f[`v_${k}`] : null; next = v || details ? { value: v, details } : null; }
+        else if (f[`na_${k}`] === '1' && it.req !== 'required') next = { value: null, na: true };
+        else { const v = str(f[`v_${k}`], 1000); next = v ? { value: v } : null; }
+      }
+      if (!next) { if (prev && it.type !== 'file') { delete ans[k]; changed++; } continue; }
+      if (!same(prev, next)) { ans[k] = { ...next, at: now() }; changed++; }
+    }
+    if (changed) {
+      await db.update('dev_invitations', { id: inv.id }, { doc_answers: ans, updated_at: now() });
+      const st = CK.docStatus(pub.checklist, ans);
+      await notifyAdmin(p, inv, 'updated the factory checklist', `Answered ${CK.readinessText(st)}`, { label: 'Factory checklist', button: 'Open supplier thread' });
+    }
+    const noDate = CK.normItems(pub.checklist).filter((it) => ans[it.key]?.status === 'date' && !ans[it.key].date).map((it) => it.name);
+    const left = CK.docStatus(pub.checklist, ans).reqLeft.length;
+    flash(res, errors.length || noDate.length ? 'warn' : 'ok', (changed ? m('Answers saved', '回答已保存') : m('Nothing changed', '没有更改')) + (left ? ` · ${m(`${left} required questions left`, `还有 ${left} 个必填问题`)}` : '') + (noDate.length ? ` · ${m(`Add the date for: ${noDate.join(', ')}`, `请填写日期：${noDate.join('、')}`)}` : '') + (errors.length ? ` · ${errors.join(' · ')}` : ''));
+    res.redirect(`/portal/projects/${inv.id}#docs`);
+  }));
+  router.post('/portal/projects/:invId/docs/:key/:idx/remove', A(async (req, res) => {
+    const { inv, p } = await ownInv(req); if (ndaGate(p, inv) || ['Declined', 'Selected', 'Closed'].includes(inv.status)) throw new HttpError(403, NA);
+    const a = inv.doc_answers?.[req.params.key]; const n = Number(req.params.idx); const f = a?.files?.[n];
+    if (f) {
+      const files = a.files.filter((_, i) => i !== n); const next = { ...a, files, at: now() };
+      await db.update('dev_invitations', { id: inv.id }, { doc_answers: { ...inv.doc_answers, [req.params.key]: next }, updated_at: now() });
+      await db.docs.remove([f.path]).catch(() => {}); flash(res, 'ok', m('File removed', '文件已删除'));
+    }
+    res.redirect(`/portal/projects/${inv.id}#docs`);
+  }));
+  router.get('/portal/projects/:invId/docs/:key/:idx', A(async (req, res) => {
+    const { inv } = await ownInv(req); const f = inv.doc_answers?.[req.params.key]?.files?.[Number(req.params.idx)];
+    if (!f) throw new HttpError(404, NA); serve(res, await db.docs.download(f.path), f.name, f.mime, req.query.inline === '1');
+  }));
+  router.get('/portal/projects/:invId/checklist-file', A(async (req, res) => {
+    const { inv, p } = await ownInv(req); if (ndaGate(p, inv)) throw new HttpError(403, NA);
+    const pub = await published(p); if (!pub.ckfile?.path) throw new HttpError(404, NA);
+    serveCk(res, await db.docs.download(pub.ckfile.path), pub.ckfile, req.query.inline === '1');
   }));
   router.post('/portal/projects/:invId/decline', A(async (req, res) => {
     const { inv, p } = await ownInv(req); await db.update('dev_invitations', { id: inv.id }, { status: 'Declined', updated_at: now() });

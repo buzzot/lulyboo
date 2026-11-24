@@ -5080,3 +5080,106 @@ test('Development role: edits Development and Samples, reads Products; suppliers
   // the owner still sees everything
   assert.match((await req(base, 'GET', `/admin/products/${p.id}`, { cookie: owner })).text, /Landed estimate/);
 });
+
+test('Development: factory checklist Excel → category → project; supplier answers gate the quote; spec drafts, publish, discard, history', async (t) => {
+  const { hashPassword } = require('../src/auth');
+  const CK = require('../src/checklists');
+  const { zip } = require('../src/lib/zip');
+  const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const col = 'ABCDEFGH';
+  const mkXlsx = (title, rows, lists) => {
+    const sheetRows = [[title], ['Factory instructions …'], [], ['Section', 'Question / Field', 'Factory Answer', 'Details', 'Link', 'AI Field Name', 'Required?', 'Accepted Options / Instructions'], ...rows]
+      .map((r, i) => `<row r="${i + 1}">${r.map((v, c) => (v === '' || v == null ? '' : `<c r="${col[c]}${i + 1}" t="inlineStr"><is><t>${esc(v)}</t></is></c>`)).join('')}</row>`).join('');
+    const dv = lists.map(([ref, opts]) => `<dataValidation type="list" allowBlank="1" sqref="${ref}"><formula1>"${esc(opts)}"</formula1></dataValidation>`).join('');
+    return zip([
+      { name: 'xl/workbook.xml', data: Buffer.from('<workbook xmlns:r="r"><sheets><sheet name="Pet Bowls" sheetId="1" r:id="rId1"/></sheets></workbook>') },
+      { name: 'xl/_rels/workbook.xml.rels', data: Buffer.from('<Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>') },
+      { name: 'xl/worksheets/sheet1.xml', data: Buffer.from(`<worksheet><sheetData>${sheetRows}</sheetData><dataValidations count="${lists.length}">${dv}</dataValidations></worksheet>`) },
+    ], { paths: true });
+  };
+  const ATT = 'Yes / No. Attach the actual file(s) to the email or task you send us — Excel cannot hold files.';
+  const rows1 = [
+    ['FACTORY INFORMATION'], ['FACTORY INFORMATION', 'Factory Name', '', '', '', 'Factory_Name', 'Required', 'Text'],
+    ['PRODUCT ASSETS REQUIRED', 'Product images (front / back / side / top) provided?', '', '', '', 'Product_Images', 'Required', ATT],
+    ['MATERIAL & SAFETY', 'BPA-Free', '', '', '', 'BPA_Free', 'Required', 'Yes / No / Unknown / Other - specify in Details'],
+    ['MATERIAL & SAFETY', 'Certifications Available', '', '', '', 'Certifications_Available', 'Required', 'FDA / LFGB / CPSIA / None available / Other - specify in Details'],
+    ['PRODUCT SIZE, WEIGHT & CAPACITY', 'Capacity', '', '', '', 'Capacity', 'Required if applicable', 'Use ml / oz / liters as applicable'],
+    ['PRICING, MOQ & LEAD TIME', 'MOQ', '', '', '', 'MOQ', 'Required', 'Minimum Order Quantity'],
+    ['CATEGORY MODULE - PET BOWLS', 'Non-slip base?', '', '', '', 'Non_Slip', 'Preferred', 'Yes / No / Other - specify in Details'],
+  ];
+  const lists = [['C7', 'Yes,No,Unknown,Other - specify in Details'], ['C5', 'Size,sides']];
+  const x1 = mkXlsx('Factory Checklist - Pet Bowls', rows1, lists);
+  const parsed = CK.parseFactoryChecklist(x1, 'Factory Checklist - Pet Bowls.xlsx');
+  assert.equal(parsed.category, 'Pet Bowls'); assert.equal(parsed.items.length, 6); assert.deepEqual(parsed.skipped, ['MOQ']);
+  const by = Object.fromEntries(parsed.items.map((x) => [x.key, x]));
+  assert.equal(by.Product_Images.type, 'file'); assert.equal(by.Product_Images.name, 'Product images (front / back / side / top)');
+  assert.equal(by.BPA_Free.type, 'choice'); assert.deepEqual(by.BPA_Free.options, ['Yes', 'No', 'Unknown', 'Other - specify in Details']);
+  assert.equal(by.Certifications_Available.type, 'multi'); assert.equal(by.Capacity.req, 'cond'); assert.equal(by.Capacity.req_label, 'If applicable');
+  assert.equal(by.Factory_Name.type, 'text'); assert.equal(by.Non_Slip.section, 'Pet Bowls questions');
+
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const imp = new FormData(); imp.append('files', new Blob([x1]), 'Factory Checklist - Pet Bowls.xlsx');
+  assert.equal((await fetch(`${base}/admin/categories/import`, { method: 'POST', headers: { cookie: admin }, body: imp, redirect: 'manual' })).status, 303);
+  const cat = db.tables.categories.find((c) => c.name === 'Pet Bowls'); assert.ok(cat); assert.equal(cat.checklist.length, 6); assert.equal(cat.checklist_version, 1);
+  assert.match((await req(base, 'GET', `/admin/categories/${cat.id}/checklist`, { cookie: admin })).text, /Certifications Available/);
+  assert.match((await req(base, 'GET', '/admin/categories', { cookie: admin })).text, /6 questions · v1/);
+  assert.equal((await req(base, 'GET', `/admin/categories/${cat.id}/checklist-file`, { cookie: admin })).status, 200);
+  // category is required; the checklist is copied
+  await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'No category' } }); assert.equal((db.tables.dev_projects || []).length, 0);
+  await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl' } });
+  const p = db.tables.dev_projects[0]; assert.equal(p.category, 'Pet Bowls'); assert.equal(p.checklist.length, 6);
+  // switch one off + a custom question, before anyone is invited (edits are live)
+  const on = p.checklist.filter((x) => x.key !== 'Non_Slip').map((x) => x.key);
+  const fb = new URLSearchParams([['name', 'Cat bowl'], ['category_id', cat.id], ['requirements', 'Wall 1.5 mm'], ['ck_form', '1'], ...on.map((k) => ['ck_on', k]), ['ck_new_name', 'Glaze lead test'], ['ck_new_type', 'file'], ['ck_new_req', 'required']]);
+  await fetch(`${base}/admin/projects/${p.id}`, { method: 'POST', headers: { cookie: admin, 'content-type': 'application/x-www-form-urlencoded' }, body: fb, redirect: 'manual' });
+  assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false); const glaze = p.checklist.find((x) => x.custom); assert.equal(glaze.type, 'file');
+  assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v2/);
+  // supplier
+  const s = await db.insert('suppliers', { name: 'Kiln Co', email: 'k@k.com', active: true });
+  await db.insert('supplier_users', { supplier_id: s.id, email: 'k@k.com', name: 'K', status: 'active', password_hash: await hashPassword('correct horse battery') });
+  const sc = (await req(base, 'POST', '/login', { form: { email: 'k@k.com', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
+  await req(base, 'POST', `/admin/projects/${p.id}/invite`, { cookie: admin, form: { supplier_ids: s.id } });
+  const inv = db.tables.dev_invitations[0];
+  let view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text;
+  assert.match(view, /Factory checklist/); assert.match(view, /Glaze lead test/); assert.doesNotMatch(view, /Non-slip base/); assert.match(view, /Factory checklist first/);
+  assert.match(view, /value="Kiln Co"/, 'factory name is prefilled');
+  // quote blocked until the required questions are answered
+  const quote = { currency: 'USD', qty0: '1000', price0: '2.1' };
+  await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal((db.tables.dev_quotes || []).length, 0);
+  const fd = new FormData(); fd.append('v_Factory_Name', 'Kiln Co'); fd.append('st_Product_Images', 'yes'); fd.append('file_Product_Images', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'front.png');
+  fd.append('v_BPA_Free', 'Yes'); fd.append('d_BPA_Free', ''); fd.append('v_Certifications_Available', 'FDA'); fd.append('v_Certifications_Available', 'LFGB'); fd.append('v_Certifications_Available', 'Fake'); fd.append('d_Certifications_Available', '');
+  fd.append('v_Capacity', ''); fd.append('na_Capacity', '1'); fd.append(`st_${glaze.key}`, 'date'); fd.append(`dt_${glaze.key}`, '2026-12-20');
+  assert.equal((await fetch(`${base}/portal/projects/${inv.id}/docs`, { method: 'POST', headers: { cookie: sc }, body: fd, redirect: 'manual' })).status, 303);
+  const ans = db.tables.dev_invitations[0].doc_answers;
+  assert.equal(ans.Product_Images.files.length, 1); assert.deepEqual(ans.Certifications_Available.value, ['FDA', 'LFGB']); assert.equal(ans.Capacity.na, true); assert.equal(ans[glaze.key].date, '2026-12-20');
+  assert.equal((await req(base, 'GET', `/portal/projects/${inv.id}/docs/Product_Images/0`, { cookie: sc })).status, 200);
+  await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal(db.tables.dev_quotes.length, 1);
+  const thread = (await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie: admin })).text; assert.match(thread, /front\.png/); assert.match(thread, /FDA, LFGB/); assert.match(thread, /6 \/ 6/);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}?tab=suppliers`, { cookie: admin })).text, /All required answered/);
+  const cmp = (await req(base, 'GET', `/admin/projects/${p.id}?tab=quotes`, { cookie: admin })).text; assert.match(cmp, /Factory checklist answers/); assert.match(cmp, /Not applicable/);
+  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}/docs/Product_Images/0`, { cookie: admin })).status, 200);
+  // after inviting, edits are a draft: the supplier still sees v1
+  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', requirements: 'Wall 2.0 mm' } });
+  const page1 = (await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text;
+  assert.match(page1, /Draft v2/); assert.match(page1, /Requirements: Wall 2\.0 mm \(was 1\.5\)/);
+  assert.match((await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text, /Wall 1\.5 mm/);
+  await req(base, 'POST', `/admin/projects/${p.id}/discard`, { cookie: admin, form: {} }); assert.equal(p.requirements, 'Wall 1.5 mm');
+  assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v2/);
+  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', requirements: 'Wall 2.0 mm' } });
+  await req(base, 'POST', `/admin/projects/${p.id}/publish`, { cookie: admin, form: { change_note: 'Wall 2.0 mm' } });
+  view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text; assert.match(view, /Wall 2\.0 mm/); assert.match(view, /updated to v2/);
+  const hist = await req(base, 'GET', `/admin/projects/${p.id}/versions?cmp=2`, { cookie: admin }); assert.equal(hist.status, 200); assert.match(hist.text, /1\.5/); assert.match(hist.text, /Kiln Co · on v1/);
+  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/versions?view=1`, { cookie: admin })).status, 200);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Glaze lead test/);
+  // a changed Excel → category v2 → Update banner on the project; own questions and switched-off ones kept
+  const x2 = mkXlsx('Factory Checklist - Pet Bowls', [...rows1, ['MATERIAL & SAFETY', 'Lead-Free', '', '', '', 'Lead_Free', 'Required', 'Yes / No / Other - specify in Details']], lists);
+  const imp2 = new FormData(); imp2.append('file', new Blob([x2]), 'Factory Checklist - Pet Bowls.xlsx');
+  await fetch(`${base}/admin/categories/${cat.id}/checklist`, { method: 'POST', headers: { cookie: admin }, body: imp2, redirect: 'manual' });
+  assert.equal(cat.checklist_version, 2);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /checklist v2 is available/);
+  await req(base, 'POST', `/admin/projects/${p.id}/checklist/refresh`, { cookie: admin, form: {} });
+  assert.equal(p.checklist_version, 2); assert.ok(p.checklist.some((x) => x.key === 'Lead_Free')); assert.ok(p.checklist.some((x) => x.custom)); assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Factory checklist: \+ Lead-Free/);
+  const d = CK.diffStates({ requirements: 'Wall thickness 1.5 mm' }, { requirements: 'Wall thickness 2.0 mm' }); assert.equal(d[0].items[0].old, '1.5'); assert.equal(d[0].items[0].new, '2.0');
+});
