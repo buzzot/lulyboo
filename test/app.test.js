@@ -5041,7 +5041,7 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   assert.match(fin, new RegExp(`Paid ${PL.short(today)}`));
 });
 
-test('Development role: edits Development and Samples, reads Suppliers / RFQs / Products, no orders, prices beyond FOB, bank or deleting', async (t) => {
+test('Development role: edits Development and Samples, reads Products; suppliers / RFQs only inside projects and samples; no orders, prices beyond FOB or deleting', async (t) => {
   const db = seedDb();
   const { server, base } = await startServer(db); t.after(() => server.close());
   const ck = (r) => r.cookies.map((c) => c.split(';')[0]).join('; ');
@@ -5054,27 +5054,25 @@ test('Development role: edits Development and Samples, reads Suppliers / RFQs / 
   const l1 = ck(await req(base, 'POST', '/admin/login', { form: { username: 'dana', password: 'temp-pass-1234' } }));
   const dana = ck(await req(base, 'POST', '/admin/profile/password', { cookie: l1, form: { password: 'dana-pass-5678', confirm: 'dana-pass-5678' } }));
   assert.equal((await req(base, 'GET', '/admin', { cookie: dana })).location, '/admin/projects');
-  // read: suppliers, requests, products, projects, samples
-  for (const u of ['/admin/suppliers', `/admin/suppliers/${s.id}`, '/admin/requests', '/admin/products', `/admin/products/${p.id}`, '/admin/projects', '/admin/samples']) assert.equal((await req(base, 'GET', u, { cookie: dana })).status, 200, u);
+  // read: products, projects, samples
+  for (const u of ['/admin/products', `/admin/products/${p.id}`, '/admin/projects', '/admin/samples']) assert.equal((await req(base, 'GET', u, { cookie: dana })).status, 200, u);
   // blocked: orders, logistics, pricing, payments, finance, inspections, settings, bank
-  for (const u of ['/admin/orders', '/admin/logistics/planning/load', '/admin/pricing', '/admin/orders/payments', '/admin/finance', '/admin/orders/inspections', '/admin/settings', `/admin/suppliers/${s.id}/bank`]) {
+  for (const u of ['/admin/suppliers', `/admin/suppliers/${s.id}`, '/admin/requests', '/admin/orders', '/admin/logistics/planning/load', '/admin/pricing', '/admin/orders/payments', '/admin/finance', '/admin/orders/inspections', '/admin/settings', `/admin/suppliers/${s.id}/bank`]) {
     const r = await req(base, 'GET', u, { cookie: dana }); assert.equal(r.status, 403, u);
   }
   assert.match((await req(base, 'GET', '/admin/orders', { cookie: dana })).text, /Not available for the Development role/);
   // write: suppliers / products refused; delete refused
-  const w = await req(base, 'POST', `/admin/suppliers/${s.id}`, { cookie: dana, form: { name: 'X' } });
-  assert.equal(w.status, 403); assert.match(w.text, /can view suppliers, RFQs and products but not change them/);
+  const w = await req(base, 'POST', `/admin/products/${p.id}/hts/keep`, { cookie: dana, form: {} });
+  assert.equal(w.status, 403); assert.match(w.text, /can view products but not change them/);
+  assert.match((await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: dana })).text, /suppliers of a project are shown on its page/);
   assert.equal((await req(base, 'POST', `/admin/products/${p.id}/delete`, { cookie: dana, form: {} })).status, 403);
-  // pages: menu, supplier page without orders / bank, product page without landed cost
-  const sp = (await req(base, 'GET', `/admin/suppliers/${s.id}`, { cookie: dana })).text;
-  assert.match(sp, /Purchase orders, payment terms and bank details are visible to Admin, Director and Manager only/);
-  assert.doesNotMatch(sp, /id="orders"/); assert.doesNotMatch(sp, /Open POs/); assert.doesNotMatch(sp, /6216/);
-  assert.match(sp, /href="\/admin\/samples"/); assert.doesNotMatch(sp, /href="\/admin\/orders"/);
+  // product page: no landed cost; the supplier's name shows, not as a link (supplier pages are closed)
   const pp = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie: dana })).text;
-  assert.match(pp, /Factory price/); assert.doesNotMatch(pp, /Landed estimate/); assert.doesNotMatch(pp, /data-tab="costing"/); assert.match(pp, /View only/);
+  assert.match(pp, /Factory price/); assert.match(pp, /<span class="ro-link">Kean<\/span>/); assert.doesNotMatch(pp, /href="\/admin\/suppliers/);
+  assert.doesNotMatch(pp, /class="nav[^"]*"[^>]*href="\/admin\/suppliers"/); assert.match(pp, /href="\/admin\/samples"/); assert.doesNotMatch(pp, /Landed estimate/); assert.doesNotMatch(pp, /data-tab="costing"/); assert.match(pp, /View only/);
   assert.doesNotMatch((await req(base, 'GET', '/admin/products', { cookie: dana })).text, /<th class="r">Landed<\/th>/);
   // view-only styling on suppliers / products, never on Development or Samples pages (their forms stay usable)
-  assert.match(sp, /<main[^>]*data-ro/);
+  assert.match(pp, /<main[^>]*data-ro/);
   const proj = await db.insert('dev_projects', { code: 'DP-1005', name: 'Salon Teether set of 3', status: 'sourcing', created_at: new Date().toISOString() });
   const pj = await req(base, 'GET', `/admin/projects/${proj.id}`, { cookie: dana });
   assert.equal(pj.status, 200); assert.doesNotMatch(pj.text, /<main[^>]*data-ro/);

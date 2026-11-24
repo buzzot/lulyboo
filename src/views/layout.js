@@ -79,9 +79,14 @@ ${isAdmin && STAFF.current()?.viewing ? html`<div class="va-bar"><span>Viewing a
 ${isAdmin && nav?.groups ? quickJump(nav) : ''}
 <main class="${wide ? 'wide' : ''}" ${isAdmin && STAFF.current()?.role === 'development' && !/^\/admin\/(projects|samples|dev-files|sample-files|profile)(\/|\?|$)/.test(String(STAFF.current()?.path || req?.url || '')) ? raw('data-ro') : ''}>
 ${flashHtml}
-${body}
+${isAdmin && STAFF.current()?.role === 'development' ? raw(unlinkFor(String(body))) : body}
 </main>
 </body></html>`;
+}
+
+/** Development role: Suppliers and RFQ pages are closed to them — their names stay, the links become plain text. */
+function unlinkFor(s) {
+  return s.replace(/<a\b[^>]*\bhref="\/admin\/(?:suppliers|requests|request-files)(?:[\/?#][^"]*)?"[^>]*>([\s\S]*?)<\/a>/g, '<span class="ro-link">$1</span>');
 }
 
 /** Top-right account menu on every admin page: who is signed in, profile, users, audit log, sign out. */
@@ -136,7 +141,7 @@ function adminNav(active) {
     const g = (label, items) => ({ label, href: items[0][1], items: items.map(([k, href, l, d]) => ({ href, label: l, desc: d, active: on(k) })), active: items.some(([k]) => on(k)) });
     const groups = [
       { label: 'Development', href: '/admin/projects', active: on('projects') },
-      g('Sourcing', [['suppliers', '/admin/suppliers', 'Suppliers', 'Factories and contacts (view)'], ['requests', '/admin/requests', 'RFQs & requests', 'Info requests to suppliers (view)'], ['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
+      g('Sourcing', [['projects', '/admin/projects', 'Development', 'New product projects'], ['samples', '/admin/samples', 'Samples', 'Sample requests & tracking']]),
       g('Catalog', [['products', '/admin/products', 'Products', 'Supplier products (view)']]),
     ];
     return { home: '/admin/projects', label: 'Development', groups, settings: null, items: groups.flatMap((x) => x.items || [x]), admin: true };

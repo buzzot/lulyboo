@@ -4,7 +4,8 @@
 //   director everything except users, settings and deleting; can read the audit log
 //   manager  day-to-day work; pricing and logistics are view-only; cannot delete
 //   accountant only the Finance pages (payments to make, documents to check, mark paid, reports)
-//   development new products: edits Development (projects) and Samples; reads Suppliers, RFQs and Products.
+//   development new products: edits Development (projects) and Samples; reads Products. Suppliers / RFQs only as
+//              shown inside a project or sample (their own pages are closed).
 //              No orders, logistics, pricing, payments, bank details; no deleting.
 // The ADMIN_PASSWORD "owner" login always works as an emergency Admin, even before the staff table exists.
 const { AsyncLocalStorage } = require('node:async_hooks');
@@ -44,12 +45,10 @@ function deny(role, method, path) {
     if (/^\/admin\/(projects|samples|suppliers|products)\/[^/]+\/delete$/.test(path)) return 'Only an Admin can delete. Use Archive instead.';
     // edit: Development (projects) and Samples
     if (/^\/admin\/(projects|dev-files|samples|sample-files|samples-carriers)(\/|\.|$)/.test(path)) return null;
-    // read only: Suppliers, RFQs & requests, Products (+ their files, compare, quick jump)
-    if (get && /^\/admin(\/(suppliers|requests|request-files|products|archive|categories|compare|documents|quick|activities)(\/|\.|$)|\/?$)/.test(path)) {
-      if (/^\/admin\/suppliers\/[^/]+\/bank(\/|\.|$)/.test(path)) return 'Bank details are for Admin, Director and Accountant.';
-      return null;
-    }
-    if (!get && /^\/admin\/(suppliers|requests|products|archive|categories)(\/|\.|$)/.test(path)) return 'The Development role can view suppliers, RFQs and products but not change them — Development projects and Samples can be edited.';
+    // read only: Products (+ their files, compare, quick jump). Suppliers and RFQs: only what a project or sample shows.
+    if (get && /^\/admin(\/(products|archive|categories|compare|documents|quick)(\/|\.|$)|\/?$)/.test(path)) return null;
+    if (!get && /^\/admin\/(products|archive|categories)(\/|\.|$)/.test(path)) return 'The Development role can view products but not change them — Development projects and Samples can be edited.';
+    if (/^\/admin\/(suppliers|requests|request-files)(\/|\.|$)/.test(path)) return 'Not available for the Development role. The suppliers of a project are shown on its page in Development.';
     return 'Not available for the Development role. Orders, logistics, pricing and payments are managed by the operations team — ask an Admin if you need access.';
   }
   if (/^\/admin\/suppliers\/[^/]+\/bank(\/|\.|$)/.test(path) && !can(role, 'bank')) return 'Only an Admin, Director or Accountant can see bank details.';
