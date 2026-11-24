@@ -284,7 +284,7 @@ module.exports = function projectRoutes(router, { db, config }) {
   router.get('/admin/projects/new', G(async (req, res) => {
     const cats = await db.list('categories', { order: 'sort.asc,name.asc' });
     res.html(page({
-      title: 'New project', nav: adminNav('projects'), flash: takeFlash(req, res),
+      title: 'New project', nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
       body: html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
       <h1>New project</h1><p class="muted small">A name, a category and a short description. You add requirements, files and suppliers next.</p>
       <section class="card"><form method="post" action="/admin/projects" class="fields"><label class="frow"><span>Product name</span><input name="name" required maxlength="160" placeholder="e.g. Cat water fountain v1" autofocus></label>
