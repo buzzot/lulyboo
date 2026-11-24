@@ -5126,6 +5126,7 @@ test('Development: factory checklist Excel → category → project; supplier an
   assert.match((await req(base, 'GET', '/admin/categories', { cookie: admin })).text, /6 questions · v1/);
   assert.equal((await req(base, 'GET', `/admin/categories/${cat.id}/checklist-file`, { cookie: admin })).status, 200);
   // category is required; the checklist is copied
+  { const np = await req(base, 'GET', '/admin/projects/new', { cookie: admin }); assert.equal(np.status, 200); assert.match(np.text, /Product name/); assert.doesNotMatch(np.text, /dp-table/); }
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'No category' } }); assert.equal((db.tables.dev_projects || []).length, 0);
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl' } });
   const p = db.tables.dev_projects[0]; assert.equal(p.category, 'Pet Bowls'); assert.equal(p.checklist.length, 6);

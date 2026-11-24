@@ -269,7 +269,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const shown = projects.filter((p) => (!st || p.status === st) && (!q || `${p.ref} ${p.name} ${p.category || ''}`.toLowerCase().includes(q)));
     res.html(page({
       title: 'Development projects', nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
-      body: html`<div class="head-row"><div><h1>Development projects</h1><p class="muted small">Create a product, send the spec to several suppliers, follow their questions and quotes.</p></div><a class="btn" href="#new-project" data-open-hash>+ New project</a></div>
+      body: html`<div class="head-row"><div><h1>Development projects</h1><p class="muted small">Create a product, send the spec to several suppliers, follow their questions and quotes.</p></div><a class="btn" href="/admin/projects/new">+ New project</a></div>
       <form class="filters" method="get"><input type="search" name="q" placeholder="Search projects" value="${req.query.q || ''}"><select name="status"><option value="">All statuses</option>${P.PROJECT_STATUSES.map((s) => html`<option ${st === s ? raw('selected') : ''}>${s}</option>`)}</select><button class="btn small">Filter</button></form>
       ${shown.length ? html`<div class="table-wrap"><table class="list dp-table"><thead><tr><th>Project</th><th>Status</th><th>Suppliers</th><th>Quotes</th><th>Next milestone</th></tr></thead><tbody>
         ${shown.map((p) => { const pi = invs.filter((i) => i.project_id === p.id); const quoted = pi.filter((i) => quotes.some((x) => x.invitation_id === i.id)).length; const nm = miles.filter((x) => x.project_id === p.id && x.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
@@ -277,20 +277,28 @@ module.exports = function projectRoutes(router, { db, config }) {
           <td><span class="pill ${p.status === 'Completed' ? 's-selected' : p.status === 'Draft' ? '' : 's-reviewing'}">${p.status}</span></td>
           <td>${pi.length ? html`${pi.length} invited${pi.some((i) => i.status === 'Questions') ? html`<div class="sub neg">${pi.filter((i) => i.status === 'Questions').length} with questions</div>` : ''}` : html`<span class="none">—</span>`}</td>
           <td>${pi.length ? `${quoted} of ${pi.length}` : html`<span class="none">—</span>`}</td>
-          <td>${nm ? html`<span class="${nm.due_date < P.today() ? 'neg' : ''}">${fmt.date(nm.due_date)}</span><div class="sub">${nm.title}</div>` : html`<span class="none">—</span>`}</td></tr>`; })}</tbody></table></div>` : html`<div class="card empty-state"><p><b>${projects.length ? 'No projects match.' : 'No development projects yet.'}</b></p><p class="muted">Start with a name and a short description. You add requirements, drawings and suppliers next.</p></div>`}
-      <details class="card fold" id="new-project" ${projects.length ? '' : raw('open')}><summary><h2 class="inline">New project</h2></summary>
-        <form method="post" action="/admin/projects" class="fields"><label class="frow"><span>Product name</span><input name="name" required maxlength="160" placeholder="e.g. Cat water fountain v1"></label>
-          <div class="frow"><span>Category</span>${ddSel('category_id', '', catOpts(cats))}</div>
-          <p class="sub fl-note">Required. The category brings its document checklist (certificates, test reports) that suppliers must answer.</p>
-          <label class="frow top"><span>Short description</span><textarea name="summary" rows="3" placeholder="What is it, who is it for?"></textarea></label>
-          <div class="form-actions"><button class="btn">Create project</button></div></form></details>`,
+          <td>${nm ? html`<span class="${nm.due_date < P.today() ? 'neg' : ''}">${fmt.date(nm.due_date)}</span><div class="sub">${nm.title}</div>` : html`<span class="none">—</span>`}</td></tr>`; })}</tbody></table></div>` : html`<div class="card empty-state"><p><b>${projects.length ? 'No projects match.' : 'No development projects yet.'}</b></p><p class="muted">Start with a name and a short description. You add requirements, drawings and suppliers next.</p><p><a class="btn" href="/admin/projects/new">+ New project</a></p></div>`}`,
+    }));
+  }));
+
+  router.get('/admin/projects/new', G(async (req, res) => {
+    const cats = await db.list('categories', { order: 'sort.asc,name.asc' });
+    res.html(page({
+      title: 'New project', nav: adminNav('projects'), flash: takeFlash(req, res),
+      body: html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
+      <h1>New project</h1><p class="muted small">A name, a category and a short description. You add requirements, files and suppliers next.</p>
+      <section class="card"><form method="post" action="/admin/projects" class="fields"><label class="frow"><span>Product name</span><input name="name" required maxlength="160" placeholder="e.g. Cat water fountain v1" autofocus></label>
+        <div class="frow"><span>Category</span>${ddSel('category_id', '', catOpts(cats))}</div>
+        <p class="sub fl-note">Required. The category loads its factory checklist: the certificates, test reports and details suppliers must answer before quoting.</p>
+        <label class="frow top"><span>Short description</span><textarea name="summary" rows="3" placeholder="What is it, who is it for?"></textarea></label>
+        <div class="form-actions"><button class="btn">Create project</button> <a class="btn ghost" href="/admin/projects">Cancel</a></div></form></section>`,
     }));
   }));
 
   router.post('/admin/projects', G(async (req, res) => {
     const { fields } = await parseForm(req);
-    const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects#new-project'); }
-    const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it sets the document checklist'); return res.redirect('/admin/projects#new-project'); }
+    const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects/new'); }
+    const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it sets the document checklist'); return res.redirect('/admin/projects/new'); }
     const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
     await db.insert('dev_spec_versions', { project_id: p.id, version: 1, change_note: 'First version', snapshot: {}, created_at: now() });
     flash(res, 'ok', `Project ${p.ref} created. Add the requirements and files, then invite suppliers.`);
