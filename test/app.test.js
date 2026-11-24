@@ -5081,7 +5081,7 @@ test('Development role: edits Development and Samples, reads Products; suppliers
   assert.match((await req(base, 'GET', `/admin/products/${p.id}`, { cookie: owner })).text, /Landed estimate/);
 });
 
-test('Development: factory checklist Excel → category → project; supplier answers gate the quote; spec drafts, publish, discard, history', async (t) => {
+test('Development: factory checklist Excel → category → project; supplier downloads and uploads it filled; spec drafts, publish, discard, history', async (t) => {
   const { hashPassword } = require('../src/auth');
   const CK = require('../src/checklists');
   const { zip } = require('../src/lib/zip');
@@ -5121,66 +5121,56 @@ test('Development: factory checklist Excel → category → project; supplier an
   const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
   const imp = new FormData(); imp.append('files', new Blob([x1]), 'Factory Checklist - Pet Bowls.xlsx');
   assert.equal((await fetch(`${base}/admin/categories/import`, { method: 'POST', headers: { cookie: admin }, body: imp, redirect: 'manual' })).status, 303);
-  const cat = db.tables.categories.find((c) => c.name === 'Pet Bowls'); assert.ok(cat); assert.equal(cat.checklist.length, 6); assert.equal(cat.checklist_version, 1);
-  assert.match((await req(base, 'GET', `/admin/categories/${cat.id}/checklist`, { cookie: admin })).text, /Certifications Available/);
-  assert.match((await req(base, 'GET', '/admin/categories', { cookie: admin })).text, /6 questions · v1/);
+  const cat = db.tables.categories.find((c) => c.name === 'Pet Bowls'); assert.ok(cat); assert.equal(cat.checklist_version, 1); assert.ok(cat.checklist_file.path);
+  assert.match((await req(base, 'GET', '/admin/categories', { cookie: admin })).text, /Excel · v1/);
   assert.equal((await req(base, 'GET', `/admin/categories/${cat.id}/checklist-file`, { cookie: admin })).status, 200);
-  // category is required; the checklist is copied
-  { const np = await req(base, 'GET', '/admin/projects/new', { cookie: admin }); assert.equal(np.status, 200); assert.match(np.text, /Product name/); assert.doesNotMatch(np.text, /dp-table/); }
+  // the same file again → unchanged
+  const imp1b = new FormData(); imp1b.append('file', new Blob([x1]), 'Factory Checklist - Pet Bowls.xlsx');
+  await fetch(`${base}/admin/categories/${cat.id}/checklist`, { method: 'POST', headers: { cookie: admin }, body: imp1b, redirect: 'manual' }); assert.equal(cat.checklist_version, 1);
+  // category is required; the Excel is attached to the project
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'No category' } }); assert.equal((db.tables.dev_projects || []).length, 0);
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl' } });
-  const p = db.tables.dev_projects[0]; assert.equal(p.category, 'Pet Bowls'); assert.equal(p.checklist.length, 6);
-  // switch one off + a custom question, before anyone is invited (edits are live)
-  const on = p.checklist.filter((x) => x.key !== 'Non_Slip').map((x) => x.key);
-  const fb = new URLSearchParams([['name', 'Cat bowl'], ['category_id', cat.id], ['requirements', 'Wall 1.5 mm'], ['ck_form', '1'], ...on.map((k) => ['ck_on', k])]);
-  await fetch(`${base}/admin/projects/${p.id}`, { method: 'POST', headers: { cookie: admin, 'content-type': 'application/x-www-form-urlencoded' }, body: fb, redirect: 'manual' });
-  assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
-  assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v2/);
-  // supplier
+  const p = db.tables.dev_projects[0];
+  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl', requirements: 'Wall 1.5 mm' } }); assert.equal(p.category, 'Pet Bowls'); assert.equal(p.checklist_file.path, cat.checklist_file.path);
+  const spec = (await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text;
+  assert.match(spec, /Factory Checklist - Pet Bowls\.xlsx/); assert.doesNotMatch(spec, /ck_on|Non-slip base/);
+  // supplier: downloads the Excel, uploads it filled; quoting is never blocked
   const s = await db.insert('suppliers', { name: 'Kiln Co', email: 'k@k.com', active: true });
   await db.insert('supplier_users', { supplier_id: s.id, email: 'k@k.com', name: 'K', status: 'active', password_hash: await hashPassword('correct horse battery') });
   const sc = (await req(base, 'POST', '/login', { form: { email: 'k@k.com', password: 'correct horse battery' } })).cookies.filter((x) => x.startsWith('lb_sup=')).map((x) => x.split(';')[0]).join('; ');
   await req(base, 'POST', `/admin/projects/${p.id}/invite`, { cookie: admin, form: { supplier_ids: s.id } });
   const inv = db.tables.dev_invitations[0];
   let view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text;
-  assert.match(view, /Factory checklist/); assert.doesNotMatch(view, /Non-slip base/); assert.match(view, /Factory checklist first/);
-  assert.match(view, /value="Kiln Co"/, 'factory name is prefilled');
-  // quote blocked until the required questions are answered
+  assert.match(view, /Factory checklist/); assert.match(view, /checklist-file/); assert.doesNotMatch(view, /Non-slip base/);
+  assert.equal((await req(base, 'GET', `/portal/projects/${inv.id}/checklist-file`, { cookie: sc })).status, 200);
   const quote = { currency: 'USD', qty0: '1000', price0: '2.1' };
-  await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal((db.tables.dev_quotes || []).length, 0);
-  const fd = new FormData(); fd.append('v_Factory_Name', 'Kiln Co'); fd.append('st_Product_Images', 'yes'); fd.append('file_Product_Images', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'front.png');
-  fd.append('v_BPA_Free', 'Yes'); fd.append('d_BPA_Free', ''); fd.append('v_Certifications_Available', 'FDA'); fd.append('v_Certifications_Available', 'LFGB'); fd.append('v_Certifications_Available', 'Fake'); fd.append('d_Certifications_Available', '');
-  fd.append('v_Capacity', ''); fd.append('na_Capacity', '1');
+  await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal(db.tables.dev_quotes.length, 1, 'no gate');
+  const fd = new FormData(); fd.append('filled', new Blob([x1]), 'Kiln Co checklist.xlsx');
   assert.equal((await fetch(`${base}/portal/projects/${inv.id}/docs`, { method: 'POST', headers: { cookie: sc }, body: fd, redirect: 'manual' })).status, 303);
-  const ans = db.tables.dev_invitations[0].doc_answers;
-  assert.equal(ans.Product_Images.files.length, 1); assert.deepEqual(ans.Certifications_Available.value, ['FDA', 'LFGB']); assert.equal(ans.Capacity.na, true);
-  assert.equal((await req(base, 'GET', `/portal/projects/${inv.id}/docs/Product_Images/0`, { cookie: sc })).status, 200);
-  await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal(db.tables.dev_quotes.length, 1);
-  const thread = (await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie: admin })).text; assert.match(thread, /front\.png/); assert.match(thread, /FDA, LFGB/); assert.match(thread, /5 \/ 5/);
-  assert.match((await req(base, 'GET', `/admin/projects/${p.id}?tab=suppliers`, { cookie: admin })).text, /All required answered/);
-  const cmp = (await req(base, 'GET', `/admin/projects/${p.id}?tab=quotes`, { cookie: admin })).text; assert.match(cmp, /Factory checklist answers/); assert.match(cmp, /Not applicable/);
-  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}/docs/Product_Images/0`, { cookie: admin })).status, 200);
+  assert.equal(db.tables.dev_invitations[0].doc_answers.filled.files.length, 1);
+  assert.equal((await req(base, 'GET', `/portal/projects/${inv.id}/docs/filled/0`, { cookie: sc })).status, 200);
+  const thread = (await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie: admin })).text; assert.match(thread, /Kiln Co checklist\.xlsx/);
+  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}/docs/filled/0`, { cookie: admin })).status, 200);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}?tab=suppliers`, { cookie: admin })).text, /Filled/);
   // after inviting, edits are a draft: the supplier still sees v1
-  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', requirements: 'Wall 2.0 mm' } });
+  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl', requirements: 'Wall 2.0 mm' } });
   const page1 = (await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text;
   assert.match(page1, /Draft v2/); assert.match(page1, /Requirements: Wall 2\.0 mm \(was 1\.5\)/);
   assert.match((await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text, /Wall 1\.5 mm/);
   await req(base, 'POST', `/admin/projects/${p.id}/discard`, { cookie: admin, form: {} }); assert.equal(p.requirements, 'Wall 1.5 mm');
-  assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v2/);
-  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', requirements: 'Wall 2.0 mm' } });
+  await req(base, 'POST', `/admin/projects/${p.id}`, { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl', requirements: 'Wall 2.0 mm' } });
   await req(base, 'POST', `/admin/projects/${p.id}/publish`, { cookie: admin, form: { change_note: 'Wall 2.0 mm' } });
   view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text; assert.match(view, /Wall 2\.0 mm/); assert.match(view, /updated to v2/);
-  const hist = await req(base, 'GET', `/admin/projects/${p.id}/versions?cmp=2`, { cookie: admin }); assert.equal(hist.status, 200); assert.match(hist.text, /1\.5/); assert.match(hist.text, /Kiln Co · on v1/);
-  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/versions?view=1`, { cookie: admin })).status, 200);
-  assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Certifications Available/);
-  // a changed Excel → category v2 → Update banner on the project; own questions and switched-off ones kept
-  const x2 = mkXlsx('Factory Checklist - Pet Bowls', [...rows1, ['MATERIAL & SAFETY', 'Lead-Free', '', '', '', 'Lead_Free', 'Required', 'Yes / No / Other - specify in Details']], lists);
-  const imp2 = new FormData(); imp2.append('file', new Blob([x2]), 'Factory Checklist - Pet Bowls.xlsx');
+  assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/versions?cmp=2`, { cookie: admin })).status, 200);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Factory Checklist - Pet Bowls\.xlsx/);
+  // a new Excel for the category → Update banner → the project gets the new file
+  const x2 = mkXlsx('Factory Checklist - Pet Bowls', [...rows1, ['MATERIAL & SAFETY', 'Lead-Free', '', '', '', 'Lead_Free', 'Required', 'Yes / No']], lists);
+  const imp2 = new FormData(); imp2.append('file', new Blob([x2]), 'Factory Checklist - Pet Bowls v2.xlsx');
   await fetch(`${base}/admin/categories/${cat.id}/checklist`, { method: 'POST', headers: { cookie: admin }, body: imp2, redirect: 'manual' });
   assert.equal(cat.checklist_version, 2);
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /checklist v2 is available/);
   await req(base, 'POST', `/admin/projects/${p.id}/checklist/refresh`, { cookie: admin, form: {} });
-  assert.equal(p.checklist_version, 2); assert.ok(p.checklist.some((x) => x.key === 'Lead_Free')); assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
-  assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Factory checklist: \+ Lead-Free/);
+  assert.equal(p.checklist_version, 2); assert.equal(p.checklist_file.name, 'Factory Checklist - Pet Bowls v2.xlsx');
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v3/);
   const d = CK.diffStates({ requirements: 'Wall thickness 1.5 mm' }, { requirements: 'Wall thickness 2.0 mm' }); assert.equal(d[0].items[0].old, '1.5'); assert.equal(d[0].items[0].new, '2.0');
 });

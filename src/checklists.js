@@ -150,7 +150,6 @@ function specState(p, files = []) {
     name: p.name || '', summary: p.summary || '', requirements: p.requirements || '', certifications: p.certifications || '',
     extra: (p.extra_fields || []).map((x) => x.label),
     files: files.filter((f) => !f.internal).map((f) => ({ id: f.id, title: f.label || f.name })),
-    checklist: normItems((p.checklist || []).filter((x) => x.on !== false)),
     ckfile: p.checklist_file ? { name: p.checklist_file.name, path: p.checklist_file.path, mime: p.checklist_file.mime || null } : null,
   };
 }

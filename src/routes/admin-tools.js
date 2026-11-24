@@ -55,7 +55,7 @@ module.exports = function toolRoutes(router, { db, config }) {
           <td><input name="duty_${c.id}" type="number" step="0.01" min="0" value="${c.default_duty_pct ?? ''}"></td>
           <td><input name="margin_${c.id}" type="number" step="0.1" min="0" max="95" value="${c.target_margin_pct ?? ''}"></td>
           <td><input name="notes_${c.id}" value="${c.notes || ''}"></td>
-          <td><a class="ck-link" href="/admin/categories/${c.id}/checklist">${(c.checklist || []).length ? `${c.checklist.length} questions · v${c.checklist_version || 0}` : 'Import'}</a></td>
+          <td><a class="ck-link" href="/admin/categories/${c.id}/checklist">${c.checklist_file ? `Excel · v${c.checklist_version || 0}` : 'Import'}</a></td>
           <td><input name="sort_${c.id}" type="number" step="1" value="${c.sort}" class="tiny"></td>
           <td class="r">${count(c.name)}</td>
           <td>${count(c.name) ? '' : html`<input type="checkbox" name="del" value="${c.id}">`}</td></tr>`)}
@@ -63,7 +63,7 @@ module.exports = function toolRoutes(router, { db, config }) {
         </tbody></table></div><div class="form-actions"><button class="btn">Save categories</button></div></form>
       <section class="card mt"><h2 class="sec">Import factory checklists</h2>
         <form method="post" enctype="multipart/form-data" action="/admin/categories/import" class="ck-drop"><div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="files" accept=".xlsx" multiple required title="" aria-label="Factory checklist Excel"><span class="dz-main" data-main>Drop the Excel files here, paste (⌘V) or <u>choose</u></span><span class="dz-hint">Several at once · one per category</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div><div class="form-actions"><button class="btn small" data-busy>Import</button></div></form>
-        <p class="sub">Choose one or more "Factory Checklist - &lt;Category&gt;.xlsx" files. Each one sets that category's checklist (the category is created if it is missing). Development projects in the category ask suppliers these questions.</p></section>
+        <p class="sub">Choose one or more "Factory Checklist - &lt;Category&gt;.xlsx" files. Each one sets that category's checklist (the category is created if it is missing). Suppliers in that category's development projects download it, fill it in and upload it back.</p></section>
       ${orphan.length ? html`<p class="muted">Used by products but not in this list: ${orphan.join(', ')}</p>` : ''}`,
     }));
   }));
