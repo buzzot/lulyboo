@@ -3188,3 +3188,29 @@
   var target = location.hash && /^#n-/.test(location.hash) ? document.querySelector(location.hash) : null;
   if (target) { target.scrollIntoView({ block: 'center' }); target.classList.add('flash-hl'); } else if (scroll) scroll.scrollTop = scroll.scrollHeight;
 })();
+
+// Request inspection: "Send request…" shows the exact email in a dialog; "Send now" submits the form.
+(function () {
+  var form = document.querySelector('form[data-in-form]'), dlg = document.querySelector('[data-in-dlg]'); if (!form || !dlg) return;
+  var btn = form.querySelector('[data-in-review]'), q = function (k) { return dlg.querySelector('[data-d="' + k + '"]'); };
+  var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  btn.addEventListener('click', function () {
+    if (form.reportValidity && !form.reportValidity()) return;
+    var fd = new FormData(form), file = form.querySelector('input[name="req_file"]');
+    fd.delete('req_file'); if (file && file.files && file.files[0]) fd.append('req_name', file.files[0].name);
+    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing…';
+    fetch(form.getAttribute('action').replace(/\/new$/, '/draft'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      var err = q('err'), send = dlg.querySelector('[data-in-send]');
+      if (!j.ok) { err.textContent = j.error; err.hidden = false; ['to', 'cc', 'subject', 'att'].forEach(function (k) { q(k).textContent = ''; }); q('frame').srcdoc = ''; send.disabled = true; }
+      else {
+        err.hidden = !j.warn; err.textContent = j.warn || ''; send.disabled = !j.to.length;
+        q('to').textContent = j.to.join(', ') || '—'; q('cc').textContent = j.cc.join(', ') || '—'; q('subject').textContent = j.subject;
+        q('att').innerHTML = j.attachments.map(function (a) { return '<span class="in-dlg-a">📎 ' + esc(a) + '</span>'; }).join('');
+        q('frame').srcdoc = j.html;
+      }
+      if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+    }).catch(function () { alert('Could not prepare the email. Try again.'); }).then(function () { btn.disabled = false; btn.textContent = label; });
+  });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+  var send = dlg.querySelector('[data-in-send]'); send.addEventListener('click', function () { setTimeout(function () { send.disabled = true; send.textContent = 'Sending…'; }, 0); });
+})();

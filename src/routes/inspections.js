@@ -88,7 +88,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     if (!sid) {
       const S = await sups();
       const opts = open.sort((a, b) => String(a.ready || '9').localeCompare(String(b.ready || '9'))).map((p) => [`${p.supplier_id}|${p.po}`, `${p.po} · ${S[p.supplier_id]?.name || ''}${p.ready ? ` · ready ${PL.short(p.ready)}` : ''}`]);
-      return res.html(page({ title: 'Request inspection', nav: adminNav('inspections'), req, flash: takeFlash(req, res), body: html`<p class="crumbs"><a href="${BASE}">Inspections</a></p><h2 class="sl-title">Request inspection</h2>
+      return res.html(page({ title: 'Request inspection', nav: adminNav('inspections'), req, flash: takeFlash(req, res), wide: true, body: html`<p class="crumbs"><a href="${BASE}">Inspections</a></p><h2 class="sl-title">Request inspection</h2>
         <section class="card in-pick"><form method="get" action="${`${BASE}/new`}" data-in-pick><label>Purchase order ${ddSel('pick', '', [['', 'Choose a PO…'], ...opts])}</label><button class="btn">Continue</button></form></section>` }));
     }
     const sup = await db.get('suppliers', sid).catch(() => null); if (!sup) throw new HttpError(404, 'Supplier not found');
@@ -107,12 +107,12 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const coOpts = companies.filter((c) => c.active !== false).map((c) => [c.id, c.name]);
     const coDef = todo?.company_id || rows.filter((x) => x.supplier_id === sid && x.company_id).map((x) => x.company_id)[0] || coOpts[0]?.[0] || '';
     res.html(page({
-      title: 'Request inspection', nav: adminNav('inspections'), req, flash: takeFlash(req, res),
+      title: 'Request inspection', nav: adminNav('inspections'), req, flash: takeFlash(req, res), wide: true,
       body: html`<p class="crumbs"><a href="${BASE}">Inspections</a> · <a href="${poUrl(sid, [...chosen][0] || '')}">${sup.name}</a></p>
         <h2 class="sl-title">Request inspection · ${sup.name}</h2>
         ${coOpts.length ? '' : html`<p class="flash warn">No inspection companies yet — <a href="${`${BASE}/companies`}">add one</a> first.</p>`}
-        <form method="post" action="${`${BASE}/new`}" enctype="multipart/form-data" class="card in-form" data-busy>
-          <input type="hidden" name="supplier_id" value="${sid}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : ''}
+        <form method="post" action="${`${BASE}/new`}" enctype="multipart/form-data" class="card in-form" id="in-form" data-busy data-in-form>
+          <input type="hidden" name="supplier_id" value="${sid}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="ref" value="${IN.newRef()}">`}
           <h3 class="in-h">Purchase orders inspected</h3>
           <div class="in-pos">${mine.map((p) => html`<label class="in-po"><input type="checkbox" name="pos" value="${p.po}" ${chosen.has(PL.normPo(p.po)) ? raw('checked') : ''}><b>${p.po}</b><span class="sub">${Number(p.qty).toLocaleString('en-US')} pcs${p.ready ? ` · ready ${PL.short(p.ready)}` : ''}</span>${(() => {
             const items = []; const seen = new Set();
@@ -141,9 +141,35 @@ module.exports = function inspectionRoutes(router, { db, config }) {
             <label class="w2"><span class="lbl">Cc</span><input name="cc" value="${[...supMails, ...require('../projects').ownerEmails()].join(', ')}"><span class="sub">The supplier is copied so the factory is ready.</span></label>
             <label class="w3"><span class="lbl">Message</span><textarea name="intro" rows="3" placeholder="Default: please arrange the inspection on the date above, our testing requirements are attached."></textarea><span class="sub">The email also lists the factory address and contact, every product with qty and cartons, the AQL, and attaches the requirements file and the PO PDFs.</span></label>
           </div>
-          <div class="in-btns"><button class="btn" name="send" value="1">Send request</button><button class="btn ghost" name="send" value="">Save without sending</button><a class="link small" href="${BASE}">Cancel</a></div>
-        </form>`,
+          <div class="in-btns"><button type="button" class="btn" data-in-review>Send request…</button><button class="btn ghost" name="send" value="">Save without sending</button><a class="link small" href="${BASE}">Cancel</a></div>
+        </form>
+        <dialog class="in-dlg" data-in-dlg aria-labelledby="in-dlg-t">
+          <div class="in-dlg-h"><h3 id="in-dlg-t">Review the email</h3><span class="sub">This is exactly what the inspection company receives.</span><button type="button" class="in-dlg-x" data-close-dialog aria-label="Close">×</button></div>
+          <dl class="in-dlg-m"><dt>To</dt><dd data-d="to"></dd><dt>Cc</dt><dd data-d="cc"></dd><dt>Reply to</dt><dd>${IN.inspectAddress()}</dd><dt>Subject</dt><dd data-d="subject" class="in-dlg-s"></dd><dt>Attached</dt><dd data-d="att"></dd></dl>
+          <p class="in-dlg-err" data-d="err" hidden></p>
+          <iframe class="in-dlg-f" sandbox title="Email preview" data-d="frame"></iframe>
+          <div class="in-dlg-b"><button type="button" class="btn ghost" data-close-dialog>Back to edit</button><span class="sub">Edit To, Cc or the message on the form, then review again.</span><button type="submit" class="btn" form="in-form" name="send" value="1" data-in-send>Send now</button></div>
+        </dialog>`,
     }));
+  }));
+
+  // Review before sending: the exact request email for what is on the form (nothing is saved).
+  router.post(`${BASE}/draft`, G(async (req, res) => {
+    const { fields: f } = await parseForm(req, { limitBytes: 2 * 1024 * 1024 });
+    const sid = String(f.supplier_id || ''); const sup = await db.get('suppliers', sid).catch(() => null);
+    const pos = [].concat(f.pos || []).map((x) => String(x).trim()).filter(Boolean);
+    const err = (m) => res.json({ ok: false, error: m }, 400);
+    if (!sup) return err('Supplier not found'); if (!pos.length) return err('Tick at least one PO');
+    if (!f.company_id) return err('Choose the inspection company'); if (!IN.TYPES[f.type]) return err('Choose the inspection type');
+    const versions = await IN.reqVersions(db, sid); const reqName = String(f.req_name || '').trim();
+    if (!reqName && !(f.req_ok && versions.length)) return err(versions.length ? `Attach the updated requirements file, or tick that v${versions[0].version} is still correct` : 'Attach the testing requirements file');
+    const old = f.id ? await db.get('inspections', String(f.id)).catch(() => null) : null;
+    const i = { ref: old?.ref || (IN.REF_RE.test(String(f.ref || '')) ? String(f.ref) : 'LBI-NEW'), supplier_id: sid, pos, company_id: String(f.company_id), type: f.type, inspection_date: PL.isoDay(f.inspection_date), aql: String(f.aql || '').slice(0, 40) || null };
+    const d = await IN.requestDraft(db, i, { to: emails(f.to), cc: emails(f.cc), intro: String(f.intro || '').trim() });
+    const files = await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => []);
+    const poPdfs = files.filter((x) => x.kind === 'PO' && (x.pos || []).some((p) => pos.some((q) => PL.normPo(p) === PL.normPo(q)))).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0)).slice(0, 3).map((x) => x.name);
+    const reqLabel = reqName ? `${reqName} (requirements v${(versions[0]?.version || 0) + 1})` : `${versions[0].file.name} (requirements v${versions[0].version})`;
+    res.json({ ok: true, to: d.to, cc: d.cc, subject: d.subject, html: d.html, attachments: [reqLabel, ...poPdfs], warn: d.to.length ? '' : 'The inspection company has no email: add it under Inspection companies, or type one in To.' });
   }));
 
   router.post(`${BASE}/new`, G(async (req, res) => {
@@ -163,7 +189,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     let i = f.id ? rows.find((x) => x.id === f.id) : null;
     const base = { supplier_id: sid, pos, company_id: String(f.company_id), type: f.type, container_id: f.container_id || null, inspection_date: date, aql: String(f.aql || '').slice(0, 40) || null, confirm_days: Math.max(1, Math.min(30, Number(f.confirm_days) || 7)), fee_quoted: IN.num(f.fee_quoted), updated_at: now() };
     if (i) { await db.update('inspections', { id: i.id }, base); i = { ...i, ...base }; }
-    else i = await db.insert('inspections', { ...base, ref: IN.newRef(), status: 'todo', log: [{ at: now(), text: 'Created', by: by(req) }], created_at: now() });
+    else { const want = IN.REF_RE.test(String(f.ref || '')) && !rows.some((x) => x.ref === f.ref) ? String(f.ref) : IN.newRef(); i = await db.insert('inspections', { ...base, ref: want, status: 'todo', log: [{ at: now(), text: 'Created', by: by(req) }], created_at: now() }); }
     // other "to request" rows for the POs now covered: this request replaces them
     for (const x of rows.filter((x) => x.id !== i.id && x.status === 'todo' && x.supplier_id === sid && IN.posOf(x).every((p) => pos.some((q) => PL.normPo(q) === PL.normPo(p))))) await db.update('inspections', { id: x.id }, { status: 'cancelled', log: IN.withLog(x, `Replaced by ${i.ref}`, by(req)), updated_at: now() });
     let reqFile = versions[0]?.file; let ver = versions[0]?.version;

@@ -4971,6 +4971,14 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   // 2. request: both POs, requirements file required (none yet), then sent with it
   const post = async (fields, file) => { const fd = new FormData(); for (const [a, b] of fields) fd.append(a, b); if (file) fd.append('req_file', new Blob([Buffer.from('%PDF req')], { type: 'application/pdf' }), file); return fetch(`${base}/admin/orders/inspections/new`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
   const fields = [['id', todo.id], ['supplier_id', k.id], ['pos', '900020'], ['pos', '900021'], ['company_id', co.id], ['type', 'psi'], ['inspection_date', D(20)], ['aql', 'II · 2.5 / 4.0'], ['confirm_days', '7'], ['send', '1']];
+  { // review before sending: the exact email, nothing saved, nothing sent
+    const n0 = sent.length; const dr = async (extra) => { const fd = new FormData(); for (const [a, b] of [...fields, ...extra]) fd.append(a, b); return (await fetch(`${base}/admin/orders/inspections/draft`, { method: 'POST', body: fd, headers: { cookie } })).json(); };
+    const bad = await dr([]); assert.equal(bad.ok, false); assert.match(bad.error, /requirements/);
+    const ok = await dr([['req_name', 'Kean_testing_req.pdf']]); assert.equal(ok.ok, true); assert.deepEqual(ok.to, ['booking@qima.com']); assert.ok(ok.cc.includes('sales@kean.cn'));
+    assert.match(ok.subject, /PO 900020, 900021/); assert.match(ok.html, /Bao An, Shenzhen/); assert.match(ok.attachments[0], /Kean_testing_req\.pdf \(requirements v1\)/);
+    assert.equal(sent.length, n0); assert.equal(db.tables.inspections.find((i) => i.id === todo.id).status, 'todo');
+    assert.match((await req(base, 'GET', `/admin/orders/inspections/new?id=${todo.id}`, { cookie })).text, /data-in-review[\s\S]*data-in-dlg/);
+  }
   await post(fields);
   assert.equal(db.tables.inspections.find((i) => i.id === todo.id).status, 'todo');   // refused: no requirements
   const r1 = await post(fields, 'Kean_testing_req.pdf');
