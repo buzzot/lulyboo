@@ -4,7 +4,7 @@
 //   Every open PO needs one by default (switch off per PO or per supplier). The hourly run creates a "to request" row
 //   for each new PO and tells you on Telegram: inspect around ready date − 3 days, book a month before that.
 //   Request  → email (English) to the inspection company, cc the supplier, with the testing requirements file (a new
-//              version each time you change it), the PO PDFs and the order lines. Ref LBI-XXXX in the subject.
+//              version each time you change it) and the order lines. Only inspection documents are attached (no PO / order files). Ref LBI-XXXX in the subject.
 //   N days before the inspection day (7 by default) two confirmation emails go out: to the inspector (date, factory,
 //   final qty) and to the supplier (is the date OK, goods finished and packed). Replies go to inspect@ and AI reads
 //   them: confirmed, or an issue with a new date. No reply in 2 days → reminder + Telegram.
@@ -146,8 +146,7 @@ async function requestDraft(db, i, edits = {}) {
 async function attachmentsFor(db, i) {
   const files = await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => []);
   const req = files.find((f) => f.id === i.req_file_id);
-  const poPdfs = files.filter((f) => f.kind === 'PO' && (f.pos || []).some((p) => posOf(i).some((q) => PL.normPo(p) === PL.normPo(q)))).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0));
-  const pick = [req, ...poPdfs.slice(0, 3)].filter(Boolean);
+  const pick = [req].filter(Boolean);   // inspection documents only — PO / order files are not sent
   const out = [];
   for (const f of pick) { try { out.push({ filename: f.name, content: await db.docs.download(f.path) }); } catch { /* skip unreadable */ } }
   return out;

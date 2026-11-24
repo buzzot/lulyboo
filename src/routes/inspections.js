@@ -104,8 +104,6 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const cOpts = [['', 'Not linked'], ...conts.filter((c) => cIds.has(c.id) || c.id === todo?.container_id).map((c) => [c.id, require('../shipname').shipName(c)])];
     const P = require('../projects');
     const supMails = await P.supplierRecipients(db, sup).catch(() => []);
-    const mineSet = new Set(mine.map((p) => PL.normPo(p.po)));
-    const poDocs = (await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => [])).filter((f) => f.kind === 'PO' && (f.pos || []).some((x) => mineSet.has(PL.normPo(x)))).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0) || String(b.created_at).localeCompare(String(a.created_at)));
     const coOpts = companies.filter((c) => c.active !== false).map((c) => [c.id, c.name]);
     const coDef = todo?.company_id || rows.filter((x) => x.supplier_id === sid && x.company_id).map((x) => x.company_id)[0] || coOpts[0]?.[0] || '';
     res.html(page({
@@ -142,10 +140,6 @@ module.exports = function inspectionRoutes(router, { db, config }) {
             <div class="mdrop small in-drop" data-filebox data-max="1"><div class="mdrop-box"><input type="file" name="req_file" accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg" aria-label="Updated testing requirements"><span class="dz-main" data-main>${last ? html`Drop an updated file <span class="sub">→ v${last.version + 1}</span>` : html`Drop the file or <u>choose</u>`}</span><span class="dz-hint">PDF, Word, Excel or image · paste works too</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
               ${versions.length > 1 ? html`<p class="sub in-hist">History: ${versions.slice().reverse().map((v, n) => html`${n ? ' · ' : ''}${fileA(v.file, `v${v.version}`)}`)}</p>` : ''}
             </div>
-            <div class="in-att">
-              <div class="in-att-h"><b>PO documents</b><span class="sub">added automatically</span></div>
-              ${poDocs.length ? html`<ul class="in-att-l">${poDocs.map((f) => html`<li data-in-pos="${(f.pos || []).map(PL.normPo).join(' ')}"><span class="in-ic">PDF</span><span class="in-att-n">${fileA(f, f.name)}${f.signed ? html`<small class="ok">✓ signed</small>` : ''}</span></li>`)}</ul><p class="sub" data-in-nopo hidden>No PO PDF for the ticked POs.</p>` : html`<p class="sub">No PO PDFs uploaded for these POs. Upload them on the PO page to send them too.</p>`}
-            </div>
           </aside></div>
         </form>
         <dialog class="in-dlg" data-in-dlg aria-labelledby="in-dlg-t">
@@ -177,10 +171,8 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const old = f.id ? await db.get('inspections', String(f.id)).catch(() => null) : null;
     const i = { ref: old?.ref || (IN.REF_RE.test(String(f.ref || '')) ? String(f.ref) : 'LBI-NEW'), supplier_id: sid, pos, company_id: String(f.company_id), type: f.type, inspection_date: PL.isoDay(f.inspection_date), aql: String(f.aql || '').slice(0, 40) || null };
     const d = await IN.requestDraft(db, i, { to: emails(f.to), cc: emails(f.cc), intro: String(f.intro || '').trim() });
-    const files = await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => []);
-    const poPdfs = files.filter((x) => x.kind === 'PO' && (x.pos || []).some((p) => pos.some((q) => PL.normPo(p) === PL.normPo(q)))).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0)).slice(0, 3).map((x) => x.name);
     const reqLabel = reqName ? `${reqName} (requirements v${(versions[0]?.version || 0) + 1})` : `${versions[0].file.name} (requirements v${versions[0].version})`;
-    res.json({ ok: true, to: d.to, cc: d.cc, subject: d.subject, html: d.html, attachments: [reqLabel, ...poPdfs], warn: d.to.length ? '' : 'The inspection company has no email: add it under Inspection companies, or type one in To.' });
+    res.json({ ok: true, to: d.to, cc: d.cc, subject: d.subject, html: d.html, attachments: [reqLabel], warn: d.to.length ? '' : 'The inspection company has no email: add it under Inspection companies, or type one in To.' });
   }));
 
   router.post(`${BASE}/new`, G(async (req, res) => {
