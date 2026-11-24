@@ -104,6 +104,8 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const cOpts = [['', 'Not linked'], ...conts.filter((c) => cIds.has(c.id) || c.id === todo?.container_id).map((c) => [c.id, require('../shipname').shipName(c)])];
     const P = require('../projects');
     const supMails = await P.supplierRecipients(db, sup).catch(() => []);
+    const mineSet = new Set(mine.map((p) => PL.normPo(p.po)));
+    const poDocs = (await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => [])).filter((f) => f.kind === 'PO' && (f.pos || []).some((x) => mineSet.has(PL.normPo(x)))).sort((a, b) => (b.signed ? 1 : 0) - (a.signed ? 1 : 0) || String(b.created_at).localeCompare(String(a.created_at)));
     const coOpts = companies.filter((c) => c.active !== false).map((c) => [c.id, c.name]);
     const coDef = todo?.company_id || rows.filter((x) => x.supplier_id === sid && x.company_id).map((x) => x.company_id)[0] || coOpts[0]?.[0] || '';
     res.html(page({
@@ -113,6 +115,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
         ${coOpts.length ? '' : html`<p class="flash warn">No inspection companies yet — <a href="${`${BASE}/companies`}">add one</a> first.</p>`}
         <form method="post" action="${`${BASE}/new`}" enctype="multipart/form-data" class="card in-form" id="in-form" data-busy data-in-form>
           <input type="hidden" name="supplier_id" value="${sid}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="ref" value="${IN.newRef()}">`}
+          <div class="in-lay"><div class="in-main">
           <h3 class="in-h">Purchase orders inspected</h3>
           <div class="in-pos">${mine.map((p) => html`<label class="in-po"><input type="checkbox" name="pos" value="${p.po}" ${chosen.has(PL.normPo(p.po)) ? raw('checked') : ''}><b>${p.po}</b><span class="sub">${Number(p.qty).toLocaleString('en-US')} pcs${p.ready ? ` · ready ${PL.short(p.ready)}` : ''}</span>${(() => {
             const items = []; const seen = new Set();
@@ -128,27 +131,35 @@ module.exports = function inspectionRoutes(router, { db, config }) {
             <label><span class="lbl">Confirmation emails</span>${ddSel('confirm_days', String(todo?.confirm_days ?? 7), [3, 5, 7, 10, 14].map((d) => [String(d), `${d} days before · inspector + supplier`]))}</label>
             <label><span class="lbl">Fee quoted (USD)</span><input name="fee_quoted" inputmode="decimal" value="${todo?.fee_quoted ?? ''}" placeholder="optional"></label>
           </div>
-          <h3 class="in-h">Testing requirements <span class="sub">check it, update if needed, attach</span></h3>
-          <div class="in-req">
-            ${last ? html`<div class="in-last">📄 ${fileA(last.file, last.file.name)} <span class="cp-tag">v${last.version}</span> <span class="sub">${last.used.length ? `used ${PL.short(String(last.used[0].at).slice(0, 10))} (${last.used[0].ref})` : `added ${PL.short(String(last.file.created_at).slice(0, 10))}`}</span> <span class="cp-tag warn">Check before sending</span></div>
-              <label class="cp-chk"><input type="checkbox" name="req_ok" value="1"> v${last.version} is still correct — send it again</label>` : html`<p class="sub">No requirements file for ${sup.name} yet — attach it.</p>`}
-            <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="req_file" accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg" aria-label="Updated testing requirements"><span class="dz-main" data-main>${last ? `Drop the updated file → saved as v${last.version + 1}` : 'Drop the requirements file (saved as v1)'}</span><span class="dz-hint">PDF, Word, Excel or image</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-            ${versions.length > 1 ? html`<p class="sub">History: ${versions.slice().reverse().map((v, n) => html`${n ? ' · ' : ''}${fileA(v.file, `v${v.version}`)} ${PL.short(String(v.file.created_at).slice(0, 10))}`)} — every request keeps the exact file it was sent with.</p>` : ''}
-          </div>
-          <h3 class="in-h">Email <span class="sub">English · replies come to ${IN.inspectAddress()}</span></h3>
-          <div class="in-grid">
-            <label class="w2"><span class="lbl">To</span><input name="to" placeholder="the company's booking email (from Inspection companies)" value=""><span class="sub">Leave empty to use the company's email.</span></label>
-            <label class="w2"><span class="lbl">Cc</span><input name="cc" value="${[...supMails, ...require('../projects').ownerEmails()].join(', ')}"><span class="sub">The supplier is copied so the factory is ready.</span></label>
-            <label class="w3"><span class="lbl">Message</span><textarea name="intro" rows="3" placeholder="Default: please arrange the inspection on the date above, our testing requirements are attached."></textarea><span class="sub">The email also lists the factory address and contact, every product with qty and cartons, the AQL, and attaches the requirements file and the PO PDFs.</span></label>
-          </div>
           <div class="in-btns"><button type="button" class="btn" data-in-review>Send request…</button><button class="btn ghost" name="send" value="">Save without sending</button><a class="link small" href="${BASE}">Cancel</a></div>
+          </div>
+          <aside class="in-side" aria-label="Attachments">
+            <h3 class="in-h">Attachments <span class="sub">sent with the request</span></h3>
+            <div class="in-att">
+              <div class="in-att-h"><b>Testing requirements</b>${last ? html`<span class="cp-tag">v${last.version}</span>` : html`<span class="cp-tag warn">Required</span>`}</div>
+              ${last ? html`<div class="in-att-f"><span class="in-ic">${(String(last.file.name).match(/\.([a-z0-9]+)$/i) || [, 'FILE'])[1].toUpperCase().slice(0, 4)}</span><span class="in-att-n">${fileA(last.file, last.file.name)}<small>${last.used.length ? `used ${PL.short(String(last.used[0].at).slice(0, 10))} · ${last.used[0].ref}` : `added ${PL.short(String(last.file.created_at).slice(0, 10))}`}</small></span></div>
+                <label class="cp-chk in-ok"><input type="checkbox" name="req_ok" value="1"> Still correct, send v${last.version} again</label>` : html`<p class="sub">No file for ${sup.name} yet.</p>`}
+            <div class="mdrop small in-drop" data-filebox data-max="1"><div class="mdrop-box"><input type="file" name="req_file" accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg" aria-label="Updated testing requirements"><span class="dz-main" data-main>${last ? html`Drop an updated file <span class="sub">→ v${last.version + 1}</span>` : html`Drop the file or <u>choose</u>`}</span><span class="dz-hint">PDF, Word, Excel or image · paste works too</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+              ${versions.length > 1 ? html`<p class="sub in-hist">History: ${versions.slice().reverse().map((v, n) => html`${n ? ' · ' : ''}${fileA(v.file, `v${v.version}`)}`)}</p>` : ''}
+            </div>
+            <div class="in-att">
+              <div class="in-att-h"><b>PO documents</b><span class="sub">added automatically</span></div>
+              ${poDocs.length ? html`<ul class="in-att-l">${poDocs.map((f) => html`<li data-in-pos="${(f.pos || []).map(PL.normPo).join(' ')}"><span class="in-ic">PDF</span><span class="in-att-n">${fileA(f, f.name)}${f.signed ? html`<small class="ok">✓ signed</small>` : ''}</span></li>`)}</ul><p class="sub" data-in-nopo hidden>No PO PDF for the ticked POs.</p>` : html`<p class="sub">No PO PDFs uploaded for these POs. Upload them on the PO page to send them too.</p>`}
+            </div>
+          </aside></div>
         </form>
         <dialog class="in-dlg" data-in-dlg aria-labelledby="in-dlg-t">
-          <div class="in-dlg-h"><h3 id="in-dlg-t">Review the email</h3><span class="sub">This is exactly what the inspection company receives.</span><button type="button" class="in-dlg-x" data-close-dialog aria-label="Close">×</button></div>
-          <dl class="in-dlg-m"><dt>To</dt><dd data-d="to"></dd><dt>Cc</dt><dd data-d="cc"></dd><dt>Reply to</dt><dd>${IN.inspectAddress()}</dd><dt>Subject</dt><dd data-d="subject" class="in-dlg-s"></dd><dt>Attached</dt><dd data-d="att"></dd></dl>
+          <div class="in-dlg-h"><h3 id="in-dlg-t">Review the email</h3><span class="sub">Check it, edit To, Cc or the message here, then send.</span><button type="button" class="in-dlg-x" data-close-dialog aria-label="Close">×</button></div>
+          <div class="in-dlg-m">
+            <label><span>To</span><input name="to" form="in-form" data-in-live placeholder="the company's booking email" aria-label="To"></label>
+            <label><span>Cc</span><input name="cc" form="in-form" data-in-live value="${[...supMails, ...require('../projects').ownerEmails()].join(', ')}" aria-label="Cc"></label>
+            <div><span>Subject</span><b data-d="subject"></b></div>
+            <div><span>Attached</span><span data-d="att"></span></div>
+            <label class="in-dlg-msg"><span>Message</span><textarea name="intro" form="in-form" rows="2" data-in-live placeholder="Optional: replaces the first paragraph of the email." aria-label="Message"></textarea></label>
+            <p class="sub">English · replies come to ${IN.inspectAddress()} · the email lists the factory address and contact, every product with qty and cartons, and the AQL.</p></div>
           <p class="in-dlg-err" data-d="err" hidden></p>
           <iframe class="in-dlg-f" sandbox title="Email preview" data-d="frame"></iframe>
-          <div class="in-dlg-b"><button type="button" class="btn ghost" data-close-dialog>Back to edit</button><span class="sub">Edit To, Cc or the message on the form, then review again.</span><button type="submit" class="btn" form="in-form" name="send" value="1" data-in-send>Send now</button></div>
+          <div class="in-dlg-b"><button type="button" class="btn ghost" data-close-dialog>Back to edit</button><span class="sub" data-d="state">Changes update the preview.</span><button type="submit" class="btn" form="in-form" name="send" value="1" data-in-send>Send now</button></div>
         </dialog>`,
     }));
   }));

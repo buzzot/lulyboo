@@ -3189,28 +3189,49 @@
   if (target) { target.scrollIntoView({ block: 'center' }); target.classList.add('flash-hl'); } else if (scroll) scroll.scrollTop = scroll.scrollHeight;
 })();
 
-// Request inspection: "Send request…" shows the exact email in a dialog; "Send now" submits the form.
+// Request inspection: "Send request…" opens the exact email in a dialog; To, Cc and the message are edited there (live preview); "Send now" submits the form.
 (function () {
   var form = document.querySelector('form[data-in-form]'), dlg = document.querySelector('[data-in-dlg]'); if (!form || !dlg) return;
-  var btn = form.querySelector('[data-in-review]'), q = function (k) { return dlg.querySelector('[data-d="' + k + '"]'); };
+  var btn = form.querySelector('[data-in-review]'), q = function (k) { return dlg.querySelector('[data-d="' + k + '"]'); }, send = dlg.querySelector('[data-in-send]');
   var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
-  btn.addEventListener('click', function () {
-    if (form.reportValidity && !form.reportValidity()) return;
-    var fd = new FormData(form), file = form.querySelector('input[name="req_file"]');
+  var seq = 0, timer = null;
+  function refresh(open) {
+    var fd = new FormData(form), file = form.querySelector('input[name="req_file"]'), my = ++seq;
     fd.delete('req_file'); if (file && file.files && file.files[0]) fd.append('req_name', file.files[0].name);
-    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing…';
-    fetch(form.getAttribute('action').replace(/\/new$/, '/draft'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
-      var err = q('err'), send = dlg.querySelector('[data-in-send]');
-      if (!j.ok) { err.textContent = j.error; err.hidden = false; ['to', 'cc', 'subject', 'att'].forEach(function (k) { q(k).textContent = ''; }); q('frame').srcdoc = ''; send.disabled = true; }
+    if (!open) q('state').textContent = 'Updating…';
+    return fetch(form.getAttribute('action').replace(/\/new$/, '/draft'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (my !== seq) return; var err = q('err');
+      if (!j.ok) { err.textContent = j.error; err.hidden = false; q('subject').textContent = ''; q('att').textContent = ''; q('frame').srcdoc = ''; send.disabled = true; }
       else {
         err.hidden = !j.warn; err.textContent = j.warn || ''; send.disabled = !j.to.length;
-        q('to').textContent = j.to.join(', ') || '—'; q('cc').textContent = j.cc.join(', ') || '—'; q('subject').textContent = j.subject;
+        var to = dlg.querySelector('input[name="to"]'); to.placeholder = j.to.join(', ') || "the company's booking email";
+        q('subject').textContent = j.subject;
         q('att').innerHTML = j.attachments.map(function (a) { return '<span class="in-dlg-a">📎 ' + esc(a) + '</span>'; }).join('');
         q('frame').srcdoc = j.html;
       }
-      if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
-    }).catch(function () { alert('Could not prepare the email. Try again.'); }).then(function () { btn.disabled = false; btn.textContent = label; });
+      q('state').textContent = 'Changes update the preview.';
+    });
+  }
+  btn.addEventListener('click', function () {
+    if (form.reportValidity && !form.reportValidity()) return;
+    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing…';
+    refresh(true).then(function () { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); })
+      .catch(function () { alert('Could not prepare the email. Try again.'); }).then(function () { btn.disabled = false; btn.textContent = label; });
   });
+  dlg.addEventListener('input', function (e) { if (!e.target.hasAttribute('data-in-live')) return; clearTimeout(timer); timer = setTimeout(function () { refresh(false).catch(function () {}); }, 600); });
   dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
-  var send = dlg.querySelector('[data-in-send]'); send.addEventListener('click', function () { setTimeout(function () { send.disabled = true; send.textContent = 'Sending…'; }, 0); });
+  send.addEventListener('click', function () { setTimeout(function () { send.disabled = true; send.textContent = 'Sending…'; }, 0); });
+})();
+
+// Request inspection: the PO documents list follows the ticked POs.
+(function () {
+  var form = document.querySelector('form[data-in-form]'); if (!form) return;
+  var rows = form.querySelectorAll('[data-in-pos]'), none = form.querySelector('[data-in-nopo]'); if (!rows.length) return;
+  var norm = function (x) { return String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^PO(?=\d)/, ''); };
+  function sync() {
+    var on = Array.prototype.map.call(form.querySelectorAll('input[name="pos"]:checked'), function (c) { return norm(c.value); }), n = 0;
+    rows.forEach(function (r) { var ok = r.getAttribute('data-in-pos').split(' ').some(function (p) { return on.indexOf(norm(p)) >= 0; }); r.hidden = !ok; if (ok) n++; });
+    if (none) none.hidden = n > 0;
+  }
+  form.addEventListener('change', function (e) { if (e.target.name === 'pos') sync(); }); sync();
 })();
