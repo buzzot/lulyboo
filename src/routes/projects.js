@@ -248,8 +248,6 @@ module.exports = function projectRoutes(router, { db, config }) {
     <h3 class="sec2">Files <span class="count">${(st.files || []).length}</span></h3>${(st.files || []).length ? html`<ul class="plain">${st.files.map((x) => html`<li>${x.title}</li>`)}</ul>` : html`<p class="sub">None</p>`}
     <h3 class="sec2">Factory checklist <span class="count">${(st.checklist || []).length}</span></h3>${(st.checklist || []).length ? CK.sections(CK.normItems(st.checklist)).map((s) => html`<details class="ck-sec"><summary><b>${s.title}</b> <span class="count">${s.rows.length}</span></summary>
       <table class="list compact ck-q"><tbody>${s.rows.map((it) => html`<tr><td>${it.name}</td><td>${typeTag(it)}</td><td class="r">${reqTag(it)}</td></tr>`)}</tbody></table></details>`) : html`<p class="sub">None</p>`}`;
-  const newTypeOpts = [['text', 'Text answer'], ['file', 'File upload'], ['yesno', 'Yes / No']];
-  const reqOpts = [['required', 'Required'], ['preferred', 'Preferred'], ['optional', 'Optional']];
   // Spec tab: the factory checklist suppliers answer (copied from the category; switch questions off or add your own).
   function checklistCard(p, cat) {
     const items = CK.normItems(p.checklist, { project: true }); const on = items.filter((x) => x.on).length;
@@ -261,7 +259,6 @@ module.exports = function projectRoutes(router, { db, config }) {
         <ul class="ck-list">${s.rows.map((x) => html`<li class="${x.on ? '' : 'off'}"><label class="ck-on"><input type="checkbox" name="ck_on" value="${x.key}" ${x.on ? raw('checked') : ''} aria-label="Ask: ${x.name}"></label>
           <span class="ck-name"><b>${x.name}</b>${x.custom ? html` <span class="pill">This project</span>` : ''}</span><span>${typeTag(x)}</span><span class="r">${reqTag(x)}</span></li>`)}</ul></details>`)
       : html`<p class="d-empty">${cat ? html`The ${cat.name} category has no checklist yet. <a href="/admin/categories/${cat.id}/checklist">Import it</a> or add questions for this project below.` : 'No questions yet.'}</p>`}
-      <div class="ck-add"><input name="ck_new_name" maxlength="200" placeholder="Add a question for this project only, e.g. FCC ID test report" aria-label="New question">${ddSel('ck_new_type', 'text', newTypeOpts, { cls: 'dd-sm' })}${ddSel('ck_new_req', 'required', reqOpts, { cls: 'dd-sm' })}</div>
       <p class="sub">Unticked questions are not asked. Changes go to suppliers when you publish the next version.</p></section>`;
   }
 
@@ -443,9 +440,6 @@ module.exports = function projectRoutes(router, { db, config }) {
     if (f.ck_form === '1' && !patch.checklist) {
       const on = new Set([].concat(f.ck_on || []));
       const list = (p.checklist || []).map((x) => ({ ...x, on: on.has(x.key) }));
-      const nn = str(f.ck_new_name, 200);
-      if (nn) { const type = f.ck_new_type === 'file' ? 'file' : f.ck_new_type === 'yesno' ? 'choice' : 'text'; const req = ['required', 'preferred', 'optional'].includes(f.ck_new_req) ? f.ck_new_req : 'required';
-        list.push({ key: CK.newKey(), name: nn, section: 'This project', type, options: type === 'choice' ? ['Yes', 'No', 'Other - specify in Details'] : [], req, req_label: CK.REQ[req], hint: '', on: true, custom: true }); }
       if (JSON.stringify(list) !== JSON.stringify(p.checklist || [])) patch.checklist = list;
     }
     await db.update('dev_projects', { id: p.id }, patch);

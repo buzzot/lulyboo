@@ -5131,9 +5131,9 @@ test('Development: factory checklist Excel → category → project; supplier an
   const p = db.tables.dev_projects[0]; assert.equal(p.category, 'Pet Bowls'); assert.equal(p.checklist.length, 6);
   // switch one off + a custom question, before anyone is invited (edits are live)
   const on = p.checklist.filter((x) => x.key !== 'Non_Slip').map((x) => x.key);
-  const fb = new URLSearchParams([['name', 'Cat bowl'], ['category_id', cat.id], ['requirements', 'Wall 1.5 mm'], ['ck_form', '1'], ...on.map((k) => ['ck_on', k]), ['ck_new_name', 'Glaze lead test'], ['ck_new_type', 'file'], ['ck_new_req', 'required']]);
+  const fb = new URLSearchParams([['name', 'Cat bowl'], ['category_id', cat.id], ['requirements', 'Wall 1.5 mm'], ['ck_form', '1'], ...on.map((k) => ['ck_on', k])]);
   await fetch(`${base}/admin/projects/${p.id}`, { method: 'POST', headers: { cookie: admin, 'content-type': 'application/x-www-form-urlencoded' }, body: fb, redirect: 'manual' });
-  assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false); const glaze = p.checklist.find((x) => x.custom); assert.equal(glaze.type, 'file');
+  assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
   assert.doesNotMatch((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v2/);
   // supplier
   const s = await db.insert('suppliers', { name: 'Kiln Co', email: 'k@k.com', active: true });
@@ -5142,20 +5142,20 @@ test('Development: factory checklist Excel → category → project; supplier an
   await req(base, 'POST', `/admin/projects/${p.id}/invite`, { cookie: admin, form: { supplier_ids: s.id } });
   const inv = db.tables.dev_invitations[0];
   let view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text;
-  assert.match(view, /Factory checklist/); assert.match(view, /Glaze lead test/); assert.doesNotMatch(view, /Non-slip base/); assert.match(view, /Factory checklist first/);
+  assert.match(view, /Factory checklist/); assert.doesNotMatch(view, /Non-slip base/); assert.match(view, /Factory checklist first/);
   assert.match(view, /value="Kiln Co"/, 'factory name is prefilled');
   // quote blocked until the required questions are answered
   const quote = { currency: 'USD', qty0: '1000', price0: '2.1' };
   await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal((db.tables.dev_quotes || []).length, 0);
   const fd = new FormData(); fd.append('v_Factory_Name', 'Kiln Co'); fd.append('st_Product_Images', 'yes'); fd.append('file_Product_Images', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'front.png');
   fd.append('v_BPA_Free', 'Yes'); fd.append('d_BPA_Free', ''); fd.append('v_Certifications_Available', 'FDA'); fd.append('v_Certifications_Available', 'LFGB'); fd.append('v_Certifications_Available', 'Fake'); fd.append('d_Certifications_Available', '');
-  fd.append('v_Capacity', ''); fd.append('na_Capacity', '1'); fd.append(`st_${glaze.key}`, 'date'); fd.append(`dt_${glaze.key}`, '2026-12-20');
+  fd.append('v_Capacity', ''); fd.append('na_Capacity', '1');
   assert.equal((await fetch(`${base}/portal/projects/${inv.id}/docs`, { method: 'POST', headers: { cookie: sc }, body: fd, redirect: 'manual' })).status, 303);
   const ans = db.tables.dev_invitations[0].doc_answers;
-  assert.equal(ans.Product_Images.files.length, 1); assert.deepEqual(ans.Certifications_Available.value, ['FDA', 'LFGB']); assert.equal(ans.Capacity.na, true); assert.equal(ans[glaze.key].date, '2026-12-20');
+  assert.equal(ans.Product_Images.files.length, 1); assert.deepEqual(ans.Certifications_Available.value, ['FDA', 'LFGB']); assert.equal(ans.Capacity.na, true);
   assert.equal((await req(base, 'GET', `/portal/projects/${inv.id}/docs/Product_Images/0`, { cookie: sc })).status, 200);
   await req(base, 'POST', `/portal/projects/${inv.id}/quote`, { cookie: sc, form: quote }); assert.equal(db.tables.dev_quotes.length, 1);
-  const thread = (await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie: admin })).text; assert.match(thread, /front\.png/); assert.match(thread, /FDA, LFGB/); assert.match(thread, /6 \/ 6/);
+  const thread = (await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}`, { cookie: admin })).text; assert.match(thread, /front\.png/); assert.match(thread, /FDA, LFGB/); assert.match(thread, /5 \/ 5/);
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}?tab=suppliers`, { cookie: admin })).text, /All required answered/);
   const cmp = (await req(base, 'GET', `/admin/projects/${p.id}?tab=quotes`, { cookie: admin })).text; assert.match(cmp, /Factory checklist answers/); assert.match(cmp, /Not applicable/);
   assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/suppliers/${inv.id}/docs/Product_Images/0`, { cookie: admin })).status, 200);
@@ -5171,7 +5171,7 @@ test('Development: factory checklist Excel → category → project; supplier an
   view = (await req(base, 'GET', `/portal/projects/${inv.id}`, { cookie: sc })).text; assert.match(view, /Wall 2\.0 mm/); assert.match(view, /updated to v2/);
   const hist = await req(base, 'GET', `/admin/projects/${p.id}/versions?cmp=2`, { cookie: admin }); assert.equal(hist.status, 200); assert.match(hist.text, /1\.5/); assert.match(hist.text, /Kiln Co · on v1/);
   assert.equal((await req(base, 'GET', `/admin/projects/${p.id}/versions?view=1`, { cookie: admin })).status, 200);
-  assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Glaze lead test/);
+  assert.match((await req(base, 'GET', `/admin/projects/${p.id}/preview`, { cookie: admin })).text, /Certifications Available/);
   // a changed Excel → category v2 → Update banner on the project; own questions and switched-off ones kept
   const x2 = mkXlsx('Factory Checklist - Pet Bowls', [...rows1, ['MATERIAL & SAFETY', 'Lead-Free', '', '', '', 'Lead_Free', 'Required', 'Yes / No / Other - specify in Details']], lists);
   const imp2 = new FormData(); imp2.append('file', new Blob([x2]), 'Factory Checklist - Pet Bowls.xlsx');
@@ -5179,7 +5179,7 @@ test('Development: factory checklist Excel → category → project; supplier an
   assert.equal(cat.checklist_version, 2);
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /checklist v2 is available/);
   await req(base, 'POST', `/admin/projects/${p.id}/checklist/refresh`, { cookie: admin, form: {} });
-  assert.equal(p.checklist_version, 2); assert.ok(p.checklist.some((x) => x.key === 'Lead_Free')); assert.ok(p.checklist.some((x) => x.custom)); assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
+  assert.equal(p.checklist_version, 2); assert.ok(p.checklist.some((x) => x.key === 'Lead_Free')); assert.equal(p.checklist.find((x) => x.key === 'Non_Slip').on, false);
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Factory checklist: \+ Lead-Free/);
   const d = CK.diffStates({ requirements: 'Wall thickness 1.5 mm' }, { requirements: 'Wall thickness 2.0 mm' }); assert.equal(d[0].items[0].old, '1.5'); assert.equal(d[0].items[0].new, '2.0');
 });
