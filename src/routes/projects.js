@@ -295,6 +295,7 @@ module.exports = function projectRoutes(router, { db, config }) {
     const cats = await db.list('categories', { order: 'sort.asc,name.asc' }); const cat = cats.find((c) => c.id === f.category_id);
     try {
       const r = await require('../dev-describe').describe({ files: P.fileList(files, 'files'), name: str(f.name, 160) || '', category: cat?.name || '', notes: str(f.notes, 3000) || '', categories: cats.map((c) => c.name) });
+      if (!r.enough) return res.json({ ok: false, error: `Not enough to describe the product yet. Drop a photo or a brief, or write a few notes (what it is, material, size).${r.missing.length ? ` Missing: ${r.missing.join(' · ')}` : ''}` }, 422);
       const sc = !cat && r.category ? cats.find((c) => c.name === r.category) : null;
       res.json({ ok: true, description: r.description, name: f.name ? '' : r.name, category_id: sc?.id || '', category: sc?.name || '', missing: r.missing, read: r.read, skipped: r.skipped });
     } catch (e) { res.json({ ok: false, error: `AI could not write it: ${String(e.message).slice(0, 160)}` }, 502); }

@@ -54,12 +54,13 @@ const TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      description: { type: 'string', description: '2-4 short sentences in simple English a Chinese factory understands: what the product is, material, size or quantity, key features, colours, packaging, age range. Only what the files and notes say. No prices, target costs or margins. No marketing words.' },
+      enough: { type: 'boolean', description: 'true only if the files/notes/name say what the physical product actually is (more than a bare name or placeholder text)' },
+      description: { type: 'string', description: 'Only when enough is true: 2-4 short sentences in simple English a Chinese factory understands, describing the PRODUCT itself: what it is, material, size or quantity, key features, colours, packaging, age range. Only what the files and notes say. Never mention the buyer, the notes, the files, missing information, quotation or this task. No prices, target costs or margins. No marketing words. Empty string when enough is false.' },
       name: { type: 'string', description: 'Short product name, e.g. "Silicone teether set of 3". Max 8 words.' },
       category: { type: 'string', description: 'One of the given categories, exactly as written, or empty if none fits' },
       missing: { type: 'array', items: { type: 'string' }, description: 'Up to 3 important facts a factory will ask for that are not given (e.g. size, material, packaging)' },
     },
-    required: ['description'],
+    required: ['enough', 'description'],
   },
 };
 
@@ -73,10 +74,13 @@ async function describe({ files = [], name = '', category = '', notes = '', cate
     'Write the description for factories.',
   ].join('\n\n');
   const { result } = await AI.callTool({ tool: TOOL, maxTokens: 900, content: [...blocks, { type: 'text', text }],
-    system: 'You write product briefs for Lulyboo, a US brand of infant/toddler and pet products, to send to Chinese factories for quotation. Write clear, short, factual English with simple words. Never invent specifications that the files or notes do not show. Never mention prices, costs, targets or margins.' });
+    system: 'You write product descriptions for Lulyboo, a US brand of infant/toddler and pet products, to send to Chinese factories for quotation. Write clear, short, factual English with simple words. Never invent specifications that the files or notes do not show. Never mention prices, costs, targets or margins. If the input does not say what the product is, set enough=false instead of writing about the input.' });
+  if (result.enough === false || !String(result.description || '').trim()) {
+    return { enough: false, description: '', name: '', category: '', missing: (Array.isArray(result.missing) ? result.missing : []).slice(0, 3).map(String), read, skipped };
+  }
   const cat = categories.find((c) => c.toLowerCase() === String(result.category || '').trim().toLowerCase()) || '';
   const desc = String(result.description || '').replace(/\$\s?\d[\d.,]*/g, '').trim(); // belt and braces: no prices
-  return { description: desc, name: String(result.name || '').trim().slice(0, 160), category: cat, missing: (Array.isArray(result.missing) ? result.missing : []).slice(0, 3).map(String), read, skipped };
+  return { enough: true, description: desc, name: String(result.name || '').trim().slice(0, 160), category: cat, missing: (Array.isArray(result.missing) ? result.missing : []).slice(0, 3).map(String), read, skipped };
 }
 
 module.exports = { describe, fileBlocks, textOf };

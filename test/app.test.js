@@ -5145,6 +5145,9 @@ test('Development: factory checklist Excel → category → project; supplier do
       assert.equal(j.ok, true); assert.doesNotMatch(j.description, /\$/); assert.equal(j.name, 'Ceramic bowl'); assert.equal(j.category_id, cat.id);
       assert.deepEqual(j.read, ['a.png', 'brief.txt']); assert.deepEqual(j.skipped, ['model.stp']);
       assert.ok(sent.content.some((b) => b.type === 'image')); assert.ok(sent.content.some((b) => b.type === 'text' && /hello brief/.test(b.text)));
+      AI.callTool = async () => ({ result: { enough: false, description: 'The buyer notes are placeholder text.', missing: ['What the product is'] } });
+      const d2 = new FormData(); d2.append('name', 'Test toy'); const r2 = await fetch(`${base}/admin/projects/describe`, { method: 'POST', headers: { cookie: admin }, body: d2 });
+      assert.equal(r2.status, 422); const j2 = await r2.json(); assert.equal(j2.ok, false); assert.match(j2.error, /Not enough/); assert.doesNotMatch(j2.error, /placeholder/);
     } finally { AI.callTool = old.call; if (old.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = old.key; }
     const DS = require('../src/dev-describe'); const { zip: z2 } = require('../src/lib/zip');
     const docx = z2([{ name: 'word/document.xml', data: Buffer.from('<w:document><w:body><w:p><w:r><w:t>Teether &amp; ring</w:t></w:r></w:p></w:body></w:document>') }], { paths: true });
