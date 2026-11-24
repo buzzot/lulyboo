@@ -3395,3 +3395,4 @@ main[data-ro]:has(.ro-deny)::before{display:none}.ro-deny{max-width:640px;margin
 .sg input:not([type=checkbox]),.sg textarea{width:100%;box-sizing:border-box}.sg textarea{resize:vertical;min-height:0}.sg .dd-sel,.sg .dd-field{width:100%}
 .sg-side{grid-template-columns:1fr 1fr!important}.sg-side>label,.sg-side>div{grid-column:auto!important}.sg-side .sg-3{grid-column:1/-1!important}.sg-side .inp-unit{max-width:none}
 .sg p.sub{margin:0}.nda-row{border-top:1px solid var(--line);margin-top:12px;padding-top:10px;display:grid;gap:6px}.nda-row textarea{width:100%;box-sizing:border-box;margin-top:4px}
+.ck-drop .form-actions{margin-top:10px}
