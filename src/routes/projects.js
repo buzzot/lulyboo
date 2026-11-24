@@ -264,26 +264,51 @@ module.exports = function projectRoutes(router, { db, config }) {
   }));
 
   router.get('/admin/projects/new', G(async (req, res) => {
-    const cats = await db.list('categories', { order: 'sort.asc,name.asc' });
+    const cats = await db.list('categories', { order: 'sort.asc,name.asc' }); const ai = require('../ai').enabled();
     res.html(page({
       title: 'New project', nav: adminNav('projects'), flash: takeFlash(req, res), wide: true,
       body: html`<nav class="crumb"><a href="/admin/projects">Development</a></nav>
-      <h1>New project</h1><p class="muted small">A name, a category and a short description. You add requirements, files and suppliers next.</p>
-      <section class="card"><form method="post" action="/admin/projects" class="fields"><label class="frow"><span>Product name</span><input name="name" required maxlength="160" placeholder="e.g. Cat water fountain v1" autofocus></label>
-        <div class="frow"><span>Category</span>${ddSel('category_id', '', catOpts(cats))}</div>
-        <p class="sub fl-note">Required. The category loads its factory checklist: the certificates, test reports and details suppliers must answer before quoting.</p>
-        <label class="frow top"><span>Short description</span><textarea name="summary" rows="3" placeholder="What is it, who is it for?"></textarea></label>
-        <div class="form-actions"><button class="btn">Create project</button> <a class="btn ghost" href="/admin/projects">Cancel</a></div></form></section>`,
+      <h1>New project</h1><p class="muted small">Drop what you have: photos, a sketch, a brief.${ai ? ' AI writes a short, clear description for suppliers; you check it and create the project.' : ' You add requirements and suppliers next.'}</p>
+      <form method="post" action="/admin/projects" enctype="multipart/form-data" class="np" data-np>
+        <section class="card np-card">
+          <div class="np-lbl"><b>References</b> <span class="sub">optional</span></div>
+          <div class="mdrop np-drop" data-filebox data-max="12"><div class="mdrop-box"><input type="file" name="files" multiple accept="${FILE_ACCEPT}" title="" aria-label="Reference files"><span class="dz-main" data-main><b>Drop images or documents here, paste (⌘V) or <u>choose</u></b></span><span class="dz-hint">Photos, sketches, screenshots, PDF / Word / Excel briefs · up to 20 MB each</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+          <div class="np-row">
+            <label><span class="lbl">Product name</span><input name="name" required maxlength="160" placeholder="e.g. Silicone teether set of 3" autofocus><span class="np-sugg" data-np-sugg="name" hidden>✓ suggested by AI</span></label>
+            <div><span class="lbl">Category</span>${ddSel('category_id', '', catOpts(cats))}<span class="np-sugg" data-np-sugg="category" hidden>✓ suggested by AI</span><span class="np-err" data-np-caterr hidden>Choose a category</span></div></div>
+          <label class="np-f"><span class="lbl">Your notes <span class="sub">optional, any language, rough is fine · internal, never shown to suppliers</span></span><textarea name="notes" rows="2" data-grow placeholder="e.g. 3 shapes like the photos, food-grade silicone, our 6 colours, gift box"></textarea></label>
+          <div class="np-ai"><span class="lbl">Description for suppliers</span>${ai ? html`<button type="button" class="btn small np-aibtn" data-np-ai>✨ Write with AI</button>` : ''}</div>
+          <div class="np-out" data-np-out><textarea name="summary" rows="4" data-grow placeholder="What is it, what is it made of, size, key features, packaging, who is it for.${ai ? ' Or press “Write with AI”.' : ''}"></textarea>
+            <div class="np-meta" data-np-meta hidden></div></div>
+          <div class="np-foot"><button class="btn" data-np-create>Create project</button><a class="btn ghost" href="/admin/projects">Cancel</a><span class="sub">The category attaches its factory checklist Excel. Files go to the Files tab, visible to suppliers.</span></div>
+        </section>
+        <aside class="np-side">${ai ? html`<section class="card"><h3>How AI writes it</h3><ol><li>Reads your photos, documents, name and notes.</li><li>Writes 2–4 short sentences: what it is, material, size, key features, packaging, age.</li><li>Simple English a factory understands. No marketing words, no prices.</li><li>Suggests the name and category if empty.</li></ol></section>` : ''}
+          <section class="card np-prev" data-np-prev hidden><h3>Supplier sees</h3><div class="np-sup"><b data-np-pname></b><span data-np-pdesc></span><span class="sub" data-np-pfiles></span></div></section></aside>
+      </form>`,
     }));
   }));
 
+  // AI: short description for suppliers from the reference files, name and notes (JSON; nothing is saved).
+  router.post('/admin/projects/describe', G(async (req, res) => {
+    const AI = require('../ai'); if (!AI.enabled()) return res.json({ ok: false, error: 'AI is not set up (ANTHROPIC_API_KEY).' }, 400);
+    const { fields: f, files } = await parseForm(req, { limitBytes: maxBytes * 12 });
+    const cats = await db.list('categories', { order: 'sort.asc,name.asc' }); const cat = cats.find((c) => c.id === f.category_id);
+    try {
+      const r = await require('../dev-describe').describe({ files: P.fileList(files, 'files'), name: str(f.name, 160) || '', category: cat?.name || '', notes: str(f.notes, 3000) || '', categories: cats.map((c) => c.name) });
+      const sc = !cat && r.category ? cats.find((c) => c.name === r.category) : null;
+      res.json({ ok: true, description: r.description, name: f.name ? '' : r.name, category_id: sc?.id || '', category: sc?.name || '', missing: r.missing, read: r.read, skipped: r.skipped });
+    } catch (e) { res.json({ ok: false, error: `AI could not write it: ${String(e.message).slice(0, 160)}` }, 502); }
+  }));
+
   router.post('/admin/projects', G(async (req, res) => {
-    const { fields } = await parseForm(req);
+    const { fields, files } = await parseForm(req, { limitBytes: maxBytes * 12 });
     const name = str(fields.name, 160); if (!name) { flash(res, 'error', 'Enter a product name'); return res.redirect('/admin/projects/new'); }
-    const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it sets the document checklist'); return res.redirect('/admin/projects/new'); }
-    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
+    const cat = await pickCategory(fields); if (!cat) { flash(res, 'error', 'Choose a category: it attaches the checklist Excel'); return res.redirect('/admin/projects/new'); }
+    const p = await db.insert('dev_projects', { ref: await P.nextRef(db), name, ...CK.fromCategory(cat), summary: str(fields.summary), internal_notes: str(fields.notes), status: 'Draft', current_version: 1, extra_fields: [], created_at: now(), updated_at: now() });
     await db.insert('dev_spec_versions', { project_id: p.id, version: 1, change_note: 'First version', snapshot: {}, created_at: now() });
-    flash(res, 'ok', `Project ${p.ref} created. Add the requirements and files, then invite suppliers.`);
+    const r = await P.storeFiles(db, { projectId: p.id, files: P.fileList(files, 'files'), maxBytes });
+    for (const a of r.saved) await saveFile({ project_id: p.id, name: a.name, kind: P.guessKind(a.name), label: null, mime: a.mime, bytes: a.size, path: a.path, version: 1, controlling: false, internal: false, created_at: now() });
+    flash(res, r.errors.length ? 'warn' : 'ok', `Project ${p.ref} created${r.saved.length ? ` with ${r.saved.length} file${r.saved.length === 1 ? '' : 's'}` : ''}. Add the requirements, then invite suppliers.${r.errors.length ? ` · ${r.errors.join(' · ')}` : ''}`);
     res.redirect(`/admin/projects/${p.id}`);
   }));
 

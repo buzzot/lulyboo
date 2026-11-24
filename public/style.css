@@ -3396,3 +3396,29 @@ main[data-ro]:has(.ro-deny)::before{display:none}.ro-deny{max-width:640px;margin
 .sg-side{grid-template-columns:1fr 1fr!important}.sg-side>label,.sg-side>div{grid-column:auto!important}.sg-side .sg-3{grid-column:1/-1!important}.sg-side .inp-unit{max-width:none}
 .sg p.sub{margin:0}.nda-row{border-top:1px solid var(--line);margin-top:12px;padding-top:10px;display:grid;gap:6px}.nda-row textarea{width:100%;box-sizing:border-box;margin-top:4px}
 .ck-drop .form-actions{margin-top:10px}
+/* New development project */
+.np{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start}
+@media (max-width:900px){.np{grid-template-columns:1fr}}
+.np-card{padding:20px 22px}
+.np-lbl{margin:0 0 8px;font-size:14px}
+.np .lbl{display:block;font-size:13px;color:var(--muted,#6f6762);margin-bottom:6px;font-weight:500}
+.np .lbl .sub{font-weight:400}
+.np-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+@media (max-width:700px){.np-row{grid-template-columns:1fr}}
+.np-row>label,.np-row>div{min-width:0}
+.np-f{display:block;margin-top:16px}
+.np-sugg{display:block;font-size:12px;color:#5c4b78;margin-top:5px}
+.np-err{display:block;font-size:12px;color:var(--neg,#b33a2b);margin-top:5px}
+.np-ai{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:16px 0 6px}.np-ai .lbl{margin:0}
+.np-aibtn{background:#2f2a27;color:#fff;border-color:#2f2a27}.np-aibtn:hover{background:#463f3b}
+.np-out.ai{border:1px solid #e8dcf6;background:#faf7fe;border-radius:12px;padding:12px}
+.np-out.busy textarea{opacity:.55}
+.np-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12px}
+.np-meta .chip{background:#fff;border:1px solid #e8dcf6;border-radius:99px;padding:2px 9px;color:#5c4b78}
+.np-meta .bad{color:var(--neg,#b33a2b)}.np-miss{flex-basis:100%;color:#6f6762}
+.np-foot{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px;border-top:1px solid var(--line,#f0e9e6);padding-top:16px}.np-foot .sub{margin-left:auto}
+.np-side .card{padding:16px 18px}.np-side .card+.card{margin-top:16px}
+.np-side h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#7a716c);margin:0 0 10px}
+.np-side ol{margin:0;padding-left:18px;font-size:13px;line-height:1.55}.np-side li{margin-bottom:4px}
+.np-sup{border:1px solid var(--line,#eee5e1);border-radius:10px;padding:12px;font-size:13px;line-height:1.5;display:flex;flex-direction:column;gap:4px}
+.np-sugg[hidden],.np-err[hidden],.np-meta[hidden],.np-prev[hidden]{display:none}

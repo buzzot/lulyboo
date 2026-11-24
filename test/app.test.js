@@ -5127,6 +5127,29 @@ test('Development: factory checklist Excel → category → project; supplier do
   // the same file again → unchanged
   const imp1b = new FormData(); imp1b.append('file', new Blob([x1]), 'Factory Checklist - Pet Bowls.xlsx');
   await fetch(`${base}/admin/categories/${cat.id}/checklist`, { method: 'POST', headers: { cookie: admin }, body: imp1b, redirect: 'manual' }); assert.equal(cat.checklist_version, 1);
+  { const np = await req(base, 'GET', '/admin/projects/new', { cookie: admin }); assert.equal(np.status, 200); assert.match(np.text, /Product name/); assert.match(np.text, /data-filebox/); assert.doesNotMatch(np.text, /dp-table|Write with AI/); }
+  { // New project with reference files and notes; AI describe (mocked)
+    const fd = new FormData(); fd.append('name', 'Ref bowl'); fd.append('category_id', cat.id); fd.append('summary', 'A bowl'); fd.append('notes', 'target $1.80');
+    fd.append('files', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])]), 'ref.png');
+    assert.equal((await fetch(`${base}/admin/projects`, { method: 'POST', headers: { cookie: admin }, body: fd, redirect: 'manual' })).status, 303);
+    const rp = db.tables.dev_projects.find((x) => x.name === 'Ref bowl'); assert.equal(rp.internal_notes, 'target $1.80');
+    const rf = db.tables.dev_files.filter((x) => x.project_id === rp.id); assert.equal(rf.length, 1); assert.equal(rf[0].internal, false);
+    db.tables.dev_projects.splice(db.tables.dev_projects.indexOf(rp), 1); db.tables.dev_spec_versions.length = 0;
+    const AI = require('../src/ai'); const old = { call: AI.callTool, key: process.env.ANTHROPIC_API_KEY }; let sent;
+    assert.equal((await fetch(`${base}/admin/projects/describe`, { method: 'POST', headers: { cookie: admin }, body: new FormData() })).status, 400);
+    process.env.ANTHROPIC_API_KEY = 'k'; AI.callTool = async (o) => { sent = o; return { result: { description: 'Ceramic pet bowl, 15 cm, at $1.80 target.', name: 'Ceramic bowl', category: 'pet bowls', missing: ['Size'] } }; };
+    try {
+      assert.match((await req(base, 'GET', '/admin/projects/new', { cookie: admin })).text, /Write with AI/);
+      const d = new FormData(); d.append('notes', 'ceramic 15cm'); d.append('files', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' }), 'a.png'); d.append('files', new Blob(['hello brief']), 'brief.txt'); d.append('files', new Blob(['x']), 'model.stp');
+      const j = await (await fetch(`${base}/admin/projects/describe`, { method: 'POST', headers: { cookie: admin }, body: d })).json();
+      assert.equal(j.ok, true); assert.doesNotMatch(j.description, /\$/); assert.equal(j.name, 'Ceramic bowl'); assert.equal(j.category_id, cat.id);
+      assert.deepEqual(j.read, ['a.png', 'brief.txt']); assert.deepEqual(j.skipped, ['model.stp']);
+      assert.ok(sent.content.some((b) => b.type === 'image')); assert.ok(sent.content.some((b) => b.type === 'text' && /hello brief/.test(b.text)));
+    } finally { AI.callTool = old.call; if (old.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = old.key; }
+    const DS = require('../src/dev-describe'); const { zip: z2 } = require('../src/lib/zip');
+    const docx = z2([{ name: 'word/document.xml', data: Buffer.from('<w:document><w:body><w:p><w:r><w:t>Teether &amp; ring</w:t></w:r></w:p></w:body></w:document>') }], { paths: true });
+    assert.equal(DS.textOf({ name: 'brief.docx', buffer: docx }), 'Teether & ring');
+  }
   // category is required; the Excel is attached to the project
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'No category' } }); assert.equal((db.tables.dev_projects || []).length, 0);
   await req(base, 'POST', '/admin/projects', { cookie: admin, form: { name: 'Cat bowl', category_id: cat.id, summary: 'Ceramic bowl' } });

@@ -3082,3 +3082,53 @@
   document.querySelectorAll('textarea[data-grow]').forEach(fit);
   document.addEventListener('input', function (e) { if (e.target.matches && e.target.matches('textarea[data-grow]')) fit(e.target); });
 })();
+
+// New development project: AI writes the supplier description from the reference files, name and notes; live "Supplier sees" preview.
+(function () {
+  var form = document.querySelector('form[data-np]'); if (!form) return;
+  var btn = form.querySelector('[data-np-ai]'), sum = form.querySelector('textarea[name="summary"]'), meta = form.querySelector('[data-np-meta]'), out = form.querySelector('[data-np-out]');
+  var nameI = form.querySelector('input[name="name"]'), catI = form.querySelector('input[name="category_id"]'), fileI = form.querySelector('input[name="files"]');
+  var prev = document.querySelector('[data-np-prev]'), caterr = form.querySelector('[data-np-caterr]'), busy = false;
+  var esc = function (x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var grow = function (t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 420) + 'px'; };
+  var sugg = function (k, on) { var el = form.querySelector('[data-np-sugg="' + k + '"]'); if (el) el.hidden = !on; };
+  function preview() {
+    if (!prev) return; var d = sum.value.trim();
+    prev.hidden = !d && !nameI.value.trim();
+    prev.querySelector('[data-np-pname]').textContent = nameI.value.trim() || 'Product name';
+    prev.querySelector('[data-np-pdesc]').textContent = d.length > 220 ? d.slice(0, 220) + '…' : d;
+    var n = fileI && fileI.files ? fileI.files.length : 0, c = catI && catI.value;
+    prev.querySelector('[data-np-pfiles]').textContent = [n ? '+ ' + n + ' reference file' + (n > 1 ? 's' : '') : '', c ? 'factory checklist Excel' : ''].filter(Boolean).join(' · ');
+  }
+  ['input', 'change'].forEach(function (ev) { form.addEventListener(ev, function (e) { if (e.target === nameI) sugg('name', false); preview(); }); });
+  form.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('details[data-ddsel] .dd-menu button[data-v]');
+    if (b && b.closest('form') === form) { sugg('category', false); if (caterr) caterr.hidden = true; setTimeout(preview, 0); }
+  });
+  form.addEventListener('submit', function (e) {
+    if (catI && !catI.value) { e.preventDefault(); if (caterr) caterr.hidden = false; var s = form.querySelector('details[data-ddsel] summary'); if (s) s.focus(); return; }
+    var c = form.querySelector('[data-np-create]'); if (c) { c.textContent = 'Creating…'; setTimeout(function () { c.disabled = true; }, 0); }
+  });
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    if (busy) return;
+    if (!(fileI && fileI.files.length) && !nameI.value.trim() && !form.querySelector('textarea[name="notes"]').value.trim()) { meta.hidden = false; meta.innerHTML = '<span class="bad">Drop a file, or write a name or a few notes first.</span>'; return; }
+    busy = true; btn.disabled = true; var label = btn.textContent; btn.textContent = 'Writing…'; out.classList.add('busy');
+    meta.hidden = false; meta.innerHTML = '<span>Reading ' + (fileI.files.length ? fileI.files.length + ' file' + (fileI.files.length > 1 ? 's' : '') + ' and ' : '') + 'your notes…</span>';
+    var fd = new FormData(); fd.append('name', nameI.value); fd.append('category_id', catI ? catI.value : ''); fd.append('notes', form.querySelector('textarea[name="notes"]').value);
+    Array.prototype.forEach.call(fileI.files, function (f) { fd.append('files', f, f.name); });
+    fetch('/admin/projects/describe', { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'AI could not write it');
+      sum.value = j.description; grow(sum); out.classList.add('ai');
+      if (j.name && !nameI.value.trim()) { nameI.value = j.name; sugg('name', true); }
+      if (j.category_id && catI && !catI.value) { var cb = form.querySelector('details[data-ddsel] .dd-menu button[data-v="' + j.category_id + '"]'); if (cb) { cb.click(); var d = cb.closest('details'); if (d) d.open = false; sugg('category', true); } }
+      var words = j.description.split(/\s+/).filter(Boolean).length, chips = [];
+      if (j.read && j.read.length) chips.push('Read ' + j.read.length + ' file' + (j.read.length > 1 ? 's' : ''));
+      chips.push(words + ' words'); chips.push('No prices');
+      meta.innerHTML = chips.map(function (c) { return '<span class="chip">' + esc(c) + '</span>'; }).join('') +
+        (j.skipped && j.skipped.length ? '<span class="sub">Not read: ' + esc(j.skipped.join(', ')) + '</span>' : '') +
+        (j.missing && j.missing.length ? '<div class="np-miss">Factories will likely ask: ' + esc(j.missing.join(' · ')) + '</div>' : '');
+      btn.textContent = '↻ Rewrite'; label = btn.textContent; preview();
+    }).catch(function (e) { meta.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; }).then(function () { busy = false; btn.disabled = false; btn.textContent = label; out.classList.remove('busy'); });
+  });
+})();
