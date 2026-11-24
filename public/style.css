@@ -3473,3 +3473,10 @@ main[data-ro]:has(.ro-deny)::before{display:none}.ro-deny{max-width:640px;margin
 .nw-list li:has(.nw-dec),.nw-list a.nw-dec{white-space:normal}
 
 .dc-x{display:inline-flex;align-items:center;justify-content:center;min-width:22px}.dc-x .bd-del{opacity:.35}.dc-row:hover .dc-x .bd-del{opacity:1}
+/* Request inspection: hover a PO → its items (SKU + name) */
+.in-po{position:relative}
+.in-pop{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:30;min-width:280px;max-width:420px;max-height:320px;overflow:auto;background:#fff;border:1px solid var(--line,#ece9e5);border-radius:10px;box-shadow:0 8px 24px rgba(40,30,25,.14);padding:8px 10px;flex-direction:column;gap:2px;cursor:default;font-weight:400}
+.in-po:hover .in-pop,.in-po:focus-within .in-pop{display:flex}
+.in-pop-h{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#8a817c;margin-bottom:4px}
+.in-pop-r{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:baseline;font-size:13px;padding:3px 0;border-top:1px solid #f5efec}.in-pop-r:first-of-type{border-top:0}
+.in-pop-r code{font-size:12px;background:#f6f1ef;border-radius:5px;padding:1px 6px;white-space:nowrap;color:#4b4441}

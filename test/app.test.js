@@ -4966,6 +4966,8 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   assert.match(po, /Schedule the inspection\./); assert.match(po, /inspect around <b>/); assert.match(po, /Not needed for this PO/);
   assert.match((await req(base, 'GET', '/admin/orders/inspections?tab=todo', { cookie })).text, /To request <span class="or-n">2<\/span>/);
 
+  { const nw = (await req(base, 'GET', `/admin/orders/inspections/new?supplier=${k.id}&po=900020`, { cookie })).text;
+    assert.match(nw, /class="in-pop"[\s\S]*?Toothbrush/); assert.doesNotMatch(nw.match(/class="in-pop"[\s\S]*?<\/span><\/span><\/label>/)[0], /5,000/); }
   // 2. request: both POs, requirements file required (none yet), then sent with it
   const post = async (fields, file) => { const fd = new FormData(); for (const [a, b] of fields) fd.append(a, b); if (file) fd.append('req_file', new Blob([Buffer.from('%PDF req')], { type: 'application/pdf' }), file); return fetch(`${base}/admin/orders/inspections/new`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
   const fields = [['id', todo.id], ['supplier_id', k.id], ['pos', '900020'], ['pos', '900021'], ['company_id', co.id], ['type', 'psi'], ['inspection_date', D(20)], ['aql', 'II · 2.5 / 4.0'], ['confirm_days', '7'], ['send', '1']];
