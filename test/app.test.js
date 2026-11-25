@@ -4975,7 +4975,10 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   const todo = db.tables.inspections.find((i) => i.pos[0] === '900020');
   assert.equal(todo.status, 'todo'); assert.equal(todo.target_date, D(37));
   const po = (await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=900020`, { cookie })).text;
-  assert.match(po, /Schedule the inspection\./); assert.match(po, /inspect around <b>/); assert.match(po, /Not needed for this PO/);
+  // PO page: Inspection tile, last of the KPIs, with Schedule (date prefilled) and Not needed
+  assert.match(po, /class="cp-kpi it[^"]*"[\s\S]*Not scheduled[\s\S]*inspect ~/); assert.match(po, new RegExp(`inspections/new\\?id=${todo.id}&amp;date=${D(37)}`)); assert.match(po, />Not needed</);
+  assert.ok(po.lastIndexOf('class="cp-kpi') === po.indexOf('class="cp-kpi it'), 'the Inspection tile is the last tile'); assert.doesNotMatch(po, /Schedule the inspection\./);
+  assert.match((await req(base, 'GET', `/admin/orders/inspections/new?supplier=${k.id}&po=900020&date=${D(30)}&type=loading`, { cookie })).text, new RegExp(`name="inspection_date" value="${D(30)}"`));
   assert.match((await req(base, 'GET', '/admin/orders/inspections?tab=todo', { cookie })).text, /To request <span class="or-n">2<\/span>/);
 
   { const nw = (await req(base, 'GET', `/admin/orders/inspections/new?supplier=${k.id}&po=900020`, { cookie })).text;
@@ -5047,7 +5050,7 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   const rep = db.tables.plan_files.find((f) => f.kind === 'Inspection report');
   assert.deepEqual(rep.pos, ['900020', '900021']); assert.equal(rep.inspection_id, i.id);
   const po2 = (await req(base, 'GET', `/admin/orders/view?supplier=${k.id}&po=900021`, { cookie })).text;
-  assert.match(po2, /QIMA_RPT_88412\.pdf/); assert.match(po2, /Report in — your decision/); assert.match(po2, /Failed on labels\./);
+  assert.match(po2, /QIMA_RPT_88412\.pdf/); assert.match(po2, /it-tag warn">Report in</); assert.match(po2, /report received — decide/); assert.match(po2, />Review report</);
   assert.match((await req(base, 'GET', `/admin/orders/inspections/${i.id}`, { cookie })).text, /AI summary — suggests FAIL:<\/b> 0 critical · 5 \(limit 3\) major · 6 \(limit 7\) minor · 200 pcs sampled — missing French warning label/);
   // 6. your decision; the booking check sees it
   await req(base, 'POST', `/admin/orders/inspections/${i.id}/decide`, { cookie, form: { decision: 'fail', note: 'labels' } });
@@ -5396,4 +5399,19 @@ test('Payments: search by supplier / PO and the By order view (one line per PO, 
   // clicking an installment opens the panel for it
   pg = (await req(base, 'GET', `/admin/finance?view=po&id=${bl.id}`, { cookie })).text;
   assert.match(pg, /fn-panel/); assert.match(pg, /class="ip paid on"/);
+});
+
+test('PO page Inspection tile: aims from the booked container loading date; scheduled shows the date', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const PL = require('../src/planning'); const D = (n) => PL.addDays(PL.today(), n);
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: '40HQ', status: 'booked', loading_date: D(20) });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800029', product: 'Bib', qty: 100, ready_date: D(60), container_id: c.id });
+  let pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800029`, { cookie })).text;
+  assert.match(pg, /it-tag bk">Container booked/); assert.match(pg, new RegExp(`loads ${PL.short(D(20))} · inspect ~${PL.short(D(17))} \\(PSI\\) or loading check`));
+  assert.match(pg, new RegExp(`date=${D(17)}`));
+  await db.insert('inspections', { supplier_id: s.id, pos: ['800029'], status: 'confirmed', type: 'psi', inspection_date: D(17), ref: 'LBI-AB12', created_at: new Date().toISOString() });
+  pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800029`, { cookie })).text;
+  assert.match(pg, /it-tag ok">Confirmed/); assert.match(pg, new RegExp(`<b class="">${PL.short(D(17))}</b><small>PSI · in 17 days`)); assert.doesNotMatch(pg, /Not scheduled/);
 });

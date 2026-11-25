@@ -102,27 +102,55 @@ module.exports = function orderRoutes(router, { db, config }) {
   };
   const ctn = (ci, ls) => { const seen = new Set(); return ls.map((l) => ci.labelFor(l)).filter((x) => x && !seen.has(x.c.id) && seen.add(x.c.id)); };
 
-  // PO page: the inspection step — alert to request it, or the inspection(s) with stage, date, result and invoice
-  async function inspSection(supplier, p, ls, back) {
+  // PO page: the Inspection tile (last KPI). Not scheduled → the day to aim for (from the booked container's loading
+  // date when the forwarder confirmed it, else from the ready date) with Schedule / Not needed; otherwise the latest
+  // inspection's state and date. Clicking the tile opens the inspection.
+  async function inspTile(supplier, p, ls, back) {
     const IN = require('../inspections');
     const { list, missing } = await IN.forPo(db, supplier.id, p.po);
     if (missing) return '';
-    const shown = list.filter((i) => !['cancelled'].includes(i.status));
-    const skipped = shown.length && shown.every((i) => i.status === 'skipped');
+    const shown = list.filter((i) => i.status !== 'cancelled').sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     const allShipped = ls.every((l) => l.shipped);
-    if (!shown.length && (allShipped || supplier.inspection_off)) return '';
-    const ready = ls.map((l) => l.ready_date).filter(Boolean).sort().pop();
-    const t = IN.timing(ready); const today = PL.today();
-    const B = '/admin/orders/inspections';
+    const B = '/admin/orders/inspections'; const today = PL.today();
     const todo = shown.find((i) => i.status === 'todo');
-    const alert = (!shown.length || todo) && !allShipped ? html`<div class="in-alert">🔍 <span><b>Schedule the inspection.</b> ${t.target ? html`Ready ${PL.short(ready)} → inspect around <b>${PL.short(t.target)}</b>. Book it by <b class="${t.bookBy < today ? 'in-late' : ''}">${PL.short(t.bookBy)}</b>${t.bookBy < today ? ' — that was ' + (Math.round((Date.parse(today) - Date.parse(t.bookBy)) / 864e5)) + ' days ago' : ' (a month ahead)'}.` : 'Set the ready date to get a suggested day.'}</span>
-      <span class="in-alert-a"><a class="btn small" href="${todo ? `${B}/new?id=${todo.id}` : `${B}/new?supplier=${supplier.id}&po=${encodeURIComponent(p.po)}`}">Request inspection</a>
-      <form method="post" action="${`${B}/skip`}" class="inline"><input type="hidden" name="back" value="${back}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}">`}<button class="link small">Not needed for this PO</button></form></span></div>` : '';
-    const card = (i) => html`<a class="in-po-card" href="${`${B}/${i.id}`}"><span><b>${i.ref} · ${IN.TYPES[i.type] || 'Inspection'}</b> ${require('./inspections').tagOf(i)}${i.invoice_amount ? html` <span class="cp-tag ${i.paid_at ? 'ok' : 'warn'}">${i.paid_at ? 'Invoice paid' : 'Invoice to pay'}</span>` : ''}</span>
-      <span class="sub">${[i.inspection_date ? PL.short(i.inspection_date) : '', IN.posOf(i).length > 1 ? `with PO ${IN.posOf(i).filter((x) => PL.normPo(x) !== PL.normPo(p.po)).join(', ')}` : '', i.confirm_sent_at && ['requested', 'scheduled'].includes(i.status) ? `inspector ${i.inspector_confirm || '—'} · supplier ${i.supplier_confirm || '—'}` : '', i.ai?.summary && ['report', 'passed', 'failed'].includes(i.status) ? i.ai.summary : '', i.decision_note || ''].filter(Boolean).join(' · ')}</span></a>`;
     const real = shown.filter((i) => !['todo', 'skipped'].includes(i.status));
-    return html`<section class="card in-po" id="inspection"><div class="head-row"><h2>Inspection ${skipped ? html`<span class="cp-tag done">Not needed</span>` : ''}</h2>${real.length ? html`<a class="btn ghost small" href="${`${B}/new?supplier=${supplier.id}&po=${encodeURIComponent(p.po)}`}">+ Inspection</a>` : ''}</div>
-      ${skipped ? html`<p class="sub">Marked as not needed for this PO.</p>` : ''}${alert}${real.map(card)}</section>`;
+    const skipped = shown.length && shown.every((i) => i.status === 'skipped');
+    if (!shown.length && (allShipped || supplier.inspection_off)) return '';
+    const tag = (t, c) => html`<em class="it-tag ${c}">${t}</em>`;
+    const tile = (cls, tg, big, sub, acts = '', href = '') => html`<div class="cp-kpi it ${cls}">${href ? html`<a class="it-link" href="${href}" aria-label="Open the inspection"></a>` : ''}<div class="it-h"><span>Inspection</span>${tg}</div><b class="${big === 'Not scheduled' || big === 'Waiting date' ? 'it-none' : ''}">${big}</b><small>${sub}</small>${acts}</div>`;
+    const skipForm = (label) => html`<form method="post" action="${`${B}/skip`}" class="inline"><input type="hidden" name="back" value="${back}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="supplier_id" value="${supplier.id}"><input type="hidden" name="po" value="${p.po}">`}<button class="link small it-lnk">${label}</button></form>`;
+    const newHref = (o = {}) => `${B}/new?${new URLSearchParams(Object.fromEntries(Object.entries(todo && !o.fresh ? { id: todo.id, date: o.date, type: o.type } : { supplier: supplier.id, po: p.po, date: o.date, type: o.type }).filter(([, v]) => v)))}`;
+    if (real.length) {
+      const i = real[0]; const d = i.inspection_date ? String(i.inspection_date).slice(0, 10) : null; const ty = IN.SHORT[i.type] || 'Inspection';
+      const n = d ? Math.round((Date.parse(d) - Date.parse(today)) / 864e5) : null;
+      const more = real.length > 1 ? ` · +${real.length - 1} earlier` : '';
+      const href = `${B}/${i.id}`;
+      if (i.status === 'requested' && !d) return tile('', tag('Requested', 'warn'), 'Waiting date', `${ty} · ${i.ref}${i.requested_at || i.created_at ? ` · asked ${PL.short(String(i.requested_at || i.created_at).slice(0, 10))}` : ''}${more}`, html`<div class="it-acts"><a class="btn small ghost" href="${href}">Open request</a></div>`);
+      if (['requested', 'scheduled', 'confirmed'].includes(i.status)) return tile('', tag(IN.STATUS[i.status][0], i.status === 'confirmed' ? 'ok' : i.status === 'scheduled' ? 'bk' : 'warn'), PL.short(d), `${ty} · ${n < 0 ? `${-n} day${n === -1 ? '' : 's'} ago` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`}${i.company ? ` · ${i.company}` : ''}${more}`, '', href);
+      if (i.status === 'report') return tile('due', tag('Report in', 'warn'), d ? PL.short(d) : '—', `${ty} · report received — decide${more}`, html`<div class="it-acts"><a class="btn small" href="${href}">Review report</a></div>`);
+      if (i.status === 'passed') return tile('okk', tag('Passed', 'ok'), d ? PL.short(d) : '—', `${ty} · passed${i.decision === 'pass_notes' ? ' with notes' : ''}${more}`, '', href);
+      if (i.status === 'failed') return tile('late', tag('Failed', 'bad'), d ? PL.short(d) : '—', `${ty} · failed — re-inspection needed${more}`, html`<div class="it-acts"><a class="btn small" href="${newHref({ fresh: 1 })}">Book re-inspection</a><a class="it-lnk" href="${href}">Open</a></div>`);
+    }
+    if (skipped) return tile('', tag('Not needed', ''), '—', 'marked not needed for this PO', html`<div class="it-acts"><a class="btn small ghost" href="${newHref({ fresh: 1 })}">Schedule anyway</a></div>`);
+    if (allShipped) return '';
+    // not scheduled: aim from the booked container's loading date, else from the ready date
+    const conts = [...new Set(ls.filter((l) => !l.shipped && l.container_id).map((l) => l.container_id))];
+    const cs = conts.length ? (await Promise.all(conts.map((id) => db.get('plan_containers', id).catch(() => null)))).filter(Boolean) : [];
+    const booked = cs.filter((c) => c.status === 'booked' && c.loading_date).sort((a, b) => String(a.loading_date).localeCompare(String(b.loading_date)))[0];
+    const ready = ls.filter((l) => !l.shipped).map((l) => l.ready_date).filter(Boolean).map((x) => String(x).slice(0, 10)).sort().pop();
+    let sub; let target; let bookBy; let cls; let tg = ''; let type = '';
+    if (booked) {
+      const load = String(booked.loading_date).slice(0, 10); target = PL.addDays(load, -IN.LEAD.before_ready); bookBy = PL.addDays(target, -7);
+      tg = tag('Container booked', 'bk');
+      sub = html`${booked.box === 'LCL' ? 'to CFS' : 'loads'} ${PL.short(load)} · inspect ~${PL.short(target)} (PSI) or loading check ${PL.short(load)}`;
+      cls = target < today ? 'late' : 'due'; if (target < today) { sub = html`<b class="it-red">book now</b> — loads ${PL.short(load)}`; type = 'loading'; }
+    } else {
+      const t = IN.timing(ready); target = t.target; bookBy = t.bookBy;
+      if (!target) { sub = 'set the ready date for a suggested day'; cls = 'due'; }
+      else if (bookBy < today) { sub = html`<b class="it-red">book now</b> — ready ${PL.short(ready)} · inspect ~${PL.short(target)}`; cls = 'late'; }
+      else { sub = `book by ${PL.short(bookBy)} · inspect ~${PL.short(target)}`; cls = bookBy <= PL.addDays(today, 7) ? 'due' : ''; }
+    }
+    return tile(cls, tg, 'Not scheduled', sub, html`<div class="it-acts"><a class="btn small" href="${newHref({ date: target && target >= today ? target : '', type })}">＋ Schedule</a>${skipForm('Not needed')}</div>`);
   }
 
   router.get('/admin/orders', G(async (req, res) => {
@@ -249,7 +277,8 @@ module.exports = function orderRoutes(router, { db, config }) {
           ${(() => { const priced = ls.filter((o) => o.unit_price && o.qty); const amt = priced.reduce((a, o) => a + Number(o.unit_price) * Number(o.qty), 0); return html`<div class="cp-kpi"><span>PO value</span><b>${amt ? money(amt, priced[0].currency) : '—'}</b><small>${!priced.length ? 'no cost on the lines' : priced.length < ls.filter((o) => o.product).length ? `${priced.length} of ${ls.filter((o) => o.product).length} lines priced` : 'cost × quantity'}</small></div>`; })()}
           ${actualCbm ? html`<div class="cp-kpi"><span>Volume · loaded</span><b>${n2(actualCbm)} m³</b><small>${planCbm ? `plan ${n2(planCbm)} m³${Math.abs(actualCbm - planCbm) >= 0.01 ? ` · ${actualCbm > planCbm ? '+' : ''}${Math.round(((actualCbm - planCbm) / planCbm) * 100)}%` : ' · as planned'}` : "from the supplier's packing list"}</small></div>`
             : html`<div class="cp-kpi"><span>Volume</span><b>${p.cbm ? `${n2(p.cbm)} m³` : '—'}</b><small>${p.cbm ? `≈ ${PL.suggest(p.cbm).text}` : 'CBM missing'}</small></div>`}
-          ${p.pending.length ? html`<div class="cp-kpi warn"><span>Waiting on Lulyboo</span><b>${p.pending.length}</b><small>${p.pending.join(', ')}</small></div>` : ''}</div>
+          ${p.pending.length ? html`<div class="cp-kpi warn"><span>Waiting on Lulyboo</span><b>${p.pending.length}</b><small>${p.pending.join(', ')}</small></div>` : ''}
+          ${await inspTile(supplier, p, ls, back)}</div>
         ${PL.duplicateGroups(ls).length ? html`<form method="post" action="/admin/logistics/planning/dedupe" class="flash warn cp-dup"><span><b>The same item appears more than once on this PO.</b> Merge keeps one line per item with all its details.</span><button class="btn small">Merge duplicates</button></form>` : ''}
         ${todo.length || notesG.length ? html`<section class="card or-todo"><div class="head-row"><h2>To do &amp; notes ${todo.length ? html`<span class="cp-tag ${todo.some((t) => t.level === 'bad') ? 'late' : 'wait'}">${todo.filter((t) => t.level !== 'ok').length} open</span>` : ''}</h2></div>
           ${todo.map((t) => html`<div class="or-td ${t.level}"><span class="or-td-i">${t.icon}</span><div class="or-td-t"><b>${t.title}</b>${t.sub ? html`<div class="sub">${t.sub}</div>` : ''}</div>
@@ -304,7 +333,6 @@ module.exports = function orderRoutes(router, { db, config }) {
           return html`<p class="or-recs">${recs.map((c) => html`<a class="or-ctn" href="/admin/orders/shipments/${c.id}">📦 Record · ${(c.record || {}).name || SN.shipName(c)}</a>`)}</p>`; })()}
         ${await require('./payments').poCard(db, supplier, p?.po || poQ, back).catch(() => '')}
         ${shipSection}
-        ${p ? await inspSection(supplier, p, ls, req.url) : ''}
         ${await (async () => { const list = await require('./customs').forPo(db, p?.po || poQ).catch(() => []); if (!list.length) return ''; return html`<section class="card cu-po" id="customs"><div class="head-row"><h2>Customs</h2></div>${list.map((x) => html`<div class="cu-pr"><a class="cu-mono" href="/admin/logistics/customs?review=${x.id}">${x.entry_no || 'Entry'}</a><span class="sub">${x.date ? String(x.date).slice(0, 10) : ''} · ${x.items.join(', ')}</span><span class="cu-pr-v">duty <b>$${x.duty.toLocaleString('en-US', { minimumFractionDigits: 2 })}</b> + fees $${x.fees.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span class="sub">for this PO</span></span></div>`)}</section>`; })()}
         <section class="card" id="docs"><div class="head-row"><h2>Documents <span class="sub">${docs.length}</span></h2></div>
           <div class="dc-lay ${docs.length ? '' : 'empty'}">

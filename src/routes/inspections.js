@@ -95,7 +95,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const mine = open.filter((p) => p.supplier_id === sid).sort((a, b) => String(a.ready || '9').localeCompare(String(b.ready || '9')));
     const chosen = new Set((todo ? IN.posOf(todo) : [q.po]).filter(Boolean).map(PL.normPo));
     const firstReady = mine.filter((p) => chosen.has(PL.normPo(p.po))).map((p) => p.ready).filter(Boolean).sort()[0];
-    const day = todo?.inspection_date || todo?.target_date || IN.timing(firstReady).target || '';
+    const day = todo?.inspection_date || PL.isoDay(q.date) || todo?.target_date || IN.timing(firstReady).target || '';
     const versions = await IN.reqVersions(db, sid);
     const last = versions[0];
     const conts = (await db.list('plan_containers').catch(() => [])).filter((c) => c.status !== 'shipped');
@@ -122,7 +122,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
           })()}</label>`)}</div>
           <div class="in-grid">
             <label><span class="lbl">Inspection company</span>${coOpts.length ? ddSel('company_id', coDef, coOpts) : html`<span class="sub">none yet</span>`}</label>
-            <label><span class="lbl">Type</span>${ddSel('type', todo?.type || 'psi', Object.entries(IN.TYPES))}</label>
+            <label><span class="lbl">Type</span>${ddSel('type', todo?.type || (IN.TYPES[q.type] ? q.type : 'psi'), Object.entries(IN.TYPES))}</label>
             <label><span class="lbl">Shipment</span>${ddSel('container_id', todo?.container_id || [...cIds][0] || '', cOpts)}</label>
             <label><span class="lbl">Inspection day</span><input type="date" name="inspection_date" value="${day}"><span class="sub">${firstReady ? `ready ${PL.short(firstReady)} · suggested ${IN.LEAD.before_ready} days before` : 'ready date not known'}</span></label>
             <label><span class="lbl">AQL level</span>${ddSel('aql', todo?.aql || IN.AQLS[0], IN.AQLS.map((a) => [a, a]))}</label>
