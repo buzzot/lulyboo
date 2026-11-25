@@ -3236,3 +3236,13 @@
     function fallback() { var t = document.createElement('textarea'); t.value = v; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (x) { /* ignore */ } t.remove(); }
   }, true);
 })();
+
+// Requests · "Send to more": filter the supplier list
+(function () {
+  document.querySelectorAll('[data-rq-filter]').forEach(function (inp) {
+    inp.addEventListener('input', function () {
+      var q = inp.value.trim().toLowerCase();
+      inp.closest('form').querySelectorAll('[data-rq-name]').forEach(function (l) { l.hidden = !!q && l.getAttribute('data-rq-name').indexOf(q) < 0; });
+    });
+  });
+})();

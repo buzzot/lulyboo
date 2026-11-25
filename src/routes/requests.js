@@ -176,20 +176,112 @@ module.exports = function requestRoutes(router, { db, config }) {
   }));
 
   // ── List and detail
+  const RG = require('../req-groups');
+  const infoTitle = (r) => [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ') || RG.titleOf(r);
+  async function groups() {
+    const [rows, suppliers, msgs] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 600 }), db.list('suppliers', { select: 'id,name,email' }), db.list('info_request_messages', { select: 'id,request_id,direction,body,ai,created_at' }).catch(() => [])]);
+    const names = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
+    return { gs: RG.group(rows, msgs, names, { today: new Date().toISOString().slice(0, 10), infoTitle }), suppliers, rows };
+  }
+  const groupOf = (gs, id) => { const g = gs.find((x) => x.id === id || x.members.some((m) => m.r.id === id)); if (!g) throw new HttpError(404, 'Request not found'); return g; };
+  const sh = (d) => { if (!d) return ''; try { return new Date(`${String(d).slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); } catch { return String(d).slice(0, 10); } };
+  const emailsOf = (m, sup) => uniq([...(m.r.to_emails || []), ...(EMAIL_RE.test(m.r.contact || '') ? [m.r.contact] : []), ...(!(m.r.to_emails || []).length && sup?.email ? [sup.email] : [])]).filter((e) => EMAIL_RE.test(e));
+
+  // ── List: one card per request, every supplier it went to underneath
   router.get('/admin/requests', G(async (req, res) => {
-    const [rows, suppliers] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 300 }), db.list('suppliers', { select: 'id,name' })]);
-    const name = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
-    const st = req.query.status;
-    const list = st ? rows.filter((r) => r.status === st) : rows;
+    const { gs, suppliers } = await groups();
+    const view = ['open', 'all', 'closed'].includes(req.query.view) ? req.query.view : (req.query.status ? 'all' : 'open');
+    const q = String(req.query.q || '').trim().toLowerCase();
+    let list = view === 'open' ? gs.filter((g) => g.open) : view === 'closed' ? gs.filter((g) => !g.open) : gs;
+    if (q) list = list.filter((g) => g.title.toLowerCase().includes(q) || g.members.some((m) => m.supplier.toLowerCase().includes(q) || String(m.r.ref).toLowerCase().includes(q)));
+    const counts = { open: gs.filter((g) => g.open).length, all: gs.length, closed: gs.filter((g) => !g.open).length };
+    const pct = (g) => Math.round((g.replied / Math.max(1, g.n)) * 100);
+    const st = (m) => (m.done && !m.replied ? html`<span class="rq-st off">${m.r.status}</span>` : m.replied ? html`<span class="rq-st rep">${m.r.status === 'Complete' ? 'Complete' : 'Replied'}</span>` : m.late ? html`<span class="rq-st late">No reply · ${m.waited}d</span>` : html`<span class="rq-st sent">Sent · ${m.waited}d</span>`);
+    const card = (g) => html`<section class="rq-card ${g.open ? '' : 'closed'}" id="${`g-${g.id}`}"><div class="rq-h"><div class="rq-t"><h3>${g.title}</h3><div class="rq-meta"><span class="rq-tag ${g.rfq ? 'rfq' : 'info'}">${g.kind}</span><span>sent ${sh(g.first)}${g.lastSent !== g.first ? ` – ${sh(g.lastSent)}` : ''} · ${g.n} supplier${g.n === 1 ? '' : 's'}</span></div></div>
+        <div class="rq-prog"><b>${g.replied} of ${g.n} replied</b><span class="rq-bar"><i class="r" style="${raw(`width:${pct(g)}%`)}"></i><i class="w" style="${raw(`width:${100 - pct(g)}%`)}"></i></span></div>
+        <div class="rq-acts">${g.replied ? html`<a class="btn small" href="/admin/requests/g/${g.id}/compare">${g.replied > 1 ? 'Compare replies' : 'Open reply'}</a>` : ''}
+          ${g.waiting.length ? html`<form method="post" action="/admin/requests/g/${g.id}/remind" class="inline"><button class="btn small ${g.replied ? 'ghost' : ''}" data-confirm="${`Email a reminder to ${g.waiting.length} supplier${g.waiting.length === 1 ? '' : 's'} that haven't replied?`}">Remind ${g.waiting.length}</button></form>` : ''}
+          ${g.rfq ? html`<button type="button" class="btn small ghost" data-open-dialog="${`more-${g.id}`}">Send to more</button>` : ''}</div></div>
+      <table class="rq-rows"><tbody>${g.members.map((m) => html`<tr><td class="rq-sn"><a href="/admin/requests/${m.r.id}">${m.supplier}</a></td><td class="rq-s">${st(m)}</td>
+        <td class="rq-rp">${m.reply ? html`<a href="/admin/requests/${m.r.id}">${m.reply}</a><small>replied ${sh(m.repliedAt)}${m.repliedAt ? ` · ${Math.max(0, Math.round((Date.parse(day10(m.repliedAt)) - Date.parse(day10(m.r.created_at))) / 864e5))}d` : ''}</small>` : ''}</td>
+        <td class="rq-d">${sh(m.r.created_at)}</td><td class="rq-ref"><a href="/admin/requests/${m.r.id}">${m.r.ref}</a></td></tr>`)}</tbody></table>
+      ${g.rfq ? html`<dialog id="${`more-${g.id}`}" class="rp-modal rq-dlg" aria-labelledby="${`more-t-${g.id}`}"><form method="post" action="/admin/requests/g/${g.id}/send-more" data-busy>
+        <div class="rp-top"><h2 id="${`more-t-${g.id}`}">Send to more suppliers</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+        <p class="sub">The same request, “${g.title}”, by email with its own reference. Suppliers it already went to aren't listed.</p>
+        <input type="search" placeholder="Filter suppliers" class="rq-filter" data-rq-filter aria-label="Filter suppliers">
+        ${((avail) => avail.length ? html`<div class="rq-pick">${avail.map((s) => html`<label class="cp-chk" data-rq-name="${s.name.toLowerCase()}"><input type="checkbox" name="supplier_ids" value="${s.id}"> ${s.name} <span class="sub">${s.email}</span></label>`)}</div>` : html`<p class="d-empty small">Every supplier with an email address already has this request. Add the email on a supplier's page to send it there.</p>`)(suppliers.filter((s) => s.email && !g.members.some((m) => m.r.supplier_id === s.id)).sort((a, b) => a.name.localeCompare(b.name)))}
+        <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send</button></div></form></dialog>` : ''}</section>`;
     res.html(page({
       title: 'Requests', nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
-      body: html`<h1>Information requests</h1>
-      <p class="muted">Send them from a supplier page: tick products, then “Request information”. Replies are tracked by the reference in the subject line. RFQs recorded by Hermes appear here too (<a href="/admin/api-log">integration log</a>).</p>
-      <p>${['', ...STATUSES].map((s) => html`<a class="btn small ${(st || '') === s ? '' : 'ghost'}" href="/admin/requests${s ? `?status=${s}` : ''}">${s || 'All'}</a> `)}</p>
-      <div class="table-wrap"><table class="list reqs"><thead><tr><th>Ref</th><th>Supplier</th><th>Requested</th><th class="r">Products</th><th>Status</th><th>Sent</th></tr></thead>
-      <tbody>${list.length ? list.map((r) => html`<tr><td><a href="/admin/requests/${r.id}"><b>${r.ref}</b></a></td><td><a href="/admin/suppliers/${r.supplier_id}">${name[r.supplier_id] || '—'}</a></td>
-        <td title="${r.kind === 'rfq' ? (r.subject || '') : ''}">${r.kind === 'rfq' ? html`<span class="pill s-new">RFQ${r.channel ? ' · ' + r.channel : ''}</span> ${r.subject}` : [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ')}</td><td class="r">${(r.product_ids || []).length}</td><td>${pill(r.status)}</td><td>${fmt.date(r.created_at)}</td></tr>`) : html`<tr><td colspan="6" class="muted">No requests yet.</td></tr>`}</tbody></table></div>`,
+      body: html`<div class="rq-head"><h1>Information requests</h1></div>
+      <p class="muted">One card per request, with every supplier it went to. Send new ones from a supplier page (tick products, then “Request information”); RFQs recorded by Hermes appear here too (<a href="/admin/api-log">integration log</a>). Replies are tracked by the reference in the subject line.</p>
+      <form class="rq-bar" method="get"><nav class="sx-seg">${[['open', 'Open'], ['all', 'All'], ['closed', 'Closed']].map(([k, l]) => html`<a class="${view === k ? 'on' : ''}" href="${`/admin/requests?view=${k}${q ? `&q=${encodeURIComponent(req.query.q)}` : ''}`}">${l}<em>${counts[k]}</em></a>`)}</nav>
+        <input type="hidden" name="view" value="${view}"><input type="search" name="q" value="${req.query.q || ''}" placeholder="Search request, supplier, LB-ref…" aria-label="Search requests"></form>
+      ${list.length ? list.map(card) : html`<p class="d-empty">${q ? 'No requests match.' : view === 'open' ? 'Nothing open. Every request has been answered or closed.' : 'No requests yet.'}</p>`}`,
     }));
+  }));
+  const day10 = (v) => String(v || '').slice(0, 10);
+
+  router.get('/admin/requests/g/:id/compare', G(async (req, res) => {
+    const { gs } = await groups(); const g = groupOf(gs, req.params.id); const C2 = RG.compare(g);
+    res.html(page({
+      title: `Compare · ${g.title}`, nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
+      body: html`<nav class="crumb"><a href="/admin/requests">Requests</a></nav><h1>${g.title}</h1>
+      <p class="muted">${g.replied} of ${g.n} suppliers replied. Figures come from the AI summary of each supplier's latest reply — open the request to read it in full.</p>
+      ${C2.cols.length ? html`<section class="card flush"><div class="table-wrap"><table class="list rq-cmp"><thead><tr><th></th>${C2.cols.map((c) => html`<th><a href="/admin/requests/${c.mem.r.id}">${c.mem.supplier}</a><small>${c.mem.r.ref} · replied ${sh(c.mem.repliedAt)}</small></th>`)}</tr></thead>
+        <tbody><tr><th>Reply</th>${C2.cols.map((c) => html`<td>${c.mem.reply || '—'}</td>`)}</tr>
+        ${C2.labels.map((l) => html`<tr><th>${l}</th>${C2.cols.map((c) => html`<td>${C2.val(c, l) || html`<span class="sub">—</span>`}</td>`)}</tr>`)}</tbody></table></div></section>
+        ${C2.labels.length ? '' : html`<p class="sub">No figures yet: AI summaries of the replies are made in the background — open a request to create them.</p>`}` : html`<p class="d-empty">No replies yet.</p>`}
+      ${g.waiting.length ? html`<p class="sub">Waiting for: ${g.waiting.map((m) => m.supplier).join(', ')}</p>` : ''}`,
+    }));
+  }));
+
+  router.post('/admin/requests/g/:id/remind', G(async (req, res) => {
+    const { gs, suppliers } = await groups(); const g = groupOf(gs, req.params.id);
+    if (!canSend()) { flash(res, 'error', 'Email is not configured, so reminders cannot be sent'); return res.redirect('/admin/requests'); }
+    let sent = 0; const skipped = [];
+    for (const m of g.waiting) {
+      const to = emailsOf(m, suppliers.find((s) => s.id === m.r.supplier_id));
+      if (!to.length) { skipped.push(`${m.supplier} (sent by ${m.r.channel || 'another channel'})`); continue; }
+      const subject = `[${m.r.ref}] Reminder: ${RG.titleOf(m.r)}`;
+      const body = `Hello,\n\nA friendly reminder about our request ${m.r.ref} (${RG.titleOf(m.r)}), sent on ${sh(m.r.created_at)}.\nCould you please reply to this email with your quotation? Please keep ${m.r.ref} in the subject line.\n\nThank you,\nLulyboo`;
+      try { await sendEmail(config, { to, cc: ccList().filter((e) => !to.includes(e)), subject, text: body }); }
+      catch (e) { skipped.push(`${m.supplier} (${String(e.message).replace(/⟪|⟫|⟦.*?⟧/g, '').slice(0, 80)})`); continue; }
+      await db.insert('info_request_messages', { request_id: m.r.id, direction: 'out', from_email: process.env.EMAIL_FROM || null, to_emails: to, subject, body });
+      await db.update('info_requests', { id: m.r.id }, { updated_at: new Date().toISOString() });
+      sent++;
+    }
+    flash(res, sent ? (skipped.length ? 'warn' : 'ok') : 'error', `${sent ? `Reminder sent to ${sent} supplier${sent === 1 ? '' : 's'}` : 'No reminder sent'}${skipped.length ? ` · not sent: ${skipped.join(', ')}` : ''}`);
+    res.redirect(`/admin/requests#g-${g.id}`);
+  }));
+
+  router.post('/admin/requests/g/:id/send-more', G(async (req, res) => {
+    const { fields } = await parseForm(req);
+    const { gs, suppliers } = await groups(); const g = groupOf(gs, req.params.id);
+    const ids = [].concat(fields.supplier_ids || []).filter(Boolean);
+    if (!ids.length) { flash(res, 'error', 'Tick at least one supplier'); return res.redirect('/admin/requests'); }
+    if (!canSend()) { flash(res, 'error', 'Email is not configured, so the request cannot be sent'); return res.redirect('/admin/requests'); }
+    const base = g.members.map((m) => m.r).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0];
+    const src = g.members.find((m) => m.r.id === base.id)?.outFirst || g.members.map((m) => m.outFirst).find(Boolean);
+    const msgs = src ? await db.list('info_request_messages', { filters: { id: src.id } }).catch(() => []) : [];
+    const srcBody = msgs[0]?.body || src?.body || '';
+    if (!srcBody.trim()) { flash(res, 'error', 'The original message text is not on file, so it cannot be resent. Open one request and use Reply instead.'); return res.redirect('/admin/requests'); }
+    let sent = 0; const failed = [];
+    for (const id of ids) {
+      const s = suppliers.find((x) => x.id === id); if (!s?.email || !EMAIL_RE.test(s.email)) { failed.push(`${s?.name || 'supplier'} (no email)`); continue; }
+      if (g.members.some((m) => m.r.supplier_id === id)) continue;
+      const ref = await nextRef(); const to = [s.email.toLowerCase()]; const cc = ccList().filter((e) => !to.includes(e));
+      const subject = `[${ref}] RFQ: ${g.title}`;
+      const body = srcBody.replace(/\bLB-\d{3,7}\b/g, ref);
+      const row = await db.insert('info_requests', { ref, supplier_id: s.id, product_ids: base.product_ids || [], items: base.items || [], other_text: base.other_text || null, note: base.note || null, to_emails: to, cc_emails: cc, subject, status: 'Sent', kind: 'rfq', channel: 'Email' });
+      try { const r = await sendEmail(config, { to, cc, subject, text: body }); if (r?.id) await db.update('info_requests', { id: row.id }, { email_id: r.id }); }
+      catch (e) { await db.remove('info_requests', { id: row.id }); failed.push(`${s.name} (${String(e.message).replace(/⟪|⟫|⟦.*?⟧/g, '').slice(0, 80)})`); continue; }
+      await db.insert('info_request_messages', { request_id: row.id, direction: 'out', from_email: process.env.EMAIL_FROM || null, to_emails: to, subject, body });
+      await db.insert('supplier_activities', { supplier_id: s.id, type: 'Email', summary: `RFQ ${ref} sent: ${g.title}` }).catch(() => {});
+      sent++;
+    }
+    flash(res, sent ? (failed.length ? 'warn' : 'ok') : 'error', `${sent ? `Sent to ${sent} more supplier${sent === 1 ? '' : 's'}` : 'Nothing sent'}${failed.length ? ` · not sent: ${failed.join(', ')}` : ''}`);
+    res.redirect(`/admin/requests#g-${g.id}`);
   }));
 
   router.get('/admin/requests/:id', G(async (req, res) => {
