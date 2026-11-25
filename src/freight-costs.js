@@ -225,6 +225,7 @@ async function actuals(db, types) {
     }
   }
   for (const a of await db.list('freight_actuals', { order: 'invoice_date.desc' }).catch(() => [])) {
+    if (!(a.lines || []).length) continue;   // statement-only invoices (a total, no charge lines) are kept for balances, not charge typicals
     const c = conts.find((y) => y.id === a.container_id);
     out.push({ id: a.id, container_id: a.container_id, box: a.box || c?.box || null, label: c ? SN.shipName(c) : (a.label || 'Shipment'), company: a.company, invoice_no: a.invoice_no, date: a.invoice_date, lines: a.lines || [], src: 'upload', name: (a.files || [])[0]?.name || '', file: (a.files || [])[0] || null });
   }

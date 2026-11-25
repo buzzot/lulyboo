@@ -5234,3 +5234,54 @@ test('Development: factory checklist Excel → category → project; supplier do
   assert.match((await req(base, 'GET', `/admin/projects/${p.id}`, { cookie: admin })).text, /Draft v3/);
   const d = CK.diffStates({ requirements: 'Wall thickness 1.5 mm' }, { requirements: 'Wall thickness 2.0 mm' }); assert.equal(d[0].items[0].old, '1.5'); assert.equal(d[0].items[0].new, '2.0');
 });
+
+test('Forwarder statement: AI reads invoices → matched to shipments (B/L, booking, POs) → saved once; next statement updates paid; forwarder aging + shipment card', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db);
+  const old = { call: AI.callTool, key: process.env.ANTHROPIC_API_KEY };
+  t.after(() => { AI.callTool = old.call; if (old.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = old.key; server.close(); });
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const FS = require('../src/fwd-statements');
+  assert.deepEqual(FS.posFrom('PO#313, PO#314'), ['313', '314']); assert.deepEqual(FS.posFrom('6144 + 6149'), ['6144', '6149']);
+  const fwd = await db.insert('forwarders', { company: 'Affinity Shipping (USA) Inc.', email: 'op@lax.aftyusa.com', active: true });
+  const c1 = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: { mbl_no: 'MEDUAFQ39156', booking_no: 'XX1', carrier: 'MSC' } });
+  const c2 = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: { booking_no: 'SNAF2609389A' } });
+  const c3 = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: {} });
+  await db.insert('plan_orders', { supplier_id: 's1', po: '600009', sku: 'A', qty: 1, container_id: c3.id });
+  const inv = (no, mbl, bk, refs, amount, paid, extra = {}) => ({ invoice_no: no, invoice_date: '2026-10-05', due_date: '2026-11-04', file_no: 'OI-1', mbl_no: mbl, booking_no: bk, refs, amount, paid, balance: Math.round((amount - paid) * 100) / 100, ...extra });
+  let paidNow = 0;
+  process.env.ANTHROPIC_API_KEY = 'k';
+  AI.callTool = async () => ({ result: { forwarder: 'Affinity Shipping (USA) Inc.', statement_date: '2026-11-24', currency: 'USD', total_records: 4, total_amount: 32165.04, total_paid: 8036.26 + paidNow, total_balance: Math.round((24128.78 - paidNow) * 100) / 100,
+    invoices: [inv('IN-26820', 'MEDUAFQ39156', 'SNAF2609409A', 'PO#314', 8091.26, 8036.26, { payments: [{ date: '2026-11-13', ref: 'CHK#3404', amount: 8036.26 }] }), inv('IN-26945', 'YMJAW226858861', 'SNAF2609389A', 'PO#313, PO#314', 8146.26, paidNow),
+      inv('IN-27104', 'ONEYNB6BEDM60700', 'NBAF2609392A', 'PO#600009, 600011', 8236.26, 0), inv('IN-27109', 'MEDUAEH11073', 'NBAF269197A', '6144 + 6149', 7691.26, 0)] } });
+  const up = async (extra = []) => { const fd = new FormData(); fd.append('file', new Blob([Buffer.from('%PDF statement')], { type: 'application/pdf' }), 'ACCOUNTING STATEMENT - LULYBOO LLC.pdf'); for (const [a, b] of extra) fd.append(a, b); return fetch(`${base}/admin/logistics/fwd-statements`, { method: 'POST', body: fd, headers: { cookie: admin }, redirect: 'manual' }); };
+  // upload from Shipments (forwarder read from the PDF)
+  const r1 = await up([['back', '/admin/orders/shipments']]); assert.equal(r1.status, 303);
+  const st = db.tables.fwd_statements[0]; assert.equal(st.forwarder_id, fwd.id); assert.equal(st.status, 'review'); assert.ok(st.parsed.checks.amount && st.parsed.checks.balance && st.parsed.checks.records);
+  const rv = (await req(base, 'GET', r1.headers.get('location'), { cookie: admin })).text;
+  assert.match(rv, /matched 3 to your shipments/); assert.match(rv, /matched by master B\/L MEDUAFQ39156/); assert.match(rv, /matched by booking no\. SNAF2609389A/); assert.match(rv, /matched by PO 600009, 600011 — check/); assert.match(rv, /No shipment with B\/L MEDUAEH11073/);
+  assert.match(rv, /✓ adds up/); assert.match(rv, /CHK#3404/);
+  // save with the matches (last one left unassigned)
+  const form = { back: '/admin/orders/shipments', inv_0: 'IN-26820', c_0: c1.id, inv_1: 'IN-26945', c_1: c2.id, inv_2: 'IN-27104', c_2: c3.id, inv_3: 'IN-27109', c_3: '' };
+  const sv = await req(base, 'POST', `/admin/logistics/fwd-statements/${st.id}/save`, { cookie: admin, form }); assert.equal(sv.location, `/admin/logistics/forwarders/${fwd.id}`);
+  assert.equal(db.tables.freight_actuals.length, 4); const a1 = db.tables.freight_actuals.find((a) => a.invoice_no === 'IN-26820');
+  assert.equal(a1.container_id, c1.id); assert.equal(a1.balance, 55); assert.equal(a1.forwarder_id, fwd.id); assert.equal(a1.payments[0].ref, 'CHK#3404'); assert.equal(st.status, 'saved');
+  // forwarder page: open balance by age, invoices; list shows the balance
+  const fp = (await req(base, 'GET', `/admin/logistics/forwarders/${fwd.id}`, { cookie: admin })).text;
+  assert.match(fp, /\$24,128\.78/); assert.match(fp, /IN-27109/); assert.match(fp, /part paid/); assert.match(fp, /ACCOUNTING STATEMENT/);
+  assert.match((await req(base, 'GET', '/admin/logistics/forwarders', { cookie: admin })).text, /\$24,128\.78/);
+  // shipment card
+  const sp = (await req(base, 'GET', `/admin/orders/shipments/${c1.id}`, { cookie: admin })).text; assert.match(sp, /Freight invoices/); assert.match(sp, /IN-26820/); assert.match(sp, /\$55\.00 open/);
+  // next statement: IN-26945 paid → updated, no duplicates, change shown in review
+  paidNow = 8146.26;
+  const r2 = await up([['forwarder_id', fwd.id]]); const st2 = db.tables.fwd_statements[1];
+  const rv2 = (await req(base, 'GET', r2.headers.get('location'), { cookie: admin })).text; assert.match(rv2, /paid \$8,146\.26 \(was \$0\.00\)/); assert.match(rv2, /saved before/);
+  await req(base, 'POST', `/admin/logistics/fwd-statements/${st2.id}/save`, { cookie: admin, form: { ...form, c_3: c3.id } });
+  assert.equal(db.tables.freight_actuals.length, 4, 'no duplicates'); assert.equal(db.tables.freight_actuals.find((a) => a.invoice_no === 'IN-26945').balance, 0);
+  assert.equal(db.tables.freight_actuals.find((a) => a.invoice_no === 'IN-27109').container_id, c3.id);
+  // discard a statement under review
+  const r3 = await up([['forwarder_id', fwd.id]]); const st3 = db.tables.fwd_statements[2];
+  await req(base, 'POST', `/admin/logistics/fwd-statements/${st3.id}/discard`, { cookie: admin, form: {} }); assert.ok(!db.tables.fwd_statements.some((s) => s.id === st3.id)); assert.ok(r3);
+  // entry points
+  assert.match((await req(base, 'GET', '/admin/orders/shipments', { cookie: admin })).text, /data-open-dialog="fs-up"/);
+  assert.match((await req(base, 'GET', '/admin/orders/shipping', { cookie: admin })).text, /data-open-dialog="fs-up"/);
+});

@@ -59,6 +59,7 @@ function createApp({ db, config }) {
   require('./routes/planning')(router, { db, config });
   require('./routes/loadplan')(router, { db, config });
   require('./routes/forwarders')(router, { db, config });
+  require('./routes/fwd-statements')(router, { db, config });
   require('./routes/inspections')(router, { db, config });
   require('./routes/finance-inspections')(router, { db, config });
   require('./routes/rates')(router, { db, config });

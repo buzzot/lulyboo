@@ -262,7 +262,8 @@ module.exports = function shippingRoutes(router, { db, config }) {
     const stats = SD.supplierStats(rows);
     res.html(page({
       title: 'Shipping documents', nav: adminNav('shipping'), flash: takeFlash(req, res), wide: true, req,
-      body: html`<div class="cp-head"><div><h1>Shipping documents</h1><p class="muted">One request per supplier per shipment, sent automatically at 9:00 China time on the loading date. Suppliers reply by email; AI reads the documents and you accept the figures. Missing documents are followed up automatically.</p></div></div>
+      body: html`<div class="cp-head"><div><h1>Shipping documents</h1><p class="muted">One request per supplier per shipment, sent automatically at 9:00 China time on the loading date. Suppliers reply by email; AI reads the documents and you accept the figures. Missing documents are followed up automatically.</p></div><div class="cp-acts"><button type="button" class="btn ghost small" data-open-dialog="fs-up" title="Upload a forwarder statement: each invoice is matched to its shipment">Forwarder statement…</button></div></div>
+        ${require('./fwd-statements').uploadDialog((await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((x) => x.active !== false), BASE)}
         ${missing ? html`<p class="flash warn">Run the shipping documents SQL in Supabase first (supabase/schema.sql, "Shipment confirmations").</p>` : ''}
         <div class="cp-kpis">
           <div class="cp-kpi ${n('received') ? 'warn' : ''}"><span>To review</span><b>${n('received')}</b><small>documents arrived</small></div>

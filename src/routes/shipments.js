@@ -198,7 +198,8 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const recent = base.filter((r) => r.stage === 'delivered' && r.delivered >= dAgo).length;
     res.html(page({
       title: 'Shipments', nav: adminNav('shipments'), flash: takeFlash(req, res), wide: true, req,
-      body: html`<div class="cp-head"><div><h2 class="sl-title">Shipments</h2><p class="muted">Everything that has left the factory, until it's in your warehouse.</p></div><div class="cp-acts"><button type="button" class="btn ghost small" data-open-dialog="rec-new" title="Keep duty, costs, dates and POs of a shipment without tracking it">+ Record</button></div></div>
+      body: html`<div class="cp-head"><div><h2 class="sl-title">Shipments</h2><p class="muted">Everything that has left the factory, until it's in your warehouse.</p></div><div class="cp-acts"><button type="button" class="btn ghost small" data-open-dialog="rec-new" title="Keep duty, costs, dates and POs of a shipment without tracking it">+ Record</button><button type="button" class="btn ghost small" data-open-dialog="fs-up" title="Upload a forwarder statement: each invoice is matched to its shipment">Forwarder statement…</button></div></div>
+        ${require('./fwd-statements').uploadDialog((await db.list('forwarders', { order: 'company.asc' }).catch(() => [])).filter((x) => x.active !== false), BASE)}
         <dialog id="rec-new" class="rp-modal rf-dlg" aria-labelledby="rec-new-t"><form method="post" action="${BASE}/records/new" enctype="multipart/form-data" data-busy>
           <div class="rp-top"><h2 id="rec-new-t">New record</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
           <p class="sub">A shipment kept for its numbers — duty, fees, freight, dates and POs — without tracking: no document checklist, reminders or emails, and not in active shipments.</p>
@@ -300,6 +301,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
           ${rec.notes ? html`<p class="rc-notes">${rec.notes}</p>` : ''}
           <p class="rc-foot">Record only — no document checklist, reminders, supplier requests, broker email, Telegram or tracking. Duty and costs count in Customs and the landed-cost figures.</p>
         </section>
+        ${await require('./fwd-statements').shipmentCard(db, c.id)}
         <dialog id="rec-edit" class="rp-modal rf-dlg" aria-labelledby="rec-edit-t"><form method="post" action="${BASE}/${c.id}/record">
           <div class="rp-top"><h2 id="rec-edit-t">Edit record</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
           ${RF.recordFields(v, { customs: r.entries.some((e) => e.status === 'saved') })}
@@ -625,6 +627,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
             </div>
           </div>
         </section>
+        ${r.c ? await require('./fwd-statements').shipmentCard(db, r.c.id) : ''}
         ${r.pd.pos.map((p, pi) => { const PD = require('../podocs'); const have = { CI: p.ci, PL: p.pl }; return html`<dialog id="${`pd-po-${pi}`}" class="rp-modal pd-dlg" aria-labelledby="${`pd-po-t-${pi}`}"><form method="post" action="${BASE}/${r.id}/request-docs">
                 <input type="hidden" name="one" value="${`${p.sid}|${p.po}`}">
                 <div class="rp-top"><h2 id="${`pd-po-t-${pi}`}">Request documents · PO ${p.po}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
