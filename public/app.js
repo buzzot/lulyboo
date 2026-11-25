@@ -3197,7 +3197,7 @@
   var seq = 0, timer = null;
   function refresh(open) {
     var fd = new FormData(form), file = form.querySelector('input[name="req_file"]'), my = ++seq;
-    fd.delete('req_file'); if (file && file.files && file.files[0]) fd.append('req_name', file.files[0].name);
+    fd.delete('req_file'); if (file && file.files) Array.prototype.forEach.call(file.files, function (x) { fd.append('req_name', x.name); });
     if (!open) q('state').textContent = 'Updating…';
     return fetch(form.getAttribute('action').replace(/\/new$/, '/draft'), { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
       if (my !== seq) return; var err = q('err');

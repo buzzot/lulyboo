@@ -81,18 +81,29 @@ async function forPo(db, sid, po) {
 
 /** Files linked to an inspection (requirements, report, invoice, photos). */
 async function filesOf(db, i) {
-  return (await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => [])).filter((f) => f.inspection_id === i.id || f.id === i.req_file_id);
+  const all = await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => []);
+  const set = new Set(reqSet(all, i).map((f) => f.id));
+  return all.filter((f) => f.inspection_id === i.id || set.has(f.id));
+}
+const REQ_KIND = 'Inspection requirements';
+/** The requirement files sent with an inspection: the file in req_file_id and every file uploaded with it (same batch). */
+function reqSet(files, i) {
+  const first = files.find((f) => f.id === i.req_file_id); if (!first) return [];
+  return first.batch ? files.filter((f) => f.kind === REQ_KIND && f.batch === first.batch).sort((a, b) => String(a.name).localeCompare(String(b.name))) : [first];
 }
 
 /** Requirement-file versions used for this supplier, newest first: [{ file, version, used: [{ref, at}] }]. */
 async function reqVersions(db, sid) {
-  const files = (await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => [])).filter((f) => f.kind === 'Inspection requirements');
+  const files = (await db.list('plan_files', { filters: { supplier_id: sid } }).catch(() => [])).filter((f) => f.kind === REQ_KIND);
   const rows = (await loadAll(db)).rows.filter((i) => i.supplier_id === sid);
-  return files.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((f, n) => ({ file: f, version: n + 1, used: rows.filter((i) => i.req_file_id === f.id).map((i) => ({ ref: i.ref, at: i.request_sent_at || i.created_at })) })).reverse();
+  // one version = the files uploaded together (same batch); older single files are a version each
+  const groups = new Map();
+  for (const f of files.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))) { const k = f.batch || f.id; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(f); }
+  return [...groups.values()].map((fs, n) => ({ file: fs[0], files: fs, version: n + 1, used: rows.filter((i) => fs.some((f) => f.id === i.req_file_id)).map((i) => ({ ref: i.ref, at: i.request_sent_at || i.created_at })) })).reverse();
 }
 
 /** Store one uploaded file as a PO document linked to the inspection. */
-async function storeFile(db, i, f, kind, by) {
+async function storeFile(db, i, f, kind, by, batch = null) {
   if (!f?.buffer?.length) return null;
   if (f.buffer.length > 25 * 1024 * 1024) throw new Error(`${f.name}: larger than 25 MB`);
   const ext = (String(f.name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '';
@@ -100,16 +111,19 @@ async function storeFile(db, i, f, kind, by) {
   const path = `inspections/${i.supplier_id}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${safe}`;
   const type = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }[ext] || f.type || 'application/octet-stream';
   await db.docs.upload(path, f.buffer, type);
-  return db.insert('plan_files', { supplier_id: i.supplier_id, name: String(f.name).slice(0, 200), path, size: f.buffer.length, content_type: type, kind, pos: posOf(i), uploaded_by: by || null, inspection_id: i.id || null, created_at: now() });
+  return db.insert('plan_files', { supplier_id: i.supplier_id, name: String(f.name).slice(0, 200), path, size: f.buffer.length, content_type: type, kind, pos: posOf(i), uploaded_by: by || null, inspection_id: i.id || null, ...(batch ? { batch } : {}), created_at: now() });
 }
 
 // ── Emails ──────────────────────────────────────────────────────────────────
 function mail({ title, name, intro, rows = [], facts = [], asks = [], closing }) {
   const td = 'padding:7px 9px;border:1px solid #ece6e4;font-size:13px;line-height:19px;';
-  const table = rows.length ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:8px;"><tr>${['PO', 'Product', 'Qty', 'Cartons'].map((h, n) => `<td style="${td}background:#faf6f5;font-weight:600;${n > 1 ? 'text-align:right;' : ''}">${h}</td>`).join('')}</tr>${rows.map((r) => `<tr><td style="${td}">${esc(r.po)}</td><td style="${td}">${esc(r.product || '')}</td><td style="${td}text-align:right;">${esc(r.qty ?? '')}</td><td style="${td}text-align:right;">${esc(r.cartons ?? '')}</td></tr>`).join('')}</table>` : '';
+  const pos = [...new Set(rows.map((r) => r.po))]; const n = (v) => Number(String(v || '').replace(/,/g, '')) || 0; const f = (v) => v ? Number(v).toLocaleString('en-US') : '';
+  const th = (h, r) => `<td style="${td}background:#faf6f5;font-weight:600;${r ? 'text-align:right;' : ''}">${h}</td>`;
+  const table = rows.length ? `<p style="margin:18px 0 0;font-size:15px;font-weight:600;">Packing list</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:8px;"><tr>${th('SKU')}${th('Item')}${th('Qty (pcs)', 1)}${th('Cartons', 1)}</tr>${pos.map((po) => { const rs = rows.filter((r) => r.po === po);
+    return `${pos.length > 1 ? `<tr><td colspan="4" style="${td}background:#fcfaf9;font-weight:600;color:#73777d;">PO ${esc(po)}</td></tr>` : ''}${rs.map((r) => `<tr><td style="${td}font-family:Menlo,Consolas,monospace;font-size:12px;white-space:nowrap;">${esc(r.sku || '—')}</td><td style="${td}">${esc(r.product || '')}</td><td style="${td}text-align:right;">${esc(r.qty ?? '')}</td><td style="${td}text-align:right;color:#73777d;">${esc(r.cartons ?? '')}</td></tr>`).join('')}`; }).join('')}<tr><td colspan="2" style="${td}font-weight:600;">Total · ${rows.length} item${rows.length === 1 ? '' : 's'}${pos.length > 1 ? ` · ${pos.length} POs` : ''}</td><td style="${td}text-align:right;font-weight:600;">${f(rows.reduce((a, r) => a + n(r.qty), 0))}</td><td style="${td}text-align:right;font-weight:600;">${f(rows.reduce((a, r) => a + n(r.cartons), 0))}</td></tr></table>` : '';
   const dl = facts.length ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:6px;">${facts.map(([k, v]) => `<tr><td style="padding:3px 14px 3px 0;font-size:14px;color:#73777d;vertical-align:top;">${esc(k)}</td><td style="padding:3px 0;font-size:14px;font-weight:600;">${esc(v).replace(/\n/g, '<br>')}</td></tr>`).join('')}</table>` : '';
   const paras = (t) => esc(t).split(/\n{2,}/).map((x) => `<p style="margin:0 0 12px;font-size:15px;line-height:24px;">${x.replace(/\n/g, '<br>')}</p>`).join('');
-  const text = [`Dear ${name || 'Sir or Madam'},`, '', intro, '', ...facts.map(([k, v]) => `${k}: ${v}`), ...(rows.length ? ['', ...rows.map((r) => `- PO ${r.po}${r.product ? ` · ${r.product}` : ''}${r.qty ? ` · ${r.qty} pcs` : ''}${r.cartons ? ` · ${r.cartons} cartons` : ''}`)] : []), ...(asks.length ? ['', 'Please:', ...asks.map((x, n) => `  ${n + 1}. ${x}`)] : []), '', closing || '', '', 'Thank you,', 'Lulyboo Quality'].join('\n');
+  const text = [`Dear ${name || 'Sir or Madam'},`, '', intro, '', ...facts.map(([k, v]) => `${k}: ${v}`), ...(rows.length ? ['', 'Packing list:', ...pos.flatMap((po) => [...(pos.length > 1 ? [`PO ${po}`] : []), ...rows.filter((r) => r.po === po).map((r) => `- ${r.sku || '—'} · ${r.product || ''}${r.qty ? ` · ${r.qty} pcs` : ''}${r.cartons ? ` · ${r.cartons} cartons` : ''}`)]), `Total: ${f(rows.reduce((a, r) => a + n(r.qty), 0))} pcs${rows.some((r) => r.cartons) ? ` · ${f(rows.reduce((a, r) => a + n(r.cartons), 0))} cartons` : ''}`] : []), ...(asks.length ? ['', 'Please:', ...asks.map((x, n) => `  ${n + 1}. ${x}`)] : []), '', closing || '', '', 'Thank you,', 'Lulyboo Quality'].join('\n');
   return { text, html: layout({ english: true, preheader: title, body: `<tr><td style="padding:30px 0 0;"><h1 style="margin:0;font-size:24px;line-height:32px;font-weight:600;">${esc(title)}</h1></td></tr>
 <tr><td style="padding:18px 0 0;"><p style="margin:0 0 12px;font-size:15px;line-height:24px;">Dear ${esc(name || 'Sir or Madam')},</p>${paras(intro)}${dl}${table}</td></tr>
 ${asks.length ? `<tr><td style="padding:16px 0 0;"><ol style="margin:0;padding-left:20px;font-size:15px;line-height:25px;">${asks.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></td></tr>` : ''}
@@ -122,12 +136,14 @@ async function context(db, i) {
   const co = i.company_id ? await db.get('inspection_companies', i.company_id).catch(() => null) : null;
   const lines = (await db.list('plan_orders', { filters: { supplier_id: i.supplier_id } }).catch(() => [])).filter((l) => posOf(i).some((p) => PL.normPo(p) === PL.normPo(l.po)));
   const ctn = (l) => l.cartons || (l.units_per_carton && l.qty ? Math.ceil(l.qty / l.units_per_carton) : null);
-  const rows = lines.map((l) => ({ po: l.po, product: l.product || '', qty: l.qty ? Number(l.qty).toLocaleString('en-US') : '', cartons: ctn(l) ? Number(ctn(l)).toLocaleString('en-US') : '' }));
+  const rows = lines.map((l) => ({ po: l.po, sku: l.sku || '', product: l.product || '', qty: l.qty ? Number(l.qty).toLocaleString('en-US') : '', cartons: ctn(l) ? Number(ctn(l)).toLocaleString('en-US') : '' }));
   const totalQty = lines.reduce((a, l) => a + (Number(l.qty) || 0), 0); const totalCtn = lines.reduce((a, l) => a + (ctn(l) || 0), 0);
   const addr = [sup.address, sup.city, sup.province, sup.country].filter(Boolean).join(', ');
   const contact = [sup.contact_name, sup.phone || sup.wechat].filter(Boolean).join(' · ');
   return { sup, co, lines, rows, totalQty, totalCtn, addr, contact };
 }
+/** Always copied on inspection requests (INSPECTION_CC overrides, comma separated). */
+const ALWAYS_CC = String(process.env.INSPECTION_CC || 'marsel@lulyboo.com').split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
 const longDay = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'to be agreed');
 
 /** The request to the inspection company (cc the supplier). `edits`: { to, cc, intro }. */
@@ -140,13 +156,13 @@ async function requestDraft(db, i, edits = {}) {
   const facts = [['Reference', i.ref], ['Inspection', TYPES[i.type] || 'Pre-shipment (PSI)'], ['Date', i.inspection_date ? longDay(i.inspection_date) : 'please propose'], ['AQL', i.aql || 'General level II · 2.5 / 4.0'], ['Factory', c.sup.name || ''], ...(c.addr ? [['Address', c.addr]] : []), ...(c.contact ? [['Contact', c.contact]] : []), ['Total', `${c.totalQty.toLocaleString('en-US')} pcs${c.totalCtn ? ` · ${c.totalCtn.toLocaleString('en-US')} cartons` : ''}`]];
   const asks = ['Confirm the inspection date and the inspector', 'Send the inspection report (PDF) and your invoice to this email when done'];
   const m = mail({ title: `Inspection request ${i.ref}`, name: c.co?.contact || c.co?.name, intro, rows: c.rows, facts, asks, closing: CLOSING });
-  return { to, cc: cc.filter((e) => !to.includes(e)), subject: `Inspection request ${i.ref} — PO ${posOf(i).join(', ')}, ${c.sup.name || ''}, ${SHORT[i.type] || 'PSI'}${i.inspection_date ? ` ${PL.short(i.inspection_date)}` : ''}`, intro, ...m, ctx: c };
+  for (const e of ALWAYS_CC) if (!cc.some((x) => x.toLowerCase() === e)) cc.push(e);
+  return { to, cc: [...new Set(cc.map((e) => e.toLowerCase()))].filter((e) => !to.map((x) => x.toLowerCase()).includes(e)), subject: `Inspection request ${i.ref} — PO ${posOf(i).join(', ')}, ${c.sup.name || ''}, ${SHORT[i.type] || 'PSI'}${i.inspection_date ? ` ${PL.short(i.inspection_date)}` : ''}`, intro, ...m, ctx: c };
 }
 
 async function attachmentsFor(db, i) {
   const files = await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => []);
-  const req = files.find((f) => f.id === i.req_file_id);
-  const pick = [req].filter(Boolean);   // inspection documents only — PO / order files are not sent
+  const pick = reqSet(files, i);   // inspection documents only — PO / order files are not sent
   const out = [];
   for (const f of pick) { try { out.push({ filename: f.name, content: await db.docs.download(f.path) }); } catch { /* skip unreadable */ } }
   return out;
@@ -364,4 +380,4 @@ async function runInspections({ db, config }) {
   return { created, confirms, reminders };
 }
 
-module.exports = { TYPES, SHORT, AQLS, STATUS, OPEN, LEAD, REF_RE, inspectAddress, newRef, timing, loadAll, openPos, needs, forPo, filesOf, reqVersions, storeFile, requestDraft, sendRequest, sendConfirmations, afterConfirm, readEmail, handleInspectionEmail, decide, poGate, runInspections, withLog, posOf, covers, usd, num, isMissing, longDay, attachmentsFor };
+module.exports = { REQ_KIND, reqSet, ALWAYS_CC, TYPES, SHORT, AQLS, STATUS, OPEN, LEAD, REF_RE, inspectAddress, newRef, timing, loadAll, openPos, needs, forPo, filesOf, reqVersions, storeFile, requestDraft, sendRequest, sendConfirmations, afterConfirm, readEmail, handleInspectionEmail, decide, poGate, runInspections, withLog, posOf, covers, usd, num, isMissing, longDay, attachmentsFor };

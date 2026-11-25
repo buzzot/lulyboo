@@ -135,10 +135,10 @@ module.exports = function inspectionRoutes(router, { db, config }) {
             <h3 class="in-h">Attachments <span class="sub">sent with the request</span></h3>
             <div class="in-att">
               <div class="in-att-h"><b>Testing requirements</b>${last ? html`<span class="cp-tag">v${last.version}</span>` : html`<span class="cp-tag warn">Required</span>`}</div>
-              ${last ? html`<div class="in-att-f"><span class="in-ic">${(String(last.file.name).match(/\.([a-z0-9]+)$/i) || [, 'FILE'])[1].toUpperCase().slice(0, 4)}</span><span class="in-att-n">${fileA(last.file, last.file.name)}<small>${last.used.length ? `used ${PL.short(String(last.used[0].at).slice(0, 10))} · ${last.used[0].ref}` : `added ${PL.short(String(last.file.created_at).slice(0, 10))}`}</small></span></div>
-                <label class="cp-chk in-ok"><input type="checkbox" name="req_ok" value="1"> Still correct, send v${last.version} again</label>` : html`<p class="sub">No file for ${sup.name} yet.</p>`}
-            <div class="mdrop small in-drop" data-filebox data-max="1"><div class="mdrop-box"><input type="file" name="req_file" accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg" aria-label="Updated testing requirements"><span class="dz-main" data-main>${last ? html`Drop an updated file <span class="sub">→ v${last.version + 1}</span>` : html`Drop the file or <u>choose</u>`}</span><span class="dz-hint">PDF, Word, Excel or image · paste works too</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-              ${versions.length > 1 ? html`<p class="sub in-hist">History: ${versions.slice().reverse().map((v, n) => html`${n ? ' · ' : ''}${fileA(v.file, `v${v.version}`)}`)}</p>` : ''}
+              ${last ? html`<ul class="in-att-l">${last.files.map((lf) => html`<li><span class="in-ic">${(String(lf.name).match(/\.([a-z0-9]+)$/i) || [, 'FILE'])[1].toUpperCase().slice(0, 4)}</span><span class="in-att-n">${fileA(lf, lf.name)}</span></li>`)}</ul><p class="sub in-hist">${last.files.length} file${last.files.length === 1 ? '' : 's'} · ${last.used.length ? `used ${PL.short(String(last.used[0].at).slice(0, 10))} · ${last.used[0].ref}` : `added ${PL.short(String(last.file.created_at).slice(0, 10))}`}</p>
+                <label class="cp-chk in-ok"><input type="checkbox" name="req_ok" value="1"> Still correct, send v${last.version} again${last.files.length > 1 ? ` (${last.files.length} files)` : ''}</label>` : html`<p class="sub">No file for ${sup.name} yet.</p>`}
+            <div class="mdrop small in-drop" data-filebox data-max="10"><div class="mdrop-box"><input type="file" name="req_file" multiple accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg" aria-label="Updated testing requirements"><span class="dz-main" data-main>${last ? html`Drop updated files <span class="sub">→ v${last.version + 1}</span>` : html`Drop the files or <u>choose</u>`}</span><span class="dz-hint">PDF, Word, Excel or image · paste works too</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
+              ${versions.length > 1 ? html`<p class="sub in-hist">History: ${versions.slice().reverse().map((v, n) => html`${n ? ' · ' : ''}${fileA(v.file, `v${v.version}`)}${v.files.length > 1 ? ` (${v.files.length})` : ''}`)}</p>` : ''}
             </div>
           </aside></div>
         </form>
@@ -150,7 +150,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
             <div><span>Subject</span><b data-d="subject"></b></div>
             <div><span>Attached</span><span data-d="att"></span></div>
             <label class="in-dlg-msg"><span>Message</span><textarea name="intro" form="in-form" rows="2" data-in-live placeholder="Optional: replaces the first paragraph of the email." aria-label="Message"></textarea></label>
-            <p class="sub">English · replies come to ${IN.inspectAddress()} · the email lists the factory address and contact, every product with qty and cartons, and the AQL.</p></div>
+            <p class="sub">Always copied: ${IN.ALWAYS_CC.join(', ')} · English · replies come to ${IN.inspectAddress()} · the email lists the factory address and contact, every product with qty and cartons, and the AQL.</p></div>
           <p class="in-dlg-err" data-d="err" hidden></p>
           <iframe class="in-dlg-f" sandbox title="Email preview" data-d="frame"></iframe>
           <div class="in-dlg-b"><button type="button" class="btn ghost" data-close-dialog>Back to edit</button><span class="sub" data-d="state">Changes update the preview.</span><button type="submit" class="btn" form="in-form" name="send" value="1" data-in-send>Send now</button></div>
@@ -166,13 +166,13 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const err = (m) => res.json({ ok: false, error: m }, 400);
     if (!sup) return err('Supplier not found'); if (!pos.length) return err('Tick at least one PO');
     if (!f.company_id) return err('Choose the inspection company'); if (!IN.TYPES[f.type]) return err('Choose the inspection type');
-    const versions = await IN.reqVersions(db, sid); const reqName = String(f.req_name || '').trim();
+    const versions = await IN.reqVersions(db, sid); const reqNames = [].concat(f.req_name || []).map((x) => String(x).trim()).filter(Boolean); const reqName = reqNames[0];
     if (!reqName && !(f.req_ok && versions.length)) return err(versions.length ? `Attach the updated requirements file, or tick that v${versions[0].version} is still correct` : 'Attach the testing requirements file');
     const old = f.id ? await db.get('inspections', String(f.id)).catch(() => null) : null;
     const i = { ref: old?.ref || (IN.REF_RE.test(String(f.ref || '')) ? String(f.ref) : 'LBI-NEW'), supplier_id: sid, pos, company_id: String(f.company_id), type: f.type, inspection_date: PL.isoDay(f.inspection_date), aql: String(f.aql || '').slice(0, 40) || null };
     const d = await IN.requestDraft(db, i, { to: emails(f.to), cc: emails(f.cc), intro: String(f.intro || '').trim() });
-    const reqLabel = reqName ? `${reqName} (requirements v${(versions[0]?.version || 0) + 1})` : `${versions[0].file.name} (requirements v${versions[0].version})`;
-    res.json({ ok: true, to: d.to, cc: d.cc, subject: d.subject, html: d.html, attachments: [reqLabel], warn: d.to.length ? '' : 'The inspection company has no email: add it under Inspection companies, or type one in To.' });
+    const reqLabels = reqName ? reqNames.map((x) => `${x} (requirements v${(versions[0]?.version || 0) + 1})`) : versions[0].files.map((x) => `${x.name} (requirements v${versions[0].version})`);
+    res.json({ ok: true, to: d.to, cc: d.cc, subject: d.subject, html: d.html, attachments: reqLabels, warn: d.to.length ? '' : 'The inspection company has no email: add it under Inspection companies, or type one in To.' });
   }));
 
   router.post(`${BASE}/new`, G(async (req, res) => {
@@ -187,7 +187,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const date = PL.isoDay(f.inspection_date);
     const { rows } = await IN.loadAll(db);
     const versions = await IN.reqVersions(db, sid);
-    const upload = (files.req_file || []).find((x) => x.buffer?.length);
+    const uploads = [].concat(files.req_file || []).filter((x) => x?.buffer?.length).slice(0, 10); const upload = uploads[0];
     if (!upload && !(f.req_ok && versions.length)) return redo(versions.length ? `Attach the updated requirements file, or tick that v${versions[0].version} is still correct` : 'Attach the testing requirements file');
     let i = f.id ? rows.find((x) => x.id === f.id) : null;
     const base = { supplier_id: sid, pos, company_id: String(f.company_id), type: f.type, container_id: f.container_id || null, inspection_date: date, aql: String(f.aql || '').slice(0, 40) || null, confirm_days: Math.max(1, Math.min(30, Number(f.confirm_days) || 7)), fee_quoted: IN.num(f.fee_quoted), updated_at: now() };
@@ -196,8 +196,8 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     // other "to request" rows for the POs now covered: this request replaces them
     for (const x of rows.filter((x) => x.id !== i.id && x.status === 'todo' && x.supplier_id === sid && IN.posOf(x).every((p) => pos.some((q) => PL.normPo(q) === PL.normPo(p))))) await db.update('inspections', { id: x.id }, { status: 'cancelled', log: IN.withLog(x, `Replaced by ${i.ref}`, by(req)), updated_at: now() });
     let reqFile = versions[0]?.file; let ver = versions[0]?.version;
-    if (upload) { reqFile = await IN.storeFile(db, i, { ...upload, name: upload.name }, 'Inspection requirements', by(req)); ver = (versions[0]?.version || 0) + 1; }
-    const p2 = { req_file_id: reqFile.id, req_version: ver, status: i.status === 'todo' ? (f.send ? 'requested' : 'scheduled') : i.status, log: IN.withLog(i, `${f.send ? 'Request prepared' : 'Saved without sending'} · requirements v${ver}${date ? ` · ${PL.short(date)}` : ''}`, by(req)) };
+    if (upload) { const batch = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; const saved = []; for (const u of uploads) saved.push(await IN.storeFile(db, i, { ...u, name: u.name }, IN.REQ_KIND, by(req), batch)); reqFile = saved[0]; ver = (versions[0]?.version || 0) + 1; }
+    const p2 = { req_file_id: reqFile.id, req_version: ver, status: i.status === 'todo' ? (f.send ? 'requested' : 'scheduled') : i.status, log: IN.withLog(i, `${f.send ? 'Request prepared' : 'Saved without sending'} · requirements v${ver}${uploads.length > 1 ? ` (${uploads.length} files)` : ''}${date ? ` · ${PL.short(date)}` : ''}`, by(req)) };
     await db.update('inspections', { id: i.id }, p2); i = { ...i, ...p2 };
     if (f.send) {
       try { await IN.sendRequest(db, config, i, { edits: { to: emails(f.to), cc: emails(f.cc), intro: String(f.intro || '').trim() }, by: by(req) }); flash(res, 'ok', `${i.ref} sent to the inspection company`); }
@@ -267,8 +267,8 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     const sup = await db.get('suppliers', i.supplier_id).catch(() => null) || {};
     const co = i.company_id ? await db.get('inspection_companies', i.company_id).catch(() => null) : null;
     const files = await IN.filesOf(db, i);
-    const reqF = files.find((f) => f.id === i.req_file_id);
-    const docs = files.filter((f) => f.id !== i.req_file_id);
+    const reqFs = IN.reqSet(files, i); const reqF = reqFs[0];
+    const docs = files.filter((f) => !reqFs.some((r) => r.id === f.id));
     const cont = i.container_id ? await db.get('plan_containers', i.container_id).catch(() => null) : null;
     const today = PL.today(); const url = `${BASE}/${i.id}`;
     const hid = html`<input type="hidden" name="back" value="${url}">`;
@@ -289,7 +289,7 @@ module.exports = function inspectionRoutes(router, { db, config }) {
         <section class="card">${stepsHTML(i)}
           <div class="in-kv"><div><b>${i.inspection_date ? PL.short(i.inspection_date) : i.target_date ? `~${PL.short(i.target_date)}` : '—'}</b><span>inspection day${i.inspection_date ? '' : ' (suggested)'}</span></div>
             <div><b>${confDay ? PL.short(confDay) : '—'}</b><span>${i.confirm_sent_at ? `confirmation emails sent ${PL.short(String(i.confirm_sent_at).slice(0, 10))}` : `confirmation emails · ${i.confirm_days ?? 7} days before`}</span></div>
-            <div><b>${reqF ? fileA(reqF, `Requirements v${i.req_version || 1}`) : '—'}</b><span>${reqF ? reqF.name : 'not attached yet'}</span></div>
+            <div><b>${reqF ? `Requirements v${i.req_version || 1}` : '—'}</b><span>${reqF ? reqFs.map((f, n) => html`${n ? ' · ' : ''}${fileA(f, f.name)}`) : 'not attached yet'}</span></div>
             <div><b>${i.invoice_amount ? IN.usd(i.invoice_amount) : i.fee_quoted ? IN.usd(i.fee_quoted) : '—'}</b><span>${i.invoice_amount ? (i.paid_at ? `paid ${PL.short(i.paid_at)}` : `invoice${i.invoice_due ? ` · due ${PL.short(i.invoice_due)}` : ''}`) : i.fee_quoted ? 'quoted' : 'fee'}</span></div></div>
           ${['requested', 'scheduled', 'confirmed'].includes(i.status) ? html`<form method="post" action="${`${url}/date`}" class="in-date">${hid}<label>Inspection day <input type="date" name="date" value="${i.inspection_date || ''}" required></label><button class="btn small ghost">${i.inspection_date ? 'Change date' : 'Set date (booked)'}</button><span class="sub">A new date resets the confirmations — they go out again ${i.confirm_days ?? 7} days before.</span></form>` : ''}
         </section>

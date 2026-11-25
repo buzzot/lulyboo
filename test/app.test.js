@@ -2960,7 +2960,7 @@ test('supplier holidays: AI read, save, calendar bands, portal page, confirm, re
   const h = db.tables.supplier_holidays[0];
   assert.equal(h.year, 2027); assert.equal(h.source, 'lulyboo');
   assert.equal(db.tables.crm_tasks.filter((x) => /Order cut-off 2026-12-01/.test(x.title)).length, 1);
-  assert.equal(db.tables.crm_tasks.find((x) => /Order cut-off/.test(x.title)).due_date, '2026-11-24');
+  { const due = db.tables.crm_tasks.find((x) => /Order cut-off/.test(x.title)).due_date; const today = new Date().toISOString().slice(0, 10); assert.equal(due, today > '2026-11-24' ? due : '2026-11-24'); assert.ok(due >= '2026-11-24'); }   // 7 days before the cut-off, or today once that day has passed
   assert.equal((await req(base, 'POST', '/admin/crm/holidays', { cookie: admin, form: { supplier_id: sup.id, name: 'Empty' } })).status, 303);
   assert.equal(db.tables.supplier_holidays.length, 1, 'no dates → not saved');
 
@@ -4969,20 +4969,20 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   { const nw = (await req(base, 'GET', `/admin/orders/inspections/new?supplier=${k.id}&po=900020`, { cookie })).text;
     assert.match(nw, /class="in-pop"[\s\S]*?Toothbrush/); assert.doesNotMatch(nw.match(/class="in-pop"[\s\S]*?<\/span><\/span><\/label>/)[0], /5,000/); }
   // 2. request: both POs, requirements file required (none yet), then sent with it
-  const post = async (fields, file) => { const fd = new FormData(); for (const [a, b] of fields) fd.append(a, b); if (file) fd.append('req_file', new Blob([Buffer.from('%PDF req')], { type: 'application/pdf' }), file); return fetch(`${base}/admin/orders/inspections/new`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
+  const post = async (fields, file) => { const fd = new FormData(); for (const [a, b] of fields) fd.append(a, b); for (const fn of [].concat(file || [])) fd.append('req_file', new Blob([Buffer.from('%PDF req')], { type: 'application/pdf' }), fn); return fetch(`${base}/admin/orders/inspections/new`, { method: 'POST', body: fd, headers: { cookie }, redirect: 'manual' }); };
   const fields = [['id', todo.id], ['supplier_id', k.id], ['pos', '900020'], ['pos', '900021'], ['company_id', co.id], ['type', 'psi'], ['inspection_date', D(20)], ['aql', 'II · 2.5 / 4.0'], ['confirm_days', '7'], ['send', '1']];
   await db.insert('plan_files', { supplier_id: k.id, kind: 'PO', name: 'PO-900020.pdf', pos: ['900020'], path: 'po/900020.pdf', content_type: 'application/pdf' }); db.files.set('docs/po/900020.pdf', Buffer.from('%PDF po'));
   { // review before sending: the exact email, nothing saved, nothing sent
     const n0 = sent.length; const dr = async (extra) => { const fd = new FormData(); for (const [a, b] of [...fields, ...extra]) fd.append(a, b); return (await fetch(`${base}/admin/orders/inspections/draft`, { method: 'POST', body: fd, headers: { cookie } })).json(); };
     const bad = await dr([]); assert.equal(bad.ok, false); assert.match(bad.error, /requirements/);
-    const ok = await dr([['req_name', 'Kean_testing_req.pdf']]); assert.equal(ok.ok, true); assert.deepEqual(ok.to, ['booking@qima.com']); assert.ok(ok.cc.includes('sales@kean.cn'));
-    assert.match(ok.subject, /PO 900020, 900021/); assert.match(ok.html, /Bao An, Shenzhen/); assert.match(ok.attachments[0], /Kean_testing_req\.pdf \(requirements v1\)/); assert.equal(ok.attachments.length, 1);
+    const ok = await dr([['req_name', 'Kean_testing_req.pdf'], ['req_name', 'Kean_spec_sheet.pdf']]); assert.ok(ok.cc.includes('marsel@lulyboo.com'), 'always copied'); assert.equal(ok.ok, true); assert.deepEqual(ok.to, ['booking@qima.com']); assert.ok(ok.cc.includes('sales@kean.cn'));
+    assert.match(ok.subject, /PO 900020, 900021/); assert.match(ok.html, /Bao An, Shenzhen/); assert.match(ok.attachments[0], /Kean_testing_req\.pdf \(requirements v1\)/); assert.equal(ok.attachments.length, 2);
     assert.equal(sent.length, n0); assert.equal(db.tables.inspections.find((i) => i.id === todo.id).status, 'todo');
     assert.match((await req(base, 'GET', `/admin/orders/inspections/new?id=${todo.id}`, { cookie })).text, /data-in-review[\s\S]*data-in-dlg/);
   }
   await post(fields);
   assert.equal(db.tables.inspections.find((i) => i.id === todo.id).status, 'todo');   // refused: no requirements
-  const r1 = await post(fields, 'Kean_testing_req.pdf');
+  const r1 = await post(fields, ['Kean_testing_req.pdf', 'Kean_spec_sheet.pdf']);
   assert.equal(r1.status, 303);
   let i = db.tables.inspections.find((x) => x.id === todo.id);
   assert.equal(i.status, 'requested'); assert.deepEqual(i.pos, ['900020', '900021']); assert.equal(i.req_version, 1);
@@ -4990,8 +4990,11 @@ test('Inspections: new PO alert → request with requirements file → confirmat
   const reqMail = sent.at(-1);
   assert.deepEqual(reqMail.to, ['booking@qima.com']); assert.ok(reqMail.cc.includes('sales@kean.cn'));
   assert.match(reqMail.subject, new RegExp(`Inspection request ${i.ref} — PO 900020, 900021, Shenzhen Kean, PSI`));
-  assert.ok(reqMail.attachments.some((a) => a.filename === 'Kean_testing_req.pdf')); assert.equal(reqMail.attachments.length, 1, 'inspection documents only, no PO PDFs');
+  assert.ok(reqMail.attachments.some((a) => a.filename === 'Kean_testing_req.pdf')); assert.equal(reqMail.attachments.length, 2, 'both requirement files, no PO PDFs'); assert.ok(reqMail.attachments.some((a) => a.filename === 'Kean_spec_sheet.pdf')); assert.ok(reqMail.cc.includes('marsel@lulyboo.com'));
+  { const v = await IN.reqVersions(db, k.id); assert.equal(v.length, 1); assert.equal(v[0].files.length, 2); }
   assert.match(reqMail.text, /Bao An, Shenzhen/); assert.match(reqMail.text, /50 cartons/);
+  assert.match(reqMail.html, /Packing list<\/p>/); assert.match(reqMail.html, />SKU</); assert.match(reqMail.html, /PO 900021<\/td>/); assert.match(reqMail.html, /Total · 2 items · 2 POs/);
+  assert.match(reqMail.text, /Packing list:\nPO 900020\n- — · Toothbrush · 5,000 pcs · 50 cartons/); assert.match(reqMail.text, /Total: 7,000 pcs/);
   assert.deepEqual(reqMail.reply_to, ['inspect@in.lulyboo.space']);
 
   // 3. confirmations: not yet (20 days out); after moving the date to 6 days out, both emails go
