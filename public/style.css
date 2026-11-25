@@ -3656,3 +3656,7 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 .po-row .fn-chips{justify-content:flex-start}
 .po-s small b{display:inline;font-size:12px}.po-head i{display:none}
 .fn-s small .po-no{margin:2px 4px 0 0;font-size:12px;padding:0 6px}
+.fn-dh,.fn-dr{grid-template-columns:minmax(0,1fr) repeat(4,minmax(0,1fr)) 190px}
+.po-head,.po-row,.fn-lay.has-panel .po-head,.fn-lay.has-panel .po-row{grid-template-columns:minmax(150px,1fr) repeat(var(--n),minmax(150px,172px)) 128px}
+.po-row .fn-chip{min-width:28px;padding:0 5px}
+.fn-head,.fn-row{grid-template-columns:96px minmax(0,1.1fr) minmax(0,1.4fr) 150px 104px}

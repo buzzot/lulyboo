@@ -44,7 +44,7 @@ module.exports = function financeRoutes(router, { db, config }) {
   }
   const sum = (a, k = 'left') => a.reduce((s, r) => s + (Number(r[k]) || 0), 0);
 
-  const chips = (r) => html`<span class="fn-chips">${['PO', 'BL', 'AN'].map((k) => { const s = FN.chip(r.docs, k); return html`<span class="fn-chip ${s}" title="${`${FN.DOCS[k]}: ${s === 'ok' ? 'on file' : s === 'warn' ? 'on file, not marked signed' : s === 'miss' ? 'missing' : 'not needed yet'}`}">${FN.SHORT[k]}</span>`; })}</span>`;
+  const chips = (r) => html`<span class="fn-chips">${FN.KEYS.map((k) => { const s = FN.chip(r.docs, k); return html`<span class="fn-chip ${s}" title="${`${FN.DOCS[k]}: ${s === 'ok' ? 'on file' : s === 'warn' ? 'on file, not marked signed' : s === 'miss' ? 'missing' : 'not needed yet'}`}">${FN.SHORT[k]}</span>`; })}</span>`;
   const dueTxt = (r, today) => { if (!r.d) return 'date tbc'; const n = PM.between(today, r.d); return n < 0 ? `${-n} day${n === -1 ? '' : 's'} late` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`; };
 
   // ── Queue + panel ───────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ module.exports = function financeRoutes(router, { db, config }) {
       </dl>
       ${(() => { const before = sched.filter((x) => x.no < r.no && x.status !== 'paid' && x.left > 0); return !paid && before.length ? html`<div class="fn-warn"><b>${before.map((x) => `Installment ${x.no} (${x.describe}, ${usd(x.left)})`).join(' and ')} ${before.length === 1 ? "isn't" : "aren't"} marked paid.</b> Pay ${before.length === 1 ? 'it' : 'them'} first, or if already paid, <a href="${`${BASE}?id=${before[0].id}`}">mark ${before.length === 1 ? 'it' : 'them'} paid</a> so this list stays right.</div>` : ''; })()}
       <h3 class="fn-h">Documents to verify ${d.ok ? html`<span class="cp-tag ok">complete</span>` : d.missing.length ? html`<span class="cp-tag bad">${d.missing.length} missing</span>` : html`<span class="cp-tag warn">check PO</span>`}</h3>
-      ${['PO', 'BL', 'AN'].filter((k) => d.need.includes(k) || d[k].length).map(docRow)}
+      ${FN.KEYS.filter((k) => d.need.includes(k) || d[k].length).map(docRow)}
       ${canBank ? html`<h3 class="fn-h">Pay to</h3>${FN.hasBank(sup) ? html`<dl class="fn-dl fn-bank">${FN.BANK.map(([k, l]) => (sup[k] ? html`<dt>${l}</dt><dd>${k === 'bank_account' ? html`<span class="fn-mono" id="${`acct-${r.id}`}">${FN.mask(sup[k])}</span> <button type="button" class="link small" data-reveal="${`${BASE}/bank/${sup.id}`}" data-reveal-to="${`acct-${r.id}`}">show</button>` : html`<span class="${k === 'bank_swift' ? 'fn-mono' : ''}">${sup[k]}</span>`}</dd>` : ''))}</dl>` : html`<p class="sub">No bank details on file for ${r.supplier}. ${ST.can(role(req), 'settings') || role(req) === 'director' ? html`<a href="/admin/suppliers/${r.supplier_id}#bank">Add them on the supplier page →</a>` : 'Ask Lulyboo below.'}</p>`}` : ''}
       ${paid ? '' : html`<h3 class="fn-h">Mark paid</h3>
         <form method="post" action="${BASE}/${r.id}/paid" enctype="multipart/form-data" class="fn-form" data-busy>
@@ -255,8 +255,8 @@ module.exports = function financeRoutes(router, { db, config }) {
     res.html(page({
       title: 'Documents', nav: adminNav('finance-docs'), flash: takeFlash(req, res), wide: true, req,
       body: html`<div class="cp-head"><div><h2 class="sl-title">Documents</h2><p class="muted">The signed PO, bill of lading and arrival notice of every PO with payments open (or paid in the last 60 days). Click a file to preview it.</p></div></div>
-        <section class="card fn-docs">${list.length ? html`<div class="fn-dh"><span>Supplier · PO</span><span>Signed PO</span><span>Bill of lading</span><span>Arrival notice</span><span>Next payment</span></div>
-          ${list.map((p) => html`<div class="fn-dr"><span class="fn-s"><b>${p.r.supplier}</b><small>PO ${p.r.po}</small></span>${cell(p, 'PO')}${cell(p, 'BL')}${cell(p, 'AN')}
+        <section class="card fn-docs">${list.length ? html`<div class="fn-dh"><span>Supplier · PO</span><span>Signed PO</span><span>Proforma invoice</span><span>Bill of lading</span><span>Arrival notice</span><span>Next payment</span></div>
+          ${list.map((p) => html`<div class="fn-dr"><span class="fn-s"><b>${p.r.supplier}</b><small>PO ${p.r.po}</small></span>${cell(p, 'PO')}${cell(p, 'PI')}${cell(p, 'BL')}${cell(p, 'AN')}
             <span class="fn-nx">${p.next ? html`<a href="${`${BASE}?id=${p.next.id}`}">${usd(p.next.left)}</a><small>${p.next.describe} · ${p.next.d ? PL.short(p.next.d) : 'date tbc'}</small>` : html`<span class="cp-tag ok">Paid</span>`}</span></div>`)}`
           : html`<p class="fn-empty">No payments yet.</p>`}</section>`,
     }));

@@ -4090,7 +4090,13 @@ test('accountant: finance pages only, document checks, bank details, mark paid w
   await db.insert('fwd_updates', { container_id: c.id, status: 'accepted', facts: { doc_type: 'bill_of_lading' }, files: [{ name: 'HBL.pdf', path: 'x/bl.pdf', type: 'application/pdf' }] });
   db.files.set('docs/x/an.pdf', Buffer.from('%PDF an'));
   let d = FN.docsFor(await FN.preload(db), { ...bal, container: c });
-  assert.deepEqual(d.need, ['PO', 'BL', 'AN']); assert.deepEqual(d.missing, []); assert.ok(d.unsigned); assert.ok(!d.ok);
+  assert.deepEqual(d.need, ['PO', 'PI', 'BL', 'AN']); assert.deepEqual(d.missing, ['PI'], 'the proforma invoice is checked too');
+  assert.match((await req(base, 'GET', '/admin/finance', { cookie: anna })).text, /fn-chip miss[^>]*>PI/);
+  // a PI that names the PO counts as the proforma invoice, not as a second PO
+  await db.insert('plan_files', { supplier_id: s.id, name: 'PI PO800018 Huanger.pdf', kind: null, path: 'x/pi.pdf', content_type: 'application/pdf', pos: ['800018'] });
+  d = FN.docsFor(await FN.preload(db), { ...bal, container: c });
+  assert.deepEqual(d.missing, []); assert.equal(d.PI.length, 1); assert.equal(d.PO.length, 1); assert.ok(d.unsigned); assert.ok(!d.ok);
+  assert.match((await req(base, 'GET', `/admin/finance?id=${bal.id}`, { cookie: anna })).text, /Proforma invoice<\/b>[\s\S]*PI PO800018 Huanger\.pdf/);
   // owner ticks the PO as signed on the PO page
   assert.match((await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800018`, { cookie: owner })).text, /signed\?/);
   await req(base, 'POST', `/admin/logistics/planning/files/${poFile.id}/signed`, { cookie: owner, form: { back: '/admin/orders/view' } });

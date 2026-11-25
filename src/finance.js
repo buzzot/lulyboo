@@ -1,19 +1,21 @@
 'use strict';
 // Finance (the accountant's view): which documents each supplier payment needs before it is paid, the supplier's
 // bank details, and the owner notices when the accountant pays or asks something.
-//   Needed documents follow the installment's trigger:
-//     deposit / before shipment / fixed date → signed PO
-//     against B/L                             → signed PO + bill of lading
-//     after arrival / delivery                → signed PO + bill of lading + arrival notice
+//   Needed documents follow the installment's trigger (the proforma invoice is checked for every payment):
+//     deposit / before shipment / fixed date → signed PO + proforma invoice
+//     against B/L                             → signed PO + proforma invoice + bill of lading
+//     after arrival / delivery                → signed PO + proforma invoice + bill of lading + arrival notice
 //   A PO file without the "signed" tick is flagged, not blocking.
 
 const PL = require('./planning');
 const PM = require('./payments');
+const PD = require('./podocs');
 
-const DOCS = { PO: 'Signed PO', BL: 'Bill of lading', AN: 'Arrival notice' };
-const SHORT = { PO: 'PO', BL: 'B/L', AN: 'AN' };
-const NEED = { po: ['PO'], before_shipment: ['PO'], fixed: ['PO'], bl: ['PO', 'BL'], arrival: ['PO', 'BL', 'AN'], delivery: ['PO', 'BL', 'AN'] };
-const need = (trigger) => NEED[trigger] || ['PO'];
+const KEYS = ['PO', 'PI', 'BL', 'AN'];
+const DOCS = { PO: 'Signed PO', PI: 'Proforma invoice', BL: 'Bill of lading', AN: 'Arrival notice' };
+const SHORT = { PO: 'PO', PI: 'PI', BL: 'B/L', AN: 'AN' };
+const NEED = { po: ['PO', 'PI'], before_shipment: ['PO', 'PI'], fixed: ['PO', 'PI'], bl: ['PO', 'PI', 'BL'], arrival: ['PO', 'PI', 'BL', 'AN'], delivery: ['PO', 'PI', 'BL', 'AN'] };
+const need = (trigger) => NEED[trigger] || ['PO', 'PI'];
 
 /** Everything needed to work out documents for many payments in one go. */
 async function preload(db) {
@@ -30,18 +32,21 @@ const fwdLink = (u, x, i) => ({ name: x.name, url: `/admin/orders/shipping/fwd/$
 /** The documents of one payment row (resolved, with .container): { PO, BL, AN, need, missing, unsigned, ok } */
 function docsFor(pre, r) {
   const mine = pre.files.filter((f) => f.supplier_id === r.supplier_id && (f.pos || []).some((x) => PL.normPo(x) === PL.normPo(r.po)));
-  const isPO = (f) => f.kind === 'PO' || (!f.kind && /(^|[^a-z])(po|purchase order)([^a-z]|$)/i.test(f.name || ''));
+  // proforma invoice (a combined "PI & PL" sheet counts too); never mistaken for the PO even when it names the PO
+  const isPI = (f) => f.kind !== 'PO' && ['PI', 'PIPL'].includes(PD.classify(f));
+  const isPO = (f) => !isPI(f) && (f.kind === 'PO' || (!f.kind && /(^|[^a-z])(po|purchase order)([^a-z]|$)/i.test(f.name || '')));
   const isBL = (f) => /bill of lading/i.test(f.kind || '') || /(^|[^a-z])(b\/?l|bol|hbl|mbl)([^a-z]|$)|bill of lading/i.test(f.name || '');
   const cid = r.container?.id || null;
   const fwd = (re) => (cid ? pre.ups.filter((u) => u.container_id === cid && re.test(u.facts?.doc_type || '')).flatMap((u) => (u.files || []).map((x, i) => fwdLink(u, x, i))) : []);
   const po = mine.filter(isPO).map(planLink);
-  const bl = [...mine.filter((f) => !isPO(f) && isBL(f)).map(planLink), ...fwd(/bill_of_lading/)];
+  const pi = mine.filter(isPI).map(planLink);
+  const bl = [...mine.filter((f) => !isPO(f) && !isPI(f) && isBL(f)).map(planLink), ...fwd(/bill_of_lading/)];
   const an = fwd(/arrival_notice/);
   const needs = need(r.trigger);
-  const have = { PO: po, BL: bl, AN: an };
+  const have = { PO: po, PI: pi, BL: bl, AN: an };
   const missing = needs.filter((k) => !have[k].length);
   const unsigned = needs.includes('PO') && po.length > 0 && !po.some((f) => f.signed);
-  return { PO: po, BL: bl, AN: an, need: needs, missing, unsigned, ok: !missing.length && !unsigned };
+  return { PO: po, PI: pi, BL: bl, AN: an, need: needs, missing, unsigned, ok: !missing.length && !unsigned };
 }
 
 /** Chip state for one document kind: ok | warn (PO not signed) | miss | off (not needed yet). */
@@ -84,4 +89,4 @@ async function notifyQuestion(db, config, r, { text, by, email }) {
 const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 const csv = (head, rows) => `﻿${[head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n')}\r\n`;
 
-module.exports = { DOCS, SHORT, NEED, need, preload, docsFor, chip, BANK, hasBank, mask, notifyPaid, notifyQuestion, telegram, csv };
+module.exports = { KEYS, DOCS, SHORT, NEED, need, preload, docsFor, chip, BANK, hasBank, mask, notifyPaid, notifyQuestion, telegram, csv };
