@@ -179,12 +179,21 @@ module.exports = function requestRoutes(router, { db, config }) {
   const RG = require('../req-groups');
   const infoTitle = (r) => [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ') || RG.titleOf(r);
   async function groups() {
-    const [rows, suppliers, msgs] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 600 }), db.list('suppliers', { select: 'id,name,email' }), db.list('info_request_messages', { select: 'id,request_id,direction,body,ai,created_at' }).catch(() => [])]);
+    const [rows, suppliers, msgs] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 600 }), db.list('suppliers', { select: 'id,name,email' }), db.list('info_request_messages', { select: 'id,request_id,direction,subject,body,ai,attachments,created_at' }).catch(() => [])]);
     const names = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     return { gs: RG.group(rows, msgs, names, { today: new Date().toISOString().slice(0, 10), infoTitle }), suppliers, rows };
   }
   const groupOf = (gs, id) => { const g = gs.find((x) => x.id === id || x.members.some((m) => m.r.id === id)); if (!g) throw new HttpError(404, 'Request not found'); return g; };
   const sh = (d) => { if (!d) return ''; try { return new Date(`${String(d).slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); } catch { return String(d).slice(0, 10); } };
+  const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
+  // The original request of a group: the first message we sent (earliest member), its text and its photos.
+  const origOf = (g) => {
+    const ms = g.members.slice().sort((a, b) => String(a.r.created_at).localeCompare(String(b.r.created_at)));
+    const o = ms.map((m) => m.outFirst).find(Boolean); if (!o) return null;
+    const files = (o.attachments || []).map((a, i) => ({ ...a, href: a.path && a.bucket === 'docs' ? `/admin/request-files/${o.id}/${i}` : null }));
+    const photos = files.filter((a) => a.href && (/^image\//.test(a.content_type || '') || IMG_RE.test(a.filename || '')));
+    return { msg: o, body: String(o.body || '').trim(), files, photos, ref: ms.find((m) => m.outFirst === o)?.r.ref };
+  };
   const emailsOf = (m, sup) => uniq([...(m.r.to_emails || []), ...(EMAIL_RE.test(m.r.contact || '') ? [m.r.contact] : []), ...(!(m.r.to_emails || []).length && sup?.email ? [sup.email] : [])]).filter((e) => EMAIL_RE.test(e));
 
   // ── List: one card per request, every supplier it went to underneath
@@ -197,7 +206,12 @@ module.exports = function requestRoutes(router, { db, config }) {
     const counts = { open: gs.filter((g) => g.open).length, all: gs.length, closed: gs.filter((g) => !g.open).length };
     const pct = (g) => Math.round((g.replied / Math.max(1, g.n)) * 100);
     const st = (m) => (m.done && !m.replied ? html`<span class="rq-st off">${m.r.status}</span>` : m.replied ? html`<span class="rq-st rep">${m.r.status === 'Complete' ? 'Complete' : 'Replied'}</span>` : m.late ? html`<span class="rq-st late">No reply · ${m.waited}d</span>` : html`<span class="rq-st sent">Sent · ${m.waited}d</span>`);
-    const card = (g) => html`<section class="rq-card ${g.open ? '' : 'closed'}" id="${`g-${g.id}`}"><div class="rq-h"><div class="rq-t"><h3>${g.title}</h3><div class="rq-meta"><span class="rq-tag ${g.rfq ? 'rfq' : 'info'}">${g.kind}</span><span>sent ${sh(g.first)}${g.lastSent !== g.first ? ` – ${sh(g.lastSent)}` : ''} · ${g.n} supplier${g.n === 1 ? '' : 's'}</span></div></div>
+    const thumb = (o) => (o?.photos.length ? html`<a class="rq-thumb" href="${`${o.photos[0].href}?inline=1`}" target="_blank" rel="noopener" title="${o.photos[0].filename}"><img src="${`${o.photos[0].href}?inline=1`}" alt="" loading="lazy">${o.photos.length > 1 ? html`<em>+${o.photos.length - 1}</em>` : ''}</a>` : '');
+    const pop = (o) => (o ? html`<div class="rq-pop" role="tooltip"><div class="rq-pop-h">Original request${o.ref ? ` · ${o.ref}` : ''} · ${sh(o.msg.created_at)}</div>
+      ${o.msg.subject ? html`<div class="rq-pop-s">${o.msg.subject}</div>` : ''}<div class="rq-pop-b">${o.body || '(no text recorded)'}</div>
+      ${o.photos.length ? html`<div class="rq-pop-ph">${o.photos.slice(0, 6).map((a) => html`<a href="${`${a.href}?inline=1`}" target="_blank" rel="noopener"><img src="${`${a.href}?inline=1`}" alt="${a.filename}" loading="lazy"></a>`)}</div>` : ''}
+      ${o.files.filter((a) => !o.photos.includes(a)).length ? html`<div class="clog-files">${o.files.filter((a) => !o.photos.includes(a)).map((a) => (a.href ? html`<a class="att-chip" href="${a.href}" download="${a.filename}">📎 ${a.filename}</a>` : html`<span class="att-chip off">📎 ${a.filename}</span>`))}</div>` : ''}</div>` : '');
+    const card = (g) => { const o = origOf(g); return html`<section class="rq-card ${g.open ? '' : 'closed'}" id="${`g-${g.id}`}"><div class="rq-h">${thumb(o)}<div class="rq-t ${o ? 'has-pop' : ''}" ${o ? raw('tabindex="0"') : ''}><h3>${g.title}</h3>${pop(o)}<div class="rq-meta"><span class="rq-tag ${g.rfq ? 'rfq' : 'info'}">${g.kind}</span><span>sent ${sh(g.first)}${g.lastSent !== g.first ? ` – ${sh(g.lastSent)}` : ''} · ${g.n} supplier${g.n === 1 ? '' : 's'}</span></div></div>
         <div class="rq-prog"><b>${g.replied} of ${g.n} replied</b><span class="rq-bar"><i class="r" style="${raw(`width:${pct(g)}%`)}"></i><i class="w" style="${raw(`width:${100 - pct(g)}%`)}"></i></span></div>
         <div class="rq-acts">${g.replied ? html`<a class="btn small" href="/admin/requests/g/${g.id}/compare">${g.replied > 1 ? 'Compare replies' : 'Open reply'}</a>` : ''}
           ${g.waiting.length ? html`<form method="post" action="/admin/requests/g/${g.id}/remind" class="inline"><button class="btn small ${g.replied ? 'ghost' : ''}" data-confirm="${`Email a reminder to ${g.waiting.length} supplier${g.waiting.length === 1 ? '' : 's'} that haven't replied?`}">Remind ${g.waiting.length}</button></form>` : ''}
@@ -210,7 +224,7 @@ module.exports = function requestRoutes(router, { db, config }) {
         <p class="sub">The same request, “${g.title}”, by email with its own reference. Suppliers it already went to aren't listed.</p>
         <input type="search" placeholder="Filter suppliers" class="rq-filter" data-rq-filter aria-label="Filter suppliers">
         ${((avail) => avail.length ? html`<div class="rq-pick">${avail.map((s) => html`<label class="cp-chk" data-rq-name="${s.name.toLowerCase()}"><input type="checkbox" name="supplier_ids" value="${s.id}"> ${s.name} <span class="sub">${s.email}</span></label>`)}</div>` : html`<p class="d-empty small">Every supplier with an email address already has this request. Add the email on a supplier's page to send it there.</p>`)(suppliers.filter((s) => s.email && !g.members.some((m) => m.r.supplier_id === s.id)).sort((a, b) => a.name.localeCompare(b.name)))}
-        <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send</button></div></form></dialog>` : ''}</section>`;
+        <div class="rp-acts"><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">Send</button></div></form></dialog>` : ''}</section>` };
     res.html(page({
       title: 'Requests', nav: adminNav('requests'), flash: takeFlash(req, res), wide: true,
       body: html`<div class="rq-head"><h1>Information requests</h1></div>

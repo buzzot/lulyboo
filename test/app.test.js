@@ -5332,10 +5332,12 @@ test('Requests list: grouped by request — one card per RFQ with every supplier
   const r2 = await db.insert('info_requests', { ref: 'LB-2002', supplier_id: s2.id, kind: 'rfq', channel: 'Email', subject: '[LB-2002] RFQ: Padded potty training seat with handles and splash guard', status: 'Sent', to_emails: ['b@beta.example'], created_at: ago(15) });
   await db.insert('info_requests', { ref: 'LB-2003', supplier_id: s3.id, kind: 'rfq', channel: 'Email', subject: '[LB-2003] RFQ: Padded potty training seat with handles, splash guard', status: 'Sent', to_emails: ['g@gamma.example'], created_at: ago(3) });
   await db.insert('info_requests', { ref: 'LB-2004', supplier_id: s4.id, kind: 'rfq', channel: 'Email', subject: '[LB-2004] RFQ: Silicone bib set', status: 'Closed', created_at: ago(40) });
-  await db.insert('info_request_messages', { request_id: r1.id, direction: 'out', subject: r1.subject, body: 'Hello, please quote LB-2001 for the padded seat.', created_at: ago(16) });
+  const om1 = await db.insert('info_request_messages', { request_id: r1.id, direction: 'out', subject: r1.subject, body: 'Hello, please quote LB-2001 for the padded seat.', attachments: [{ filename: 'seat.jpg', content_type: 'image/jpeg', path: 'requests/LB-2001/seat.jpg', bucket: 'docs' }, { filename: 'spec.pdf', content_type: 'application/pdf', path: 'requests/LB-2001/spec.pdf', bucket: 'docs' }], created_at: ago(16) });
   await db.insert('info_request_messages', { request_id: r1.id, direction: 'in', body: 'Price 3.20', ai: { headline: '$3.20 FOB · MOQ 1000', facts: [{ label: 'Price', value: '$3.20' }, { label: 'MOQ', value: '1000' }] }, created_at: ago(12) });
   const html = (await req(base, 'GET', '/admin/requests', { cookie: admin })).text;
   assert.equal((html.match(/<h3>Padded potty training seat/g) || []).length, 1, 'request title shown once');
+  assert.match(html, new RegExp(`class="rq-thumb" href="/admin/request-files/${om1.id}/0\\?inline=1"`), 'photo of the original request in the header');
+  assert.match(html, /class="rq-pop"[\s\S]*Original request · LB-2001[\s\S]*please quote LB-2001 for the padded seat[\s\S]*spec\.pdf/);
   assert.match(html, /1 of 3 replied/); assert.match(html, /\$3\.20 FOB · MOQ 1000/);
   assert.match(html, /No reply · 15d/); assert.match(html, /Sent · 3d/); assert.match(html, /Remind 2/);
   assert.doesNotMatch(html, /Silicone bib set/, 'closed requests are not in Open');
