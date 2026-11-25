@@ -127,7 +127,7 @@ module.exports = function financeRoutes(router, { db, config }) {
           <label>Date paid <input type="date" name="date" value="${today}" max="${today}" required></label>
           <label>Amount USD <input name="amount" inputmode="decimal" value="${r.left.toFixed(2)}" required></label>
           <label class="span2">Bank reference <input name="ref" placeholder="TT / transfer number"></label>
-          <label class="span2">Bank slip ${role(req) === 'accountant' ? '' : html`<span class="sub">(optional)</span>`}<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg" ${role(req) === 'accountant' ? raw('required') : ''}></label>
+          <div class="span2 fn-slip"><span class="fn-slip-l">Bank slip ${role(req) === 'accountant' ? '' : html`<span class="sub">(optional)</span>`}</span><div class="mdrop small" data-filebox data-max="1"><div class="mdrop-box"><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp" title="" aria-label="Bank slip" ${role(req) === 'accountant' ? raw('required') : ''}><span class="dz-main" data-main>Drop the bank slip, paste (⌘V) or <u>choose</u></span><span class="dz-hint">PDF or screenshot</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div></div>
           <div class="span2 fn-fa"><span class="sub">Less than the full amount? The rest stays open.</span><button class="btn small">Mark paid</button></div>
         </form>`}
       <details class="fn-ask" ${req.query.ask ? raw('open') : ''}><summary class="link small">Ask Lulyboo a question</summary>

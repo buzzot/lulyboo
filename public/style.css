@@ -3615,3 +3615,5 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 .rq-pop-ph{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.rq-pop-ph img{width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block}
 .rq-pop .clog-files{margin-top:8px}
 @media (max-width:760px){.rq-h{flex-wrap:wrap}.rq-prog{flex:1 1 100%}}
+.fn-slip{display:flex;flex-direction:column;gap:3px}.fn-slip-l{font-size:12px;color:var(--muted);font-weight:600}
+.fn-slip .mdrop{margin:0}.fn-slip .mdrop-box{min-height:64px;padding:10px 12px}.fn-form .fn-slip input[type=file]{width:auto}
