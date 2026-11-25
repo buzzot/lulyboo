@@ -115,10 +115,10 @@ module.exports = function inspectionRoutes(router, { db, config }) {
           <input type="hidden" name="supplier_id" value="${sid}">${todo ? html`<input type="hidden" name="id" value="${todo.id}">` : html`<input type="hidden" name="ref" value="${IN.newRef()}">`}
           <div class="in-lay"><div class="in-main">
           <h3 class="in-h">Purchase orders inspected</h3>
-          <div class="in-pos">${mine.map((p) => html`<label class="in-po"><input type="checkbox" name="pos" value="${p.po}" ${chosen.has(PL.normPo(p.po)) ? raw('checked') : ''}><b>${p.po}</b><span class="sub">${Number(p.qty).toLocaleString('en-US')} pcs${p.ready ? ` · ready ${PL.short(p.ready)}` : ''}</span>${(() => {
+          <div class="in-pos">${mine.map((p) => html`<label class="in-po"><input type="checkbox" name="pos" value="${p.po}" ${chosen.has(PL.normPo(p.po)) ? raw('checked') : ''}><b>${p.po}</b>${p.ready ? html`<span class="in-ready">ready ${PL.short(p.ready)}</span>` : html`<span class="sub">ready date not set</span>`}${(() => {
             const items = []; const seen = new Set();
             for (const l of lines) { if (PL.normPo(l.po) !== PL.normPo(p.po)) continue; const k = `${l.sku || ''}|${l.product || ''}`; if (seen.has(k)) continue; seen.add(k); items.push(l); }
-            return items.length ? html`<span class="in-pop" role="tooltip"><span class="in-pop-h">${p.po} · ${items.length} item${items.length === 1 ? '' : 's'}</span>${items.slice(0, 30).map((l) => html`<span class="in-pop-r"><code>${l.sku || '—'}</code><span>${l.product || ''}</span></span>`)}${items.length > 30 ? html`<span class="sub">+ ${items.length - 30} more</span>` : ''}</span>` : '';
+            return items.length ? html`<span class="in-pop" role="tooltip"><span class="in-pop-h">${p.po} · ${items.length} item${items.length === 1 ? '' : 's'}</span>${items.slice(0, 30).map((l) => html`<span class="in-pop-r">${l.sku ? html`<button type="button" class="in-sku" data-copy="${l.sku}" title="Copy SKU">${l.sku}</button>` : html`<code>—</code>`}<span>${l.product || ''}</span></span>`)}${items.length > 30 ? html`<span class="sub">+ ${items.length - 30} more</span>` : ''}</span>` : '';
           })()}</label>`)}</div>
           <div class="in-grid">
             <label><span class="lbl">Inspection company</span>${coOpts.length ? ddSel('company_id', coDef, coOpts) : html`<span class="sub">none yet</span>`}</label>

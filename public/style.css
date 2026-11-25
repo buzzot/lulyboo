@@ -3511,3 +3511,10 @@ main[data-ro]:has(.ro-deny)::before{display:none}.ro-deny{max-width:640px;margin
 .in-lay .in-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (max-width:1100px){.in-lay{grid-template-columns:1fr}.in-side{border-left:0;padding-left:0;position:static;margin-top:16px}}
 .in-att-l li[hidden]{display:none}
+
+/* PO hover card: stays open while the pointer moves into it; click a SKU to copy */
+.in-pop::before{content:"";position:absolute;left:0;right:0;top:-10px;height:10px}
+.in-po:hover .in-pop{transition-delay:0s}
+.in-sku{font:12px/1.4 Menlo,Consolas,monospace;background:#f6f1ef;border:1px solid transparent;border-radius:5px;padding:1px 6px;white-space:nowrap;color:#4b4441;cursor:copy}
+.in-sku:hover{border-color:#e3c9c2;background:#fff}.in-sku.copied{background:#e8f5ec;color:#2e7d4f;border-color:#bfe0c9}
+.in-ready{font-size:13px;font-weight:600;color:#3d3833;background:#f3eeeb;border-radius:6px;padding:1px 7px}.in-po:has(input:checked) .in-ready{background:#fff;color:#9b3f35}

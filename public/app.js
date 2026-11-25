@@ -3223,3 +3223,16 @@
   send.addEventListener('click', function () { setTimeout(function () { send.disabled = true; send.textContent = 'Sending…'; }, 0); });
 })();
 
+
+// PO hover card on Request inspection: click a SKU to copy it (doesn't tick the PO).
+(function () {
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('.in-sku[data-copy]'); if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    var v = b.getAttribute('data-copy'), label = b.textContent;
+    var done = function () { b.classList.add('copied'); b.textContent = 'Copied ✓'; setTimeout(function () { b.classList.remove('copied'); b.textContent = label; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function () { fallback(); });
+    else fallback();
+    function fallback() { var t = document.createElement('textarea'); t.value = v; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (x) { /* ignore */ } t.remove(); }
+  }, true);
+})();
