@@ -1132,7 +1132,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       <form class="sx-bar" method="get"><nav class="sx-seg">${Object.entries(views).map(([k, l]) => html`<a class="${view === k && !f ? 'on' : ''}" href="${`/admin/suppliers?view=${k}${req.query.q ? `&q=${encodeURIComponent(req.query.q)}` : ''}`}">${l}${counts[k] != null ? html`<em>${counts[k]}</em>` : ''}</a>`)}</nav>
         <input type="hidden" name="view" value="${view}"><input type="search" name="q" placeholder="Search name, contact, product, PO…" value="${req.query.q || ''}" aria-label="Search suppliers">
         ${f ? html`<a class="sx-clear" href="${link({ f: '' })}">× ${attn[f][0]}</a>` : ''}</form>
-      <section class="card flush sx-card"><div class="table-wrap"><table class="list sx-table"><thead><tr><th class="sx-c1">Supplier</th><th class="sx-c2">Now</th><th class="sx-c3">Next</th><th>Contact</th><th>Last activity</th><th></th></tr></thead>
+      <section class="card flush sx-card"><div class="table-wrap"><table class="list sx-table"><thead><tr><th class="sx-c1">Supplier</th><th class="sx-c2">Now</th><th class="sx-c3">Next</th><th class="sx-c4">Contact</th><th class="sx-c5">Last activity</th><th class="sx-c6"><span class="sr-only">Status</span></th></tr></thead>
         <tbody>${nGroups.map(([g, rs]) => html`<tr class="sx-grp"><td colspan="6">${g}${/·/.test(g) ? '' : ` · ${rs.length}`}</td></tr>${rs.map((s) => row(s, isProspect(s)))}`)}</tbody></table></div>
         ${!nGroups.length ? html`<p class="d-empty">${q || f ? 'No suppliers match.' : 'No suppliers yet.'}</p>` : ''}
         ${hidden ? html`<p class="sx-more">${hidden} more prospect${hidden === 1 ? '' : 's'} without anything due · <a href="/admin/suppliers?view=prospects">show</a></p>` : ''}</section>

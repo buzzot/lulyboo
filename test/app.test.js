@@ -4092,6 +4092,7 @@ test('accountant: finance pages only, document checks, bank details, mark paid w
   d = FN.docsFor(await FN.preload(db), { ...bal, container: c }); assert.ok(d.ok);
   pg = (await req(base, 'GET', `/admin/finance?id=${bal.id}`, { cookie: anna })).text;
   assert.match(pg, /AN\.pdf/); assert.match(pg, /HBL\.pdf/); assert.match(pg, />signed</);
+  { const earlier = rows.filter((r) => r.no < bal.no && r.status !== 'paid'); assert.ok(earlier.length); if (earlier.length) { assert.match(pg, /fn-warn/); assert.match(pg, new RegExp(`Installment ${earlier[0].no} \\(`)); assert.match(pg, /not paid · due|due /); } }
   // the accountant can open the documents to verify, but not delete them
   assert.equal((await req(base, 'GET', `/admin/logistics/planning/files/${poFile.id}?inline=1`, { cookie: anna })).status, 200);
   const an = db.tables.fwd_updates.find((u) => u.facts.doc_type === 'arrival_notice');
