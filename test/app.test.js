@@ -5379,8 +5379,9 @@ test('Payments: search by supplier / PO and the By order view (one line per PO, 
   // By order: one line per PO, both installments, paid one marked
   pg = (await req(base, 'GET', '/admin/finance?view=po', { cookie })).text;
   assert.equal((pg.match(/class="po-row/g) || []).length, 2);
-  const hu = pg.slice(pg.indexOf('<b>Huanger</b>'), pg.indexOf('<b>Huanger</b>') + 3000);
-  assert.match(hu, /class="ip paid[^"]*"[\s\S]*\$800[\s\S]*✓ paid/); assert.match(hu, /\$3,200/); assert.match(hu, /of \$4,000/);
+  const hu = pg.slice(pg.indexOf('>Huanger</b>'), pg.indexOf('>Huanger</b>') + 3000);
+  assert.match(hu, /class="ip paid[^"]*"[\s\S]*\$800[\s\S]*✓ paid/); assert.match(hu, /<b>\$3,200<\/b> left of \$4,000/); assert.match(hu, /class="po-no"[^>]*>PO 800018</);
+  assert.match(pg, /fn-panel/, 'By order opens the next payment, same two-column layout as By date'); assert.doesNotMatch(pg, /Left to pay<\/span>/);
   assert.match(pg, /Payment 1<\/span><span>Payment 2<\/span><span>Payment 3/);
   assert.match(pg, /2 orders · 3 payments open/);
   // search by PO number in By order

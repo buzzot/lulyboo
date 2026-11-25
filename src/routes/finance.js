@@ -87,7 +87,7 @@ module.exports = function financeRoutes(router, { db, config }) {
       .sort((a, b) => (a.done - b.done) || (a.done ? b.lastPaid.localeCompare(a.lastPaid) : String(a.next).localeCompare(String(b.next))) || a.supplier.localeCompare(b.supplier));
     const over = open.filter((r) => r.d && r.d < today); const thisWeek = open.filter((r) => r.d && r.d >= today && r.d <= weekEnd);
     const paidNow = all.filter((r) => r.paid > 0 && String(r.paid_at || '').startsWith(today.slice(0, 7)));
-    const sel = all.find((r) => r.id === q.id) || (view === 'date' ? list[0] : null) || null;
+    const sel = all.find((r) => r.id === q.id) || (view === 'date' ? list[0] : (olist[0] && (olist[0].rows.find((x) => x.status !== 'paid' && x.left > 0) || olist[0].rows[0]))) || null;
     const href = (o) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries(view === 'po' ? { view, show: show === 'open' ? '' : show, q: qs, ...o } : { tab, month: tab === 'paid' && month !== today.slice(0, 7) ? month : '', q: qs, ...o }).filter(([, v]) => v)))}`;
     const vhref = (v) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ view: v === 'po' ? 'po' : '', q: qs }).filter(([, x]) => x)))}`;
     const days = (d) => PM.between(today, d);
@@ -100,16 +100,17 @@ module.exports = function financeRoutes(router, { db, config }) {
       return html`<a class="ip ${cls} ${sel && sel.id === x.id ? 'on' : ''}" href="${href({ id: x.id })}" title="${`${x.no} of ${x.of_n || x.no} · ${x.describe} · ${x.why}`}"><span class="t"><span>${x.no} · ${x.describe}</span></span><span class="v"><b>${amt(x.amount)}</b><span>${st}</span></span><span class="w">${when}</span></a>`;
     };
     const ncol = Math.max(3, ...olist.map((o) => o.rows.length));
-    const orow = (o) => html`<div class="po-row ${o.done ? 'done' : ''}" style="${raw(`--n:${ncol}`)}"><span class="po-s"><b>${o.supplier}</b><small><a href="${`/admin/orders/view?supplier=${o.supplier_id}&po=${encodeURIComponent(o.po)}`}">PO ${o.po}</a> · ${amt(o.total)} total</small></span>
+    const orow = (o) => html`<div class="po-row ${o.done ? 'done' : ''} ${sel && o.rows.some((x) => x.id === sel.id) ? 'on' : ''}" style="${raw(`--n:${ncol}`)}"><span class="po-s"><b title="${o.supplier}">${o.supplier}</b><a class="po-no" href="${`/admin/orders/view?supplier=${o.supplier_id}&po=${encodeURIComponent(o.po)}`}" title="Open the PO">PO ${o.po}</a>
+        <small>${o.done ? html`<span class="po-ok">Paid in full</span> · ${amt(o.paid)}` : html`<b>${amt(o.left)}</b> left${o.paid > 0 ? ` of ${amt(o.total)}` : ' · nothing paid yet'}`}</small></span>
       ${Array.from({ length: ncol }, (_, i) => (o.rows[i] ? cell(o.rows[i]) : html`<span class="ip-none">—</span>`))}
-      ${chips(o.docsRow)}<span class="po-l">${o.done ? html`<span class="po-ok">Paid</span><small>${amt(o.paid)}</small>` : html`${amt(o.left)}<small>${o.paid > 0 ? `of ${amt(o.total)}` : 'nothing paid yet'}</small>`}</span></div>`;
+      ${chips(o.docsRow)}</div>`;
     const searchForm = html`<form method="get" action="${BASE}" class="fn-search" role="search">${view === 'po' ? html`<input type="hidden" name="view" value="po">${show !== 'open' ? html`<input type="hidden" name="show" value="${show}">` : ''}` : html`<input type="hidden" name="tab" value="${tab}">${tab === 'paid' && month !== today.slice(0, 7) ? html`<input type="hidden" name="month" value="${month}">` : ''}`}
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" name="q" value="${qs}" placeholder="Search supplier or PO…" aria-label="Search supplier or PO"></form>`;
     const viewSw = html`<nav class="fn-view" aria-label="View"><a href="${vhref('date')}" class="${view === 'date' ? 'on' : ''}">By date</a><a href="${vhref('po')}" class="${view === 'po' ? 'on' : ''}">By order</a></nav>`;
     const months = [...new Set([today.slice(0, 7), ...all.filter((r) => r.paid_at).map((r) => String(r.paid_at).slice(0, 7))])].sort().reverse().slice(0, 18);
     const row = (r) => html`<a class="fn-row ${sel && sel.id === r.id ? 'on' : ''} ${tab !== 'paid' && r.d && r.d < today ? 'late' : ''}" href="${href({ id: r.id })}">
       ${tab === 'paid' ? html`<span class="fn-d"><b>${PL.short(r.paid_at)}</b><small>${r.paid_by ? `by ${r.paid_by}` : ''}</small></span>` : html`<span class="fn-d"><b>${r.d ? PL.short(r.d) : '—'}</b><small>${dueTxt(r, today)}${r.d && !r.fixed ? ' · est.' : ''}</small></span>`}
-      <span class="fn-s"><b>${r.supplier}</b><small>PO ${r.po} · ${r.no} of ${r.of_n || r.no}</small></span>
+      <span class="fn-s"><b>${r.supplier}</b><small><span class="po-no">PO ${r.po}</span> ${r.no} of ${r.of_n || r.no}</small></span>
       <span class="fn-i">${r.describe}<small>${r.why}</small></span>
       ${chips(r)}
       <span class="fn-a">${usd(tab === 'paid' ? r.paid : r.left)}${tab === 'paid' && (r.paid_files || []).length ? html`<small>📎 slip</small>` : tab !== 'paid' && r.paid > 0 ? html`<small>of ${usd(r.amount)}</small>` : ''}</span></a>`;
@@ -127,7 +128,7 @@ module.exports = function financeRoutes(router, { db, config }) {
           <section class="card fn-q">${view === 'po' ? html`
             <div class="fn-top"><nav class="fn-tabs" aria-label="Orders">${[['open', 'Open orders'], ['paid', 'Fully paid'], ['all', 'All']].map(([k, l]) => html`<a href="${`${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ view: 'po', show: k === 'open' ? '' : k, q: qs }).filter(([, v]) => v)))}`}" class="${show === k ? 'on' : ''}" ${show === k ? raw('aria-current="page"') : ''}>${l}${k === 'all' ? '' : html` <span>${ocount[k]}</span>`}</a>`)}</nav>
               <div class="fn-tools">${searchForm}${viewSw}</div></div>
-            ${olist.length ? html`<div class="po-head" style="${raw(`--n:${ncol}`)}"><span>Supplier · PO <i>${show === 'paid' ? '↓ last paid' : '↓ next payment due'}</i></span>${Array.from({ length: ncol }, (_, i) => html`<span>Payment ${i + 1}</span>`)}<span>Docs</span><span class="r">${show === 'paid' ? 'Paid' : 'Left to pay'}</span></div>${olist.map(orow)}
+            ${olist.length ? html`<div class="po-head" style="${raw(`--n:${ncol}`)}"><span title="Sorted by next payment due">Supplier · PO <i>${show === 'paid' ? '↓ last paid' : '↓ next payment due'}</i></span>${Array.from({ length: ncol }, (_, i) => html`<span>Payment ${i + 1}</span>`)}<span>Docs</span></div>${olist.map(orow)}
               <div class="fn-tot"><span>${olist.length} order${olist.length === 1 ? '' : 's'}${show !== 'paid' ? ` · ${olist.reduce((t, o) => t + o.nOpen, 0)} payment${olist.reduce((t, o) => t + o.nOpen, 0) === 1 ? '' : 's'} open` : ''}${qs ? ` · search “${qs}”` : ''}</span><b>${show === 'paid' ? `${usd(olist.reduce((t, o) => t + o.paid, 0))} paid` : `${usd(olist.reduce((t, o) => t + o.left, 0))} left to pay`}</b></div>`
               : html`<p class="fn-empty">${qs ? `No orders match “${qs}”.` : show === 'paid' ? 'No fully paid orders yet.' : 'No open orders with a payment schedule.'}</p>`}` : html`
             <div class="fn-top"><nav class="fn-tabs" aria-label="Queue">${TABS.map(([k, l]) => html`<a href="${`${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ tab: k, q: qs }).filter(([, v]) => v)))}`}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l}${k === 'paid' ? '' : html` <span>${lists[k].length}</span>`}</a>`)}</nav>
