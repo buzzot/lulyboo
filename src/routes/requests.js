@@ -179,7 +179,7 @@ module.exports = function requestRoutes(router, { db, config }) {
   const RG = require('../req-groups');
   const infoTitle = (r) => [...(r.items || []).map((k) => REQUEST_ITEMS[k]?.en.split(' (')[0]), r.other_text].filter(Boolean).join(', ') || RG.titleOf(r);
   async function groups() {
-    const [rows, suppliers, msgs] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 600 }), db.list('suppliers', { select: 'id,name,email' }), db.list('info_request_messages', { select: 'id,request_id,direction,subject,body,ai,attachments,created_at' }).catch(() => [])]);
+    const [rows, suppliers, msgs] = await Promise.all([db.list('info_requests', { order: 'created_at.desc', limit: 600 }), db.list('suppliers', { select: 'id,name,email' }), db.list('info_request_messages', { select: 'id,request_id,direction,subject,body,original,from_email,ai,attachments,created_at' }).catch(() => db.list('info_request_messages', { select: 'id,request_id,direction,subject,body,ai,attachments,created_at' })).catch(() => [])]);
     const names = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
     return { gs: RG.group(rows, msgs, names, { today: new Date().toISOString().slice(0, 10), infoTitle }), suppliers, rows };
   }
@@ -192,7 +192,11 @@ module.exports = function requestRoutes(router, { db, config }) {
     const o = ms.map((m) => m.outFirst).find(Boolean); if (!o) return null;
     const files = (o.attachments || []).map((a, i) => ({ ...a, href: a.path && a.bucket === 'docs' ? `/admin/request-files/${o.id}/${i}` : null }));
     const photos = files.filter((a) => a.href && (/^image\//.test(a.content_type || '') || IMG_RE.test(a.filename || '')));
-    return { msg: o, body: String(o.body || '').trim(), files, photos, ref: ms.find((m) => m.outFirst === o)?.r.ref };
+    const mem = ms.find((m) => m.outFirst === o);
+    // Hermes records a summary in "message" and the email it actually sent in "original_message" (stored as original).
+    const sent = String(o.original || '').trim();
+    const hermes = !!mem?.r.external_id || (!o.from_email && mem?.r.kind === 'rfq' && !/^\s*\[LB-\d+\]/.test(o.subject || ''));
+    return { msg: o, body: sent || String(o.body || '').trim(), asSent: !!sent || !hermes, hermes, files, photos, ref: mem?.r.ref, rid: mem?.r.id };
   };
   const emailsOf = (m, sup) => uniq([...(m.r.to_emails || []), ...(EMAIL_RE.test(m.r.contact || '') ? [m.r.contact] : []), ...(!(m.r.to_emails || []).length && sup?.email ? [sup.email] : [])]).filter((e) => EMAIL_RE.test(e));
 
@@ -207,7 +211,8 @@ module.exports = function requestRoutes(router, { db, config }) {
     const pct = (g) => Math.round((g.replied / Math.max(1, g.n)) * 100);
     const st = (m) => (m.done && !m.replied ? html`<span class="rq-st off">${m.r.status}</span>` : m.replied ? html`<span class="rq-st rep">${m.r.status === 'Complete' ? 'Complete' : 'Replied'}</span>` : m.late ? html`<span class="rq-st late">No reply · ${m.waited}d</span>` : html`<span class="rq-st sent">Sent · ${m.waited}d</span>`);
     const thumb = (o) => (o?.photos.length ? html`<a class="rq-thumb" href="${`${o.photos[0].href}?inline=1`}" target="_blank" rel="noopener" title="${o.photos[0].filename}"><img src="${`${o.photos[0].href}?inline=1`}" alt="" loading="lazy">${o.photos.length > 1 ? html`<em>+${o.photos.length - 1}</em>` : ''}</a>` : '');
-    const pop = (o) => (o ? html`<div class="rq-pop" role="tooltip"><div class="rq-pop-h">Original request${o.ref ? ` · ${o.ref}` : ''} · ${sh(o.msg.created_at)}</div>
+    const pop = (o) => (o ? html`<div class="rq-pop" role="tooltip"><div class="rq-pop-h">${o.asSent ? 'Email as sent' : 'Summary recorded by Hermes'}${o.ref ? ` · ${o.ref}` : ''} · ${sh(o.msg.created_at)}</div>
+      ${o.asSent ? '' : html`<div class="rq-pop-note">The email Hermes actually sent wasn't saved with this request, only its summary. <a href="${`/admin/requests/${o.rid}`}">Open the request</a> to see what is on file.</div>`}
       ${o.msg.subject ? html`<div class="rq-pop-s">${o.msg.subject}</div>` : ''}<div class="rq-pop-b">${o.body || '(no text recorded)'}</div>
       ${o.photos.length ? html`<div class="rq-pop-ph">${o.photos.slice(0, 6).map((a) => html`<a href="${`${a.href}?inline=1`}" target="_blank" rel="noopener"><img src="${`${a.href}?inline=1`}" alt="${a.filename}" loading="lazy"></a>`)}</div>` : ''}
       ${o.files.filter((a) => !o.photos.includes(a)).length ? html`<div class="clog-files">${o.files.filter((a) => !o.photos.includes(a)).map((a) => (a.href ? html`<a class="att-chip" href="${a.href}" download="${a.filename}">📎 ${a.filename}</a>` : html`<span class="att-chip off">📎 ${a.filename}</span>`))}</div>` : ''}</div>` : '');

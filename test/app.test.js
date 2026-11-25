@@ -993,6 +993,11 @@ test('integration API: Hermes records RFQs (write-only), creates new suppliers, 
   assert.equal(db.tables.info_request_messages.find((m) => m.request_id === j3.request_id).original.includes('Full verbatim text'), true);
   const d3 = await req(base, 'GET', `/admin/requests/${j3.request_id}`, { cookie });
   assert.match(d3.text, /Show original email/); assert.match(d3.text, /Full verbatim text/); assert.match(d3.text, /Hi &lt;b&gt;x&lt;\/b&gt;/);
+  // Requests list hover: the email as sent when Hermes gave it, otherwise its summary, clearly labelled
+  const lst = (await req(base, 'GET', '/admin/requests?view=all', { cookie })).text;
+  const card = (t) => lst.slice(lst.indexOf(`<h3>${t}</h3>`), lst.indexOf('</section>', lst.indexOf(`<h3>${t}</h3>`)));
+  assert.match(card('RFQ orig'), /Email as sent/); assert.match(card('RFQ orig'), /Full verbatim text/); assert.doesNotMatch(card('RFQ orig'), /Short summary/);
+  assert.match(card('silicone bottle'), /Summary recorded by Hermes/); assert.match(card('silicone bottle'), /wasn't saved with this request/);
 });
 
 test('integration API safeguards: audit log, key rotation, rate limits, bad-key throttle, supplier review flag', async (t) => {
@@ -5337,7 +5342,7 @@ test('Requests list: grouped by request — one card per RFQ with every supplier
   const html = (await req(base, 'GET', '/admin/requests', { cookie: admin })).text;
   assert.equal((html.match(/<h3>Padded potty training seat/g) || []).length, 1, 'request title shown once');
   assert.match(html, new RegExp(`class="rq-thumb" href="/admin/request-files/${om1.id}/0\\?inline=1"`), 'photo of the original request in the header');
-  assert.match(html, /class="rq-pop"[\s\S]*Original request · LB-2001[\s\S]*please quote LB-2001 for the padded seat[\s\S]*spec\.pdf/);
+  assert.match(html, /class="rq-pop"[\s\S]*Email as sent · LB-2001[\s\S]*please quote LB-2001 for the padded seat[\s\S]*spec\.pdf/);
   assert.match(html, /1 of 3 replied/); assert.match(html, /\$3\.20 FOB · MOQ 1000/);
   assert.match(html, /No reply · 15d/); assert.match(html, /Sent · 3d/); assert.match(html, /Remind 2/);
   assert.doesNotMatch(html, /Silicone bib set/, 'closed requests are not in Open');
