@@ -5355,3 +5355,33 @@ test('Requests list: grouped by request — one card per RFQ with every supplier
   assert.match(om.body, new RegExp(`quote ${nr.ref} for`)); assert.doesNotMatch(om.body, /LB-2001/);
   assert.match((await req(base, 'GET', '/admin/requests', { cookie: admin })).text, /1 of 4 replied/);
 });
+
+test('Payments: search by supplier / PO and the By order view (one line per PO, installments side by side)', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const PL = require('../src/planning'); const PM = require('../src/payments'); const today = PL.today();
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const a = await db.insert('suppliers', { name: 'Huanger' }); const b = await db.insert('suppliers', { name: 'Xing Fuming' });
+  const c = await db.insert('plan_containers', { port: 'CNYTN', box: 'LCL', status: 'shipped', fwd: { atd: PL.addDays(today, -60), ata: PL.addDays(today, -47), eta: PL.addDays(today, -47), hbl_no: 'HKAL1' } });
+  const terms = 'Payment: 20% against BOL + 80% 50 days after arrival.';
+  await db.insert('plan_orders', { supplier_id: a.id, po: '800018', product: 'Teether', qty: 8000, unit_price: 0.5, container_id: c.id, po_terms: terms, created_at: PL.addDays(today, -90) + 'T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: b.id, po: '600041', product: 'Bib', qty: 1000, unit_price: 2, container_id: c.id, po_terms: terms, created_at: PL.addDays(today, -90) + 'T00:00:00Z' });
+  await req(base, 'GET', '/admin/finance', { cookie });
+  const { rows } = await PM.list(db); const bl = rows.find((r) => r.po === '800018' && r.trigger === 'bl');
+  await req(base, 'POST', `/admin/finance/${bl.id}/paid`, { cookie, form: { date: today, amount: '800' } });
+  // By date + search
+  let pg = (await req(base, 'GET', '/admin/finance?q=huang', { cookie })).text;
+  assert.match(pg, /By order/); assert.match(pg, /search “huang”/); assert.doesNotMatch(pg, /Xing Fuming<\/b>/);
+  // By order: one line per PO, both installments, paid one marked
+  pg = (await req(base, 'GET', '/admin/finance?view=po', { cookie })).text;
+  assert.equal((pg.match(/class="po-row/g) || []).length, 2);
+  const hu = pg.slice(pg.indexOf('<b>Huanger</b>'), pg.indexOf('<b>Huanger</b>') + 3000);
+  assert.match(hu, /class="ip paid[^"]*"[\s\S]*\$800[\s\S]*✓ paid/); assert.match(hu, /\$3,200/); assert.match(hu, /of \$4,000/);
+  assert.match(pg, /Payment 1<\/span><span>Payment 2<\/span><span>Payment 3/);
+  assert.match(pg, /2 orders · 3 payments open/);
+  // search by PO number in By order
+  pg = (await req(base, 'GET', '/admin/finance?view=po&q=600041', { cookie })).text;
+  assert.equal((pg.match(/class="po-row/g) || []).length, 1); assert.match(pg, /Xing Fuming/);
+  // clicking an installment opens the panel for it
+  pg = (await req(base, 'GET', `/admin/finance?view=po&id=${bl.id}`, { cookie })).text;
+  assert.match(pg, /fn-panel/); assert.match(pg, /class="ip paid on"/);
+});

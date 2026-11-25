@@ -54,18 +54,58 @@ module.exports = function financeRoutes(router, { db, config }) {
     if (D.missing) return res.html(page({ title: 'Payments', nav: adminNav(navKey), req, flash: takeFlash(req, res), body: html`<h2 class="sl-title">Payments</h2><section class="card"><p>Run supabase/payments.sql in Supabase → SQL Editor first.</p></section>` }));
     const { all, open, today, weekEnd } = D;
     const month = /^\d{4}-\d{2}$/.test(q.month || '') ? q.month : today.slice(0, 7);
+    const view = q.view === 'po' ? 'po' : 'date';
+    const qs = String(q.q || '').trim(); const ql = qs.toLowerCase(); const qn = qs.replace(/[^0-9a-z]/gi, '').toLowerCase();
+    const hit = (r) => !ql || String(r.supplier || '').toLowerCase().includes(ql) || (qn && PL.normPo(r.po).toLowerCase().includes(qn)) || String(r.po || '').toLowerCase().includes(ql);
     const lists = {
       pay: open.filter((r) => r.d && r.d <= PL.addDays(today, 30)).sort((a, b) => a.d.localeCompare(b.d)),
       week: open.filter((r) => r.d && r.d <= weekEnd).sort((a, b) => a.d.localeCompare(b.d)),
       docs: open.filter((r) => !r.docs.ok).sort((a, b) => String(a.d || '9999').localeCompare(String(b.d || '9999'))),
       paid: all.filter((r) => r.paid > 0 && String(r.paid_at || '').startsWith(month)).sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at))),
     };
+    for (const k of Object.keys(lists)) lists[k] = lists[k].filter(hit);
     const tab = lists[q.tab] ? q.tab : 'pay';
     const list = lists[tab];
+    // By order: one line per PO, its installments side by side
+    const show = ['open', 'paid', 'all'].includes(q.show) ? q.show : 'open';
+    const orders = (() => {
+      const m = new Map();
+      for (const r of all) { const k = `${r.supplier_id}|${PL.normPo(r.po)}`; if (!m.has(k)) m.set(k, { key: k, supplier: r.supplier, supplier_id: r.supplier_id, po: r.po, rows: [] }); m.get(k).rows.push(r); }
+      return [...m.values()].map((o) => {
+        o.rows.sort((a, b) => a.no - b.no);
+        const openRows = o.rows.filter((x) => x.status !== 'paid' && x.left > 0);
+        o.total = o.rows.reduce((t, x) => t + (Number(x.amount) || 0), 0); o.left = openRows.reduce((t, x) => t + x.left, 0); o.paid = o.rows.reduce((t, x) => t + (Number(x.paid) || 0), 0);
+        o.done = !openRows.length; o.next = openRows.map((x) => x.d).filter(Boolean).sort()[0] || (o.done ? null : '9999');
+        o.lastPaid = o.rows.map((x) => String(x.paid_at || '')).sort().pop() || '';
+        o.docsRow = openRows[0] || o.rows[o.rows.length - 1]; o.nOpen = openRows.length;
+        return o;
+      });
+    })();
+    const ordersHit = orders.filter((o) => hit(o.rows[0]));
+    const ocount = { open: ordersHit.filter((o) => !o.done).length, paid: ordersHit.filter((o) => o.done).length, all: ordersHit.length };
+    const olist = ordersHit.filter((o) => (show === 'open' ? !o.done : show === 'paid' ? o.done : true))
+      .sort((a, b) => (a.done - b.done) || (a.done ? b.lastPaid.localeCompare(a.lastPaid) : String(a.next).localeCompare(String(b.next))) || a.supplier.localeCompare(b.supplier));
     const over = open.filter((r) => r.d && r.d < today); const thisWeek = open.filter((r) => r.d && r.d >= today && r.d <= weekEnd);
     const paidNow = all.filter((r) => r.paid > 0 && String(r.paid_at || '').startsWith(today.slice(0, 7)));
-    const sel = all.find((r) => r.id === q.id) || list[0] || null;
-    const href = (o) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ tab, month: tab === 'paid' && month !== today.slice(0, 7) ? month : '', ...o }).filter(([, v]) => v)))}`;
+    const sel = all.find((r) => r.id === q.id) || (view === 'date' ? list[0] : null) || null;
+    const href = (o) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries(view === 'po' ? { view, show: show === 'open' ? '' : show, q: qs, ...o } : { tab, month: tab === 'paid' && month !== today.slice(0, 7) ? month : '', q: qs, ...o }).filter(([, v]) => v)))}`;
+    const vhref = (v) => `${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ view: v === 'po' ? 'po' : '', q: qs }).filter(([, x]) => x)))}`;
+    const days = (d) => PM.between(today, d);
+    const amt = (v) => (Math.round(Number(v || 0) * 100) % 100 ? usd(v) : usd0(v));
+    const cell = (x) => {
+      const done = x.status === 'paid' || x.left <= 0; const n = x.d ? days(x.d) : null;
+      const cls = done ? 'paid' : n == null ? 'next' : n < 0 ? 'late' : n <= 7 ? 'soon' : 'next';
+      const st = done ? '✓ paid' : x.paid > 0 ? `${amt(x.left)} open` : n == null ? 'date tbc' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} late` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`;
+      const when = done ? html`paid ${x.paid_at ? PL.short(String(x.paid_at).slice(0, 10)) : ''}` : x.d ? (x.fixed ? html`due ${PL.short(x.d)}` : html`<em>est. ${PL.short(x.d)}</em>`) : html`<em>date not known yet</em>`;
+      return html`<a class="ip ${cls} ${sel && sel.id === x.id ? 'on' : ''}" href="${href({ id: x.id })}" title="${`${x.no} of ${x.of_n || x.no} · ${x.describe} · ${x.why}`}"><span class="t"><span>${x.no} · ${x.describe}</span></span><span class="v"><b>${amt(x.amount)}</b><span>${st}</span></span><span class="w">${when}</span></a>`;
+    };
+    const ncol = Math.max(3, ...olist.map((o) => o.rows.length));
+    const orow = (o) => html`<div class="po-row ${o.done ? 'done' : ''}" style="${raw(`--n:${ncol}`)}"><span class="po-s"><b>${o.supplier}</b><small><a href="${`/admin/orders/view?supplier=${o.supplier_id}&po=${encodeURIComponent(o.po)}`}">PO ${o.po}</a> · ${amt(o.total)} total</small></span>
+      ${Array.from({ length: ncol }, (_, i) => (o.rows[i] ? cell(o.rows[i]) : html`<span class="ip-none">—</span>`))}
+      ${chips(o.docsRow)}<span class="po-l">${o.done ? html`<span class="po-ok">Paid</span><small>${amt(o.paid)}</small>` : html`${amt(o.left)}<small>${o.paid > 0 ? `of ${amt(o.total)}` : 'nothing paid yet'}</small>`}</span></div>`;
+    const searchForm = html`<form method="get" action="${BASE}" class="fn-search" role="search">${view === 'po' ? html`<input type="hidden" name="view" value="po">${show !== 'open' ? html`<input type="hidden" name="show" value="${show}">` : ''}` : html`<input type="hidden" name="tab" value="${tab}">${tab === 'paid' && month !== today.slice(0, 7) ? html`<input type="hidden" name="month" value="${month}">` : ''}`}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" name="q" value="${qs}" placeholder="Search supplier or PO…" aria-label="Search supplier or PO"></form>`;
+    const viewSw = html`<nav class="fn-view" aria-label="View"><a href="${vhref('date')}" class="${view === 'date' ? 'on' : ''}">By date</a><a href="${vhref('po')}" class="${view === 'po' ? 'on' : ''}">By order</a></nav>`;
     const months = [...new Set([today.slice(0, 7), ...all.filter((r) => r.paid_at).map((r) => String(r.paid_at).slice(0, 7))])].sort().reverse().slice(0, 18);
     const row = (r) => html`<a class="fn-row ${sel && sel.id === r.id ? 'on' : ''} ${tab !== 'paid' && r.d && r.d < today ? 'late' : ''}" href="${href({ id: r.id })}">
       ${tab === 'paid' ? html`<span class="fn-d"><b>${PL.short(r.paid_at)}</b><small>${r.paid_by ? `by ${r.paid_by}` : ''}</small></span>` : html`<span class="fn-d"><b>${r.d ? PL.short(r.d) : '—'}</b><small>${dueTxt(r, today)}${r.d && !r.fixed ? ' · est.' : ''}</small></span>`}
@@ -84,13 +124,18 @@ module.exports = function financeRoutes(router, { db, config }) {
           <div><span>Paid in ${monthName(today.slice(0, 7)).split(' ')[0]}</span><b>${usd0(sum(paidNow, 'paid'))}</b><small>${paidNow.length} payment${paidNow.length === 1 ? '' : 's'}</small></div>
         </div>
         <div class="fn-lay ${sel ? 'has-panel' : ''}">
-          <section class="card fn-q">
-            <div class="fn-top"><nav class="fn-tabs" aria-label="Queue">${TABS.map(([k, l]) => html`<a href="${`${BASE}?tab=${k}`}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l}${k === 'paid' ? '' : html` <span>${lists[k].length}</span>`}</a>`)}<a href="/admin/finance/inspections" class="fn-ins">Inspection invoices →</a></nav>
-              ${tab === 'paid' ? html`<form method="get" action="${BASE}" class="fn-month"><input type="hidden" name="tab" value="paid"><select name="month" data-autosubmit aria-label="Month">${months.map((m) => html`<option value="${m}" ${m === month ? raw('selected') : ''}>${monthName(m)}</option>`)}</select></form>` : ''}</div>
+          <section class="card fn-q">${view === 'po' ? html`
+            <div class="fn-top"><nav class="fn-tabs" aria-label="Orders">${[['open', 'Open orders'], ['paid', 'Fully paid'], ['all', 'All']].map(([k, l]) => html`<a href="${`${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ view: 'po', show: k === 'open' ? '' : k, q: qs }).filter(([, v]) => v)))}`}" class="${show === k ? 'on' : ''}" ${show === k ? raw('aria-current="page"') : ''}>${l}${k === 'all' ? '' : html` <span>${ocount[k]}</span>`}</a>`)}</nav>
+              <div class="fn-tools">${searchForm}${viewSw}</div></div>
+            ${olist.length ? html`<div class="po-head" style="${raw(`--n:${ncol}`)}"><span>Supplier · PO <i>${show === 'paid' ? '↓ last paid' : '↓ next payment due'}</i></span>${Array.from({ length: ncol }, (_, i) => html`<span>Payment ${i + 1}</span>`)}<span>Docs</span><span class="r">${show === 'paid' ? 'Paid' : 'Left to pay'}</span></div>${olist.map(orow)}
+              <div class="fn-tot"><span>${olist.length} order${olist.length === 1 ? '' : 's'}${show !== 'paid' ? ` · ${olist.reduce((t, o) => t + o.nOpen, 0)} payment${olist.reduce((t, o) => t + o.nOpen, 0) === 1 ? '' : 's'} open` : ''}${qs ? ` · search “${qs}”` : ''}</span><b>${show === 'paid' ? `${usd(olist.reduce((t, o) => t + o.paid, 0))} paid` : `${usd(olist.reduce((t, o) => t + o.left, 0))} left to pay`}</b></div>`
+              : html`<p class="fn-empty">${qs ? `No orders match “${qs}”.` : show === 'paid' ? 'No fully paid orders yet.' : 'No open orders with a payment schedule.'}</p>`}` : html`
+            <div class="fn-top"><nav class="fn-tabs" aria-label="Queue">${TABS.map(([k, l]) => html`<a href="${`${BASE}?${new URLSearchParams(Object.fromEntries(Object.entries({ tab: k, q: qs }).filter(([, v]) => v)))}`}" class="${tab === k ? 'on' : ''}" ${tab === k ? raw('aria-current="page"') : ''}>${l}${k === 'paid' ? '' : html` <span>${lists[k].length}</span>`}</a>`)}</nav>
+              <div class="fn-tools">${tab === 'paid' ? html`<form method="get" action="${BASE}" class="fn-month"><input type="hidden" name="tab" value="paid">${qs ? html`<input type="hidden" name="q" value="${qs}">` : ''}<select name="month" data-autosubmit aria-label="Month">${months.map((m) => html`<option value="${m}" ${m === month ? raw('selected') : ''}>${monthName(m)}</option>`)}</select></form>` : ''}${searchForm}${viewSw}</div></div>
             ${list.length ? html`<div class="fn-head"><span>${tab === 'paid' ? 'Paid' : 'Due'}</span><span>Supplier</span><span>Installment</span><span>Docs</span><span class="r">${tab === 'paid' ? 'Amount' : 'To pay'}</span></div>${list.map(row)}
-              ${tab !== 'paid' ? html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'}</span><b>${usd(sum(list))}</b></div>` : html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'} in ${monthName(month)}</span><b>${usd(sum(list, 'paid'))}</b></div>`}`
-              : html`<p class="fn-empty">${tab === 'paid' ? `Nothing paid in ${monthName(month)}.` : tab === 'docs' ? 'Every open payment has its documents.' : tab === 'week' ? 'Nothing due this week.' : 'Nothing due in the next 30 days.'}</p>`}
-            <p class="fn-leg">${['ok', 'warn', 'miss', 'off'].map((s) => html`<span><i class="fn-chip ${s}"></i>${{ ok: 'on file', warn: 'PO not marked signed', miss: 'missing', off: 'not needed yet' }[s]}</span>`)}</p>
+              ${tab !== 'paid' ? html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'}${qs ? ` · search “${qs}”` : ''}</span><b>${usd(sum(list))}</b></div>` : html`<div class="fn-tot"><span>${list.length} payment${list.length === 1 ? '' : 's'} in ${monthName(month)}${qs ? ` · search “${qs}”` : ''}</span><b>${usd(sum(list, 'paid'))}</b></div>`}`
+              : html`<p class="fn-empty">${qs ? `Nothing matches “${qs}” here.` : tab === 'paid' ? `Nothing paid in ${monthName(month)}.` : tab === 'docs' ? 'Every open payment has its documents.' : tab === 'week' ? 'Nothing due this week.' : 'Nothing due in the next 30 days.'}</p>`}`}
+            <p class="fn-leg">${['ok', 'warn', 'miss', 'off'].map((s) => html`<span><i class="fn-chip ${s}"></i>${{ ok: 'on file', warn: 'PO not marked signed', miss: 'missing', off: 'not needed yet' }[s]}</span>`)}<a href="/admin/finance/inspections" class="fn-ins">Inspection invoices →</a></p>
           </section>
           ${sel ? await panel(req, sel, today) : ''}
         </div>`,
