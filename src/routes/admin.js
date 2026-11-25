@@ -1086,47 +1086,57 @@ module.exports = function adminRoutes(router, { db, config }) {
 
   // ── Suppliers (CRM)
   router.get('/admin/suppliers', G(async (req, res) => {
-    let [suppliers, products, acts] = await Promise.all([
-      db.list('suppliers', { order: 'name.asc' }),
-      db.list('products', { select: 'id,supplier_id,status,archived_at' }),
-      db.list('supplier_activities', { select: 'supplier_id,activity_date,follow_up_date,done', order: 'activity_date.desc' }),
-    ]);
-    products = products.filter((p) => !p.archived_at);
-    const users = await db.list('supplier_users', { select: 'supplier_id,status' });
-    const portal = (s) => {
-      if (!s.active) return 'Off';
-      const us = users.filter((u) => u.supplier_id === s.id);
-      const act = us.filter((u) => u.status === 'active').length;
-      return act ? `${act} user${act > 1 ? 's' : ''}` : us.some((u) => u.status === 'invited') ? 'Invited' : '—';
-    };
+    const [suppliers, users] = await Promise.all([db.list('suppliers', { order: 'name.asc' }), db.list('supplier_users', { select: 'supplier_id,status' })]);
+    const OV = require('../supplier-overview'); const { bySupplier, today: td } = await OV.build(db);
+    const ov = (s) => bySupplier.get(s.id) || { pos: [], dev: [], samples: [], items: [], next: null, waiting: false, lastAt: null };
+    const portalOn = (s) => s.active && users.some((u) => u.supplier_id === s.id && u.status === 'active');
+    const isOrders = (s) => ov(s).pos.length > 0; const isDev = (s) => !isOrders(s) && (ov(s).dev.length > 0 || ov(s).samples.length > 0);
+    const isProspect = (s) => !isOrders(s) && !isDev(s);
+    const fuLate = (s) => ov(s).items.some((i) => i.kind === 'followup' && i.date <= td);
+    const ready14 = (s) => ov(s).pos.some((p) => p.ready && p.ready <= PL.addDays(td, 14));
+    const views = { focus: 'Focus', working: 'Working with', prospects: 'Prospects', all: 'All' };
+    const view = views[req.query.view] ? req.query.view : req.query.followup === '1' ? 'focus' : 'focus';
+    const attn = { overdue: ['follow-ups overdue', fuLate, 'hot'], ready: ['POs ready in the next 14 days', ready14, 'warm'], waiting: ['suppliers waiting for your reply', (s) => ov(s).waiting, 'warm'], review: ['new contacts to review', (s) => !!s.needs_review, ''] };
+    const f = attn[req.query.f] ? req.query.f : null;
     let list = suppliers;
-    if (req.query.crm) list = list.filter((s) => s.crm_status === req.query.crm);
-    if (req.query.q) { const t = req.query.q.toLowerCase(); list = list.filter((s) => [s.name, s.contact_name, s.email, s.country, s.categories_supplied].some((v) => v && v.toLowerCase().includes(t))); }
-    // Next follow-up = the earliest open item from "Schedule a follow-up" (older activity follow-ups and the old date field still count).
-    const open = await require('../crm').openItems(db).catch(() => []);
-    const nextOf = {}; for (const i of open) if (i.supplier_id && i.due_date && !nextOf[i.supplier_id]) nextOf[i.supplier_id] = i.due_date;
-    const nextFu = (s) => [nextOf[s.id], s.next_follow_up].filter(Boolean).sort()[0] || null;
-    const due = (s) => { const d = nextFu(s); return !!d && d <= today(); };
-    if (req.query.followup === '1') list = list.filter(due);
-    const lastAct = (id) => acts.find((a) => a.supplier_id === id)?.activity_date;
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (q) list = list.filter((s) => [s.name, s.contact_name, s.email, s.country, s.categories_supplied, s.city].some((v) => v && String(v).toLowerCase().includes(q)) || ov(s).pos.some((p) => PL.normPo(p.po).toLowerCase().includes(PL.normPo(q).toLowerCase())) || ov(s).dev.some((d) => d.name.toLowerCase().includes(q)));
+    if (f) list = list.filter(attn[f][1]);
+    const groups = [['Orders in production', list.filter(isOrders)], ['Development & samples', list.filter(isDev)]];
+    const prospects = list.filter(isProspect).sort((a, b) => String(ov(a).next?.date || '9').localeCompare(String(ov(b).next?.date || '9')) || a.name.localeCompare(b.name));
+    let hidden = 0;
+    if (view === 'working') groups.push(['Prospects', []]);
+    else if (view === 'prospects') { groups.length = 0; groups.push(['Prospects', prospects]); }
+    else if (view === 'all' || q || f) groups.push(['Prospects', prospects]);
+    else { const due = prospects.filter((s) => (ov(s).next && ov(s).next.level) || s.needs_review); hidden = prospects.length - due.length; groups.push([`Prospects · follow-ups due · ${due.length} of ${prospects.length}`, due]); }
+    const counts = { working: suppliers.filter((s) => !isProspect(s)).length, prospects: suppliers.filter(isProspect).length, all: suppliers.length };
+    const link = (o) => { const u = new URLSearchParams({ ...(req.query.q ? { q: req.query.q } : {}), view, ...o }); for (const [k, v] of [...u]) if (!v) u.delete(k); return `/admin/suppliers?${u}`; };
+    const chip = (k, t, href) => html`<a class="sx-ch ${k}" href="${href}">${t}</a>`;
+    const nowCell = (s) => { const o = ov(s); const c = [];
+      if (o.pos.length) c.push(chip('po', html`<b>${o.pos.length} PO${o.pos.length === 1 ? '' : 's'}</b> · ${o.pos.slice(0, 2).map((p) => p.po).join(', ')}${o.pos.length > 2 ? ` +${o.pos.length - 2}` : ''}${o.pos.length === 1 && o.pos[0].ready ? ` · ready ${PL.short(o.pos[0].ready)}` : ''}`, `/admin/orders?supplier=${s.id}`));
+      for (const d of o.dev.slice(0, 2)) c.push(chip('dev', `Dev · ${d.name}${d.question ? ' · question' : ` · ${String(d.status).toLowerCase()}`}`, d.href));
+      if (o.dev.length > 2) c.push(chip('dev', `+${o.dev.length - 2} projects`, `/admin/suppliers/${s.id}`));
+      for (const x of o.samples.slice(0, 2)) c.push(chip('smp', x.text, x.href));
+      return c.length ? html`<div class="sx-now">${c}</div>` : html`<span class="sx-dim">—</span>`; };
+    const nextCell = (s) => { const n = ov(s).next; return n ? html`<a class="sx-nx ${n.level}" href="${n.href}"><b>${n.label}</b>${n.sub ? html`<small>${n.sub}</small>` : ''}</a>` : html`<span class="sx-dim">—</span>`; };
+    const row = (s, prospect) => html`<tr><td class="sx-nm"><a href="/admin/suppliers/${s.id}">${s.name}</a>${s.needs_review ? html`<span class="sx-rv">Review</span>` : ''}${portalOn(s) ? html`<span class="sx-portal" title="Has portal access">●</span>` : ''}<small>${[s.categories_supplied, s.city || s.country].filter(Boolean).join(' · ')}</small></td>
+      <td>${nowCell(s)}</td><td>${nextCell(s)}</td>
+      <td class="sx-who">${s.contact_name || s.email ? html`<b>${s.contact_name || ''}</b>${s.email ? html`<small>${s.email}</small>` : ''}` : html`<span class="sx-dim">—</span>`}</td>
+      <td class="sx-ago">${OV.ago(ov(s).lastAt, td)}</td><td>${prospect ? html`<span class="sx-tg">${s.crm_status}</span>` : ''}</td></tr>`;
+    const nGroups = groups.filter(([, rs]) => rs.length);
     res.html(page({
       title: 'Suppliers', nav: adminNav('suppliers'), flash: takeFlash(req, res), wide: true,
       body: html`
-      <div class="head-row"><h1>Suppliers</h1></div>
-      <form class="filters" method="get"><input type="search" name="q" placeholder="Search name, contact, country" value="${req.query.q || ''}">
-        <select name="crm"><option value="">All statuses</option>${CRM_STATUSES.map((s) => html`<option ${req.query.crm === s ? raw('selected') : ''}>${s}</option>`)}</select>
-        <label class="chk"><input type="checkbox" name="followup" value="1" ${req.query.followup === '1' ? raw('checked') : ''}> Follow-up due</label>
-        <button class="btn small">Filter</button></form>
-      <div class="table-wrap"><table class="list">
-        <thead><tr><th>Supplier</th><th>Contact</th><th>Country</th><th>Status</th><th>Rating</th><th class="r">Products</th><th class="r">Shortlisted+</th><th>Last activity</th><th>Next follow-up</th><th>Portal</th></tr></thead>
-        <tbody>${list.map((s) => { const ps = products.filter((p) => p.supplier_id === s.id); return html`<tr>
-          <td><a href="/admin/suppliers/${s.id}">${s.name}</a>${s.needs_review ? html` <span class="pill s-new">Review</span>` : ''}<div class="sub">${s.categories_supplied || ''}</div></td>
-          <td>${s.contact_name || '—'}<div class="sub">${s.email || ''}</div></td><td>${s.country || '—'}</td>
-          <td>${s.crm_status}</td><td>${s.rating ? '★'.repeat(s.rating) : '—'}</td>
-          <td class="r">${ps.length}</td><td class="r">${ps.filter((p) => ['Shortlisted', 'Sample requested', 'Selected'].includes(p.status)).length}</td>
-          <td>${fmt.date(lastAct(s.id))}</td><td class="${due(s) ? 'neg' : ''}">${fmt.date(nextFu(s))}</td>
-          <td>${portal(s)}</td></tr>`; })}</tbody></table></div>
-      <details class="card" ${suppliers.length ? '' : raw('open')}><summary><h2 class="inline">+ Add supplier</h2></summary>
+      <div class="sx-head"><h1>Suppliers</h1><span class="sx-sp"></span><a class="btn small" href="#add-supplier" data-open-hash>+ Add supplier</a></div>
+      <div class="sx-att">${Object.entries(attn).map(([k, [label, fn, cls]]) => { const n = suppliers.filter(fn).length; return html`<a class="sx-a ${n ? cls : ''} ${f === k ? 'on' : ''}" href="${f === k ? link({ f: '' }) : link({ f: k, view: 'all' })}"><b>${n}</b><span>${label}</span></a>`; })}</div>
+      <form class="sx-bar" method="get"><nav class="sx-seg">${Object.entries(views).map(([k, l]) => html`<a class="${view === k && !f ? 'on' : ''}" href="${`/admin/suppliers?view=${k}${req.query.q ? `&q=${encodeURIComponent(req.query.q)}` : ''}`}">${l}${counts[k] != null ? html`<em>${counts[k]}</em>` : ''}</a>`)}</nav>
+        <input type="hidden" name="view" value="${view}"><input type="search" name="q" placeholder="Search name, contact, product, PO…" value="${req.query.q || ''}" aria-label="Search suppliers">
+        ${f ? html`<a class="sx-clear" href="${link({ f: '' })}">× ${attn[f][0]}</a>` : ''}</form>
+      <section class="card flush sx-card"><div class="table-wrap"><table class="list sx-table"><thead><tr><th class="sx-c1">Supplier</th><th class="sx-c2">Now</th><th class="sx-c3">Next</th><th>Contact</th><th>Last activity</th><th></th></tr></thead>
+        <tbody>${nGroups.map(([g, rs]) => html`<tr class="sx-grp"><td colspan="6">${g}${/·/.test(g) ? '' : ` · ${rs.length}`}</td></tr>${rs.map((s) => row(s, isProspect(s)))}`)}</tbody></table></div>
+        ${!nGroups.length ? html`<p class="d-empty">${q || f ? 'No suppliers match.' : 'No suppliers yet.'}</p>` : ''}
+        ${hidden ? html`<p class="sx-more">${hidden} more prospect${hidden === 1 ? '' : 's'} without anything due · <a href="/admin/suppliers?view=prospects">show</a></p>` : ''}</section>
+      <details class="card" id="add-supplier" ${suppliers.length ? '' : raw('open')}><summary><h2 class="inline">+ Add supplier</h2></summary>
         <p class="muted">The supplier receives an invitation link. They verify this email with a 6-digit code, fill in their company details and create a password. This email becomes their login.</p>
         <form method="post" action="/admin/suppliers" class="grid">
           <label><span class="lbl">Contact email (login)<b class="req">*</b></span><input type="email" name="invite_email" required></label>

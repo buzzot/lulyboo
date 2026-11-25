@@ -5285,3 +5285,33 @@ test('Forwarder statement: AI reads invoices → matched to shipments (B/L, book
   assert.match((await req(base, 'GET', '/admin/orders/shipments', { cookie: admin })).text, /data-open-dialog="fs-up"/);
   assert.match((await req(base, 'GET', '/admin/orders/shipping', { cookie: admin })).text, /data-open-dialog="fs-up"/);
 });
+
+test('Suppliers list: grouped by what is ongoing (POs, development, prospects), the next thing to do, attention tiles and views', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const admin = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test', next: '/admin' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const PL = require('../src/planning'); const D = (n) => PL.addDays(PL.today(), n);
+  const a = await db.insert('suppliers', { name: 'Xing Fuming', contact_name: 'Julian', email: 'j@x.com', crm_status: 'Active', categories_supplied: 'Silicone' });
+  const b = await db.insert('suppliers', { name: 'Lier Baby', crm_status: 'Active' });
+  const c = await db.insert('suppliers', { name: 'ChillTitan', crm_status: 'Contacted', needs_review: true, next_follow_up: D(-3) });
+  const d = await db.insert('suppliers', { name: 'Quiet Prospect', crm_status: 'Contacted' });
+  await db.insert('plan_orders', { supplier_id: a.id, po: '600041', sku: 'A', qty: 1, ready_date: D(10) });
+  await db.insert('plan_orders', { supplier_id: a.id, po: '600038', sku: 'B', qty: 1, ready_date: D(40), pending_from_us: 'artwork approval' });
+  await db.insert('plan_orders', { supplier_id: a.id, po: '500001', sku: 'C', qty: 1, shipped: true });
+  const pj = await db.insert('dev_projects', { ref: 'DP-1', name: 'Training seat', status: 'Sourcing' });
+  const inv = await db.insert('dev_invitations', { project_id: pj.id, supplier_id: b.id, status: 'Questions', created_at: new Date().toISOString() });
+  await db.insert('dev_messages', { invitation_id: inv.id, direction: 'supplier', body: 'Which color?', created_at: new Date().toISOString() });
+  const html = (await req(base, 'GET', '/admin/suppliers', { cookie: admin })).text;
+  const grp = (g) => html.indexOf(g);
+  assert.ok(grp('Orders in production') < html.indexOf('Xing Fuming') && html.indexOf('Xing Fuming') < grp('Development &amp; samples'));
+  assert.ok(grp('Development &amp; samples') < html.indexOf('Lier Baby'));
+  assert.match(html, /2 POs<\/b> · 600041, 600038/); assert.doesNotMatch(html, /500001/, 'shipped POs are not ongoing');
+  assert.match(html, /Reply to supplier/); assert.match(html, /waiting for: artwork approval/);
+  assert.match(html, /Dev · Training seat · question/); assert.match(html, /Reply to question/);
+  assert.match(html, /Prospects · follow-ups due · 1 of 2/); assert.match(html, /ChillTitan/); assert.doesNotMatch(html, /Quiet Prospect/); assert.match(html, /1 more prospect without anything due/);
+  assert.match(html, /<b>1<\/b><span>follow-ups overdue/); assert.match(html, /<b>1<\/b><span>POs ready in the next 14 days/); assert.match(html, /<b>2<\/b><span>suppliers waiting for your reply/);
+  assert.doesNotMatch(html, />Rating</); assert.doesNotMatch(html, /Shortlisted\+/);
+  assert.match((await req(base, 'GET', '/admin/suppliers?view=prospects', { cookie: admin })).text, /Quiet Prospect/);
+  const w = (await req(base, 'GET', '/admin/suppliers?f=waiting&view=all', { cookie: admin })).text; assert.match(w, /Xing Fuming/); assert.match(w, /Lier Baby/); assert.doesNotMatch(w, /ChillTitan<\/a>/);
+  const s = (await req(base, 'GET', '/admin/suppliers?q=600038', { cookie: admin })).text; assert.match(s, /Xing Fuming/); assert.doesNotMatch(s, /Lier Baby<\/a>/);
+  assert.ok(d);
+});
