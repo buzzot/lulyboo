@@ -44,7 +44,7 @@ function pricingTag(p, supplier) {
 }
 
 function renderWorkspace(c) {
-  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, customsHtml = '', customsN = 0, renderAnalysis, lite = false } = c;   // lite: Development role — read only, factory price but no landed cost / margins
+  const { p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs, docsReady, analyses, activeOpts, testDuty, canDelete, dutyHtml, customsHtml = '', customsN = 0, devHtml = '', dev = null, renderAnalysis, lite = false } = c;   // lite: Development role — read only, factory price but no landed cost / margins
   const v = (x) => (x === null || x === undefined ? '' : x);
   const stars = p.score ? '★'.repeat(p.score) + '☆'.repeat(5 - p.score) : '';
   const money = (x) => (x === null || x === undefined ? '—' : fmt.money(x));
@@ -87,7 +87,7 @@ function renderWorkspace(c) {
       ${srcDoc ? html`<li><a href="/admin/documents/${srcDoc.id}" download title="Original quotation file: ${srcDoc.name}" class="src-chip">${icon('download', 13)}<span class="trunc">Source file: ${srcDoc.name}</span></a></li>` : ''}
     </ul>
     <div class="pw-tabs" role="tablist" aria-label="Product sections">
-      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${lite ? '' : tab('costing', 'Costing')}${tab('logistics', 'Logistics')}${lite ? '' : tab('customs', 'Customs records', customsN ? { text: customsN } : null)}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
+      ${tab('overview', 'Overview', a.issues.length || miss.length ? { text: a.issues.length + miss.length, warn: true } : null)}${lite ? '' : tab('costing', 'Costing')}${lite || !dev ? '' : tab('development', 'Development', dev.s.n ? { text: `$${Math.round(dev.s.total).toLocaleString('en-US')}` } : null)}${tab('logistics', 'Logistics')}${lite ? '' : tab('customs', 'Customs records', customsN ? { text: customsN } : null)}${tab('review', 'Review')}${tab('documents', 'Documents', { text: imgs.length + docs.length + (srcDoc ? 1 : 0) })}
     </div>
   </div>`;
 
@@ -107,7 +107,7 @@ function renderWorkspace(c) {
       </div>
       <div class="ov-main">
         <div class="facts">
-          <div class="fact"><span>Factory price</span><b>${has(p.unit_price) ? fmt.money(p.unit_price, p.currency) : '—'}</b><small>${[p.incoterm, p.fob_port].filter(Boolean).join(' · ') || 'Incoterm not given'}</small></div>
+          <div class="fact"><span>Factory price</span><b>${has(p.unit_price) ? fmt.money(p.unit_price, p.currency) : '—'}</b><small>${[p.incoterm, p.fob_port].filter(Boolean).join(' · ') || 'Incoterm not given'}</small>${!lite && dev?.s.perUnit && !dev.s.done && dev.s.gross != null ? html`<a class="fp-gross" href="#development" data-goto-tab="development">gross <span class="g">$${dev.s.gross.toFixed(2)}</span> · incl. $${dev.s.perUnit < 0.1 ? dev.s.perUnit.toFixed(3) : dev.s.perUnit.toFixed(2)} development</a>` : ''}</div>
           ${lite ? '' : html`<div class="fact strong"><span>Landed estimate ${dutyVerified ? status('ok', 'duty verified') : status('est', 'estimate')}</span><b>${money(a.landed_cost)}</b><small>${a.primary?.name || 'No logistics option'}</small></div>`}
           <div class="fact"><span>MOQ</span><b>${has(p.moq) ? fmt.num(p.moq) : '—'}</b><small>${a.moq_cartons ? `${a.moq_cartons} cartons` : 'units'}</small></div>
           <div class="fact"><span>Lead time</span><b>${has(p.production_lead_days) ? `${p.production_lead_days} d` : '—'}</b><small>${has(p.sample_lead_days) ? `samples ${p.sample_lead_days} d` : 'production'}</small></div>
@@ -305,8 +305,9 @@ function renderWorkspace(c) {
     </section>
   </section>`;
 
+  const development = html`<section class="pw-panel" role="tabpanel" id="tab-development" aria-labelledby="tabbtn-development" data-panel="development" hidden>${devHtml}</section>`;
   const customs = html`<section class="pw-panel" role="tabpanel" id="tab-customs" aria-labelledby="tabbtn-customs" data-panel="customs" hidden>${customsHtml}</section>`;
-  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${lite ? '' : costing}${logistics}${lite ? '' : customs}${review}${documents}</div>`;
+  return html`${header}${banners}<div class="pw-body" data-pw data-product="${p.id}">${overview}${lite ? '' : costing}${lite || !dev ? '' : development}${logistics}${lite ? '' : customs}${review}${documents}</div>`;
 }
 
 module.exports = { renderWorkspace, normSize, DOC_KINDS, UPLOAD_KINDS };

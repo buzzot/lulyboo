@@ -901,9 +901,12 @@ module.exports = function adminRoutes(router, { db, config }) {
 
     const canDelete = ST.can(ST.current()?.role, 'delete');
     const docs = await db.list('supplier_documents', { filters: { product_id: p.id }, order: 'created_at.desc' }).then((r) => ({ ok: true, r })).catch(() => ({ ok: false, r: [] }));
+    const seesCost = ST.seesLanded(ST.current()?.role);
+    const dev = seesCost ? await require('../devcost').load(db, p).catch(() => null) : null;
+    const devHtml = dev ? require('./devcosts').render(p, dev, { canDelete }) : '';
     res.html(page({
       title: p.product_name, nav: adminNav('products'), flash: takeFlash(req, res), wide: true,
-      body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis, lite: !ST.seesLanded(ST.current()?.role),
+      body: renderWorkspace({ p, a, realA, ctx, supplier, imgs, urls, srcDoc, docs: docs.r, docsReady: docs.ok, analyses, activeOpts, testDuty, canDelete, renderAnalysis, dev, devHtml, lite: !ST.seesLanded(ST.current()?.role),
         dutyHtml: dutyPanel({ p, a: realA, testDuty, aiOn: !!process.env.ANTHROPIC_API_KEY }), customsHtml: html`${htsCard({ ...p, _htsOpen: req.query.hts === '1' }, customs, { aiOn: AI.enabled(), broker: await brokerFor(db, customs) })}${await customsCard(db, p, customs, realA)}`, customsN: customs.length }),
     }));
   }));

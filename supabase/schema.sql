@@ -555,6 +555,48 @@ alter table public.dev_milestones enable row level security;
 
 -- Plain-language description for each project file (safe to run on an existing database)
 alter table public.dev_files add column if not exists label text;
+
+-- product development costs
+create table if not exists product_dev_costs (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  supplier_id uuid,
+  cost_date date,
+  title text not null,
+  kind text not null default 'mould',          -- mould | samples | testing | design | other
+  status text not null default 'quoted',       -- quoted | paid | refunded
+  amount numeric(12,2) not null default 0,     -- USD
+  paid_at date,
+  pay_ref text,
+  notes text,
+  mould_owner text,                            -- e.g. Lulyboo / supplier
+  mould_location text,
+  refund_after integer,                        -- supplier refunds the mould after this many pcs
+  files jsonb not null default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists product_dev_costs_product on product_dev_costs(product_id);
+
+create table if not exists product_dev_milestones (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  ms_date date not null,
+  title text not null,
+  note text,
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists product_dev_milestones_product on product_dev_milestones(product_id);
+
+alter table products add column if not exists dev_plan_units integer;
+alter table products add column if not exists dev_count text not null default 'placed';   -- placed | shipped
+alter table products add column if not exists dev_include_quoted boolean not null default true;
+
+alter table product_dev_costs enable row level security;
+alter table product_dev_milestones enable row level security;
+
 notify pgrst, 'reload schema';
 
 -- Supplier business license (number, private file, AI check result)
@@ -563,6 +605,48 @@ alter table public.suppliers add column if not exists business_license_path text
 alter table public.suppliers add column if not exists business_license_name text;
 alter table public.suppliers add column if not exists license_info jsonb;
 alter table public.suppliers add column if not exists license_checked_at timestamptz;
+
+-- product development costs
+create table if not exists product_dev_costs (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  supplier_id uuid,
+  cost_date date,
+  title text not null,
+  kind text not null default 'mould',          -- mould | samples | testing | design | other
+  status text not null default 'quoted',       -- quoted | paid | refunded
+  amount numeric(12,2) not null default 0,     -- USD
+  paid_at date,
+  pay_ref text,
+  notes text,
+  mould_owner text,                            -- e.g. Lulyboo / supplier
+  mould_location text,
+  refund_after integer,                        -- supplier refunds the mould after this many pcs
+  files jsonb not null default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists product_dev_costs_product on product_dev_costs(product_id);
+
+create table if not exists product_dev_milestones (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  ms_date date not null,
+  title text not null,
+  note text,
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists product_dev_milestones_product on product_dev_milestones(product_id);
+
+alter table products add column if not exists dev_plan_units integer;
+alter table products add column if not exists dev_count text not null default 'placed';   -- placed | shipped
+alter table products add column if not exists dev_include_quoted boolean not null default true;
+
+alter table product_dev_costs enable row level security;
+alter table product_dev_milestones enable row level security;
+
 notify pgrst, 'reload schema';
 
 
@@ -654,6 +738,48 @@ create index if not exists sample_files_sample_idx on public.sample_files (sampl
 alter table public.samples enable row level security;
 alter table public.sample_events enable row level security;
 alter table public.sample_files enable row level security;
+
+-- product development costs
+create table if not exists product_dev_costs (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  supplier_id uuid,
+  cost_date date,
+  title text not null,
+  kind text not null default 'mould',          -- mould | samples | testing | design | other
+  status text not null default 'quoted',       -- quoted | paid | refunded
+  amount numeric(12,2) not null default 0,     -- USD
+  paid_at date,
+  pay_ref text,
+  notes text,
+  mould_owner text,                            -- e.g. Lulyboo / supplier
+  mould_location text,
+  refund_after integer,                        -- supplier refunds the mould after this many pcs
+  files jsonb not null default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists product_dev_costs_product on product_dev_costs(product_id);
+
+create table if not exists product_dev_milestones (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  ms_date date not null,
+  title text not null,
+  note text,
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists product_dev_milestones_product on product_dev_milestones(product_id);
+
+alter table products add column if not exists dev_plan_units integer;
+alter table products add column if not exists dev_count text not null default 'placed';   -- placed | shipped
+alter table products add column if not exists dev_include_quoted boolean not null default true;
+
+alter table product_dev_costs enable row level security;
+alter table product_dev_milestones enable row level security;
+
 notify pgrst, 'reload schema';
 
 -- Development threads by email (run once): where a message came from and the original email
@@ -1266,4 +1392,46 @@ create table if not exists public.fwd_statements (
 );
 create index if not exists fwd_statements_fwd_idx on public.fwd_statements (forwarder_id, created_at desc);
 alter table public.fwd_statements enable row level security;
+
+-- product development costs
+create table if not exists product_dev_costs (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  supplier_id uuid,
+  cost_date date,
+  title text not null,
+  kind text not null default 'mould',          -- mould | samples | testing | design | other
+  status text not null default 'quoted',       -- quoted | paid | refunded
+  amount numeric(12,2) not null default 0,     -- USD
+  paid_at date,
+  pay_ref text,
+  notes text,
+  mould_owner text,                            -- e.g. Lulyboo / supplier
+  mould_location text,
+  refund_after integer,                        -- supplier refunds the mould after this many pcs
+  files jsonb not null default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists product_dev_costs_product on product_dev_costs(product_id);
+
+create table if not exists product_dev_milestones (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id) on delete cascade,
+  ms_date date not null,
+  title text not null,
+  note text,
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists product_dev_milestones_product on product_dev_milestones(product_id);
+
+alter table products add column if not exists dev_plan_units integer;
+alter table products add column if not exists dev_count text not null default 'placed';   -- placed | shipped
+alter table products add column if not exists dev_include_quoted boolean not null default true;
+
+alter table product_dev_costs enable row level security;
+alter table product_dev_milestones enable row level security;
+
 notify pgrst, 'reload schema';

@@ -5415,3 +5415,50 @@ test('PO page Inspection tile: aims from the booked container loading date; sche
   pg = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=800029`, { cookie })).text;
   assert.match(pg, /it-tag ok">Confirmed/); assert.match(pg, new RegExp(`<b class="">${PL.short(D(17))}</b><small>PSI · in 17 days`)); assert.doesNotMatch(pg, /Not scheduled/);
 });
+
+test('Product development costs: add (with file), spread over a planned quantity, absorbed by POs, gross price, milestones', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Huanger' });
+  const p = await db.insert('products', { supplier_id: s.id, product_name: 'Teether Ball Toy', supplier_sku: 'TBT 001', unit_price: 4.1, currency: 'USD', status: 'Selected' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800018', product: 'Teether Ball Toy', sku: 'TBT 001', qty: 3000, created_at: '2026-05-02T00:00:00Z' });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '800024', product: 'Teether Ball Toy', sku: 'TBT001', qty: 3000, created_at: '2026-09-12T00:00:00Z' });
+  // empty state: the tab is there
+  let pg = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  assert.match(pg, /data-tab="development"/); assert.match(pg, /No development costs yet/);
+  // add a paid mould with a slip, a lab test, and a quoted change
+  const fd = new FormData();
+  Object.entries({ title: 'Silicone mould, 2 cavities', kind: 'mould', amount: '2,500', cost_date: '2026-03-03', status: 'paid', pay_ref: 'TT 0303', mould_owner: 'Lulyboo', refund_after: '100000' }).forEach(([k, v]) => fd.append(k, v));
+  fd.append('files', new Blob([Buffer.from('%PDF-1.4 slip')], { type: 'application/pdf' }), 'slip.pdf');
+  const r1 = await fetch(`${base}/admin/products/${p.id}/dev/costs`, { method: 'POST', body: fd, redirect: 'manual', headers: { cookie } });
+  assert.equal(r1.status, 303);
+  const c1 = db.tables.product_dev_costs[0]; assert.equal(c1.amount, 2500); assert.equal(c1.paid_at, '2026-03-03'); assert.equal(c1.files.length, 1); assert.equal(c1.refund_after, 100000);
+  await req(base, 'POST', `/admin/products/${p.id}/dev/costs`, { cookie, form: { title: 'CPSIA testing', kind: 'testing', amount: '650', cost_date: '2026-04-09', status: 'paid' } });
+  await req(base, 'POST', `/admin/products/${p.id}/dev/costs`, { cookie, form: { title: 'Mould change T3', kind: 'mould', amount: '300', cost_date: '2026-11-20', status: 'quoted' } });
+  await req(base, 'POST', `/admin/products/${p.id}/dev/milestones`, { cookie, form: { ms_date: '2026-03-28', title: 'T1 samples received', note: 'handle too hard' } });
+  // no plan yet: nothing spread
+  pg = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  assert.match(pg, /Development<span class="tab-badge ">\$3,450/); assert.match(pg, /set the planned quantity/); assert.doesNotMatch(pg, /class="fp-gross"/);
+  // spread over 20,000 pcs
+  await req(base, 'POST', `/admin/products/${p.id}/dev/settings`, { cookie, form: { dev_plan_units: '20,000', dev_count: 'placed', dev_include_quoted: 'yes' } });
+  const DC = require('../src/devcost');
+  let d = await DC.load(db, db.tables.products[0]);
+  assert.equal(d.s.total, 3450); assert.equal(d.s.units, 6000); assert.equal(d.s.absorbed, 1035); assert.equal(d.s.remaining, 2415);
+  assert.equal(d.s.gross.toFixed(4), (4.1 + 3450 / 20000).toFixed(4)); assert.deepEqual(d.s.pos.map((x) => x.absorbed), [517.5, 517.5]);
+  pg = (await req(base, 'GET', `/admin/products/${p.id}`, { cookie })).text;
+  assert.match(pg, /class="fp-gross"[^>]*>gross <span class="g">\$4\.27<\/span> · incl\. \$0\.17 development/);
+  assert.match(pg, /T1 samples received/); assert.match(pg, /PO 800018 · 3,000 pcs<small>absorbed \$517\.50/); assert.match(pg, /6,000 of 20,000 pcs · 30% · \$2,415 to go/);
+  // quoted costs off → 3,150 counted
+  await req(base, 'POST', `/admin/products/${p.id}/dev/settings`, { cookie, form: { dev_plan_units: '20000', dev_count: 'placed', dev_include_quoted: 'no' } });
+  d = await DC.load(db, db.tables.products[0]); assert.equal(d.s.total, 3150);
+  // fully absorbed after the planned quantity
+  await req(base, 'POST', `/admin/products/${p.id}/dev/settings`, { cookie, form: { dev_plan_units: '5000', dev_count: 'placed', dev_include_quoted: 'no' } });
+  d = await DC.load(db, db.tables.products[0]); assert.ok(d.s.done); assert.equal(d.s.absorbed, 3150); assert.equal(d.s.gross, 4.1); assert.deepEqual(d.s.pos.map((x) => x.units), [3000, 2000]);
+  // file download + admin delete
+  const f = await fetch(`${base}/admin/products/${p.id}/dev/costs/${c1.id}/file/0`, { headers: { cookie } });
+  assert.equal(f.status, 200); assert.match(await f.text(), /slip/);
+  await req(base, 'POST', `/admin/products/${p.id}/dev/costs/${c1.id}/delete`, { cookie, form: {} });
+  assert.equal(db.tables.product_dev_costs.length, 2);
+  // a cost needs a title and an amount
+  assert.equal((await req(base, 'POST', `/admin/products/${p.id}/dev/costs`, { cookie, form: { title: '', amount: '5' } })).status, 400);
+});

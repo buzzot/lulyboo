@@ -50,6 +50,7 @@ function createApp({ db, config }) {
   require('./routes/supplier-auth')(router, { db, config });
   require('./routes/supplier')(router, { db, config });
   require('./routes/admin')(router, { db, config });
+  require('./routes/devcosts')(router, { db, config });
   require('./routes/admin-tools')(router, { db, config });
   require('./routes/category-checklists')(router, { db, config });
   require('./routes/requests')(router, { db, config });
