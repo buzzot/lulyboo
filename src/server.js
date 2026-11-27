@@ -74,6 +74,7 @@ function createApp({ db, config }) {
   require('./routes/shipping')(router, { db, config });
   require('./routes/orders')(router, { db, config });
   require('./routes/readychecks')(router, { db, config });
+  require('./routes/warehouse')(router, { db, config });
   require('./routes/crm')(router, { db, config });
   require('./routes/holidays')(router, { db, config });
   require('./routes/quick')(router, { db, config });
@@ -138,6 +139,7 @@ if (require.main === module) {
   { const PM = require('./payments'); const run = () => PM.runReminders({ db, config }).catch((e) => { if (!/po_payments|payment_|PGRST205|PGRST204|column/.test(e.message)) console.error('Payment reminders failed:', e.message); }); setTimeout(run, 75_000); setInterval(run, 30 * 60_000); }
   // Shipment confirmations: schedule, send at 9:00 China time on the loading date, remind after 2 and 4 days.
   { const IN = require('./inspections'); const run = () => IN.runInspections({ db, config }).catch((e) => { if (!IN.isMissing(e)) console.error('Inspections run failed:', e.message); }); setTimeout(run, 100_000); setInterval(run, 60 * 60_000); }
+  { const WH = require('./warehouse'); const run = () => WH.runWarehouse({ db, config }).catch((e) => { if (!WH.isMissing(e)) console.error('Warehouse reminders failed:', e.message); }); setTimeout(run, 85_000); setInterval(run, 30 * 60_000); }
   { const RC = require('./readycheck'); const run = () => RC.runReadyChecks({ db, config }).catch((e) => { if (!RC.isMissing(e)) console.error('Ready-to-ship checks failed:', e.message); }); setTimeout(run, 80_000); setInterval(run, 60 * 60_000); }
   { const SD = require('./shipdocs'); const run = () => SD.runShipConfirmations({ db, config }).catch((e) => { if (!/ship_confirmations|PGRST205/.test(e.message)) console.error('Shipment confirmations failed:', e.message); }); setTimeout(run, 60_000); setInterval(run, 60 * 60_000); }
   // Samples: carrier tracking every 10 minutes (each shipment has its own next-check time), reminders hourly.

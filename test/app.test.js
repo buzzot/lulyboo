@@ -5806,3 +5806,56 @@ test('inspection messages: a booking proposal added by hand is read, waits for a
   assert.equal(x.messages[0].status, 'approved'); assert.equal(x.messages[1].dir, 'out');
   assert.doesNotMatch((await req(base, 'GET', url, { cookie })).text, /to answer/);
 });
+
+test('warehouse: delivery email matched by container no., plan to confirm, unmatched → To assign, confirm reply, documents asked after delivery', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  process.env.RESEND_API_KEY = 're_test'; process.env.ANTHROPIC_API_KEY = 'test';
+  const WH = require('../src/warehouse'); const PL = require('../src/planning');
+  const today = WH.laNow().day; const D = (n) => PL.addDays(today, n);
+  let ai = {}; const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.resend.com/emails')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'em' }), { status: 200 }); }
+    if (String(url).startsWith('https://api.anthropic.com')) { const b = JSON.parse(opts.body); return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: ai }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.ANTHROPIC_API_KEY; });
+  const s = await db.insert('suppliers', { name: 'Coooko' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', container_no: 'TCLU9707538', fwd: { mbl_no: 'ONEYNB6BEHN79800', eta: D(-3), ata: D(-3), arrived: true } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', product: 'Kit', qty: 100, cartons: 50, cbm: 5, container_id: c.id, shipped: true });
+  // 1) CC'd to warehouse@: matched by the container number in the subject
+  ai = { mbl_no: 'ONEYNB6BEHN79800', lfd: D(4), port_appt: D(3), delivery_date: D(4), delivery_time: '8:30am', trucker: 'AFTY LAX', needs_confirmation: true, is_delivery: true, summary: 'Port appt, deliver 8:30am — please confirm' };
+  let out = await WH.handleEmail({ db, config: { publicUrl: 'http://x' }, from: 'AFTY LAX – ANNIE YANG <annie.yang@lax.aftyusa.com>', subject: 'RE: DUTY CONFIRMATION [Container#TCLU9707538] NB0025', text: 'Please find the deliver plan… LFD 12/01' });
+  assert.equal(out.matched, true);
+  let x = await db.get('plan_containers', c.id);
+  assert.equal(x.delivery.date, D(4)); assert.equal(x.delivery.time, '8:30am'); assert.equal(x.delivery.lfd, D(4)); assert.equal(x.delivery.status, 'to_confirm'); assert.equal(x.delivery.contact, 'annie.yang@lax.aftyusa.com');
+  // 2) a later email from the same trucker with no numbers → the only container they're delivering
+  ai = { delivery_time: '10:00am', is_delivery: true, summary: 'Moved to 10am' };
+  out = await WH.handleEmail({ db, config: {}, from: 'Mandy <mandy.yu@lax.aftyusa.com>', subject: 'delivery time', text: 'we can do 10am instead' });
+  assert.equal(out.matched, true); assert.equal((await db.get('plan_containers', c.id)).delivery.time, '10:00am');
+  // 3) unknown → To assign, then assigned by hand
+  ai = { container_no: 'ZZZU0000001', is_delivery: true, summary: 'Deliver Friday' };
+  out = await WH.handleEmail({ db, config: {}, from: 'ops@other-trucker.com', subject: 'Delivery Friday', text: 'container ZZZU0000001' });
+  assert.equal(out.matched, false);
+  const st = db.tables.settings[0]; assert.equal(st.warehouse_inbox.length, 1);
+  let pg = (await req(base, 'GET', '/admin/warehouse', { cookie })).text;
+  assert.match(pg, /To assign/); assert.match(pg, /Confirm…/); assert.match(pg, /10:00am/); assert.match(pg, /warehouse@in\.lulyboo\.space/);
+  ai = { delivery_date: D(5), summary: 'Deliver Friday' };
+  assert.equal((await req(base, 'POST', `/admin/warehouse/inbox/${st.warehouse_inbox[0].id}/assign`, { cookie, form: { container: c.id } })).status, 303);
+  assert.equal(db.tables.settings[0].warehouse_inbox.length, 0); assert.equal((await db.get('plan_containers', c.id)).delivery.date, D(5));
+  // 4) confirm the plan: reply goes to the trucker, replies come back to warehouse@
+  assert.equal((await req(base, 'POST', `/admin/warehouse/${c.id}/confirm`, { cookie, form: { to: 'annie.yang@lax.aftyusa.com', cc: 'marsel@lulyboo.com', subject: 'RE: DUTY CONFIRMATION', body: 'Hi Annie,\n\nConfirmed.' } })).status, 303);
+  assert.deepEqual(sent.at(-1).to, ['annie.yang@lax.aftyusa.com']); assert.ok([].concat(sent.at(-1).reply_to).includes('warehouse@in.lulyboo.space'));
+  assert.equal((await db.get('plan_containers', c.id)).delivery.status, 'confirmed');
+  // 5) delivered yesterday, POD + receipt missing → the person receiving it is asked at 10:00 LA, once
+  await req(base, 'POST', `/admin/warehouse/${c.id}/plan`, { cookie, form: { resp_name: 'Jess', resp_email: 'jess@lulyboo.com' } });
+  await db.update('plan_containers', { id: c.id }, { delivered_at: `${D(-1)}T12:00:00Z` });
+  const ten = new Date(`${today}T18:30:00Z`);   // 10:30 in Los Angeles
+  const r1 = await WH.runWarehouse({ db, config: { publicUrl: 'http://x' }, at: ten }); assert.equal(r1.docs, 1);
+  assert.deepEqual(sent.at(-1).to, ['jess@lulyboo.com']); assert.match(sent.at(-1).subject, /Please upload Proof of delivery \+ Warehouse receipt/);
+  assert.equal((await WH.runWarehouse({ db, config: {}, at: ten })).docs, 0, 'not again the same day');
+  pg = (await req(base, 'GET', '/admin/warehouse', { cookie })).text;
+  assert.match(pg, /Documents to collect/); assert.match(pg, /Proof of delivery missing/);
+});

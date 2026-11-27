@@ -135,7 +135,7 @@ function readyRoutes(router, { db, config }) {
     const list = (v) => String(v || '').split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
     const edits = f.body != null || f.to != null ? { to: list(f.to), cc: list(f.cc), subject: String(f.subject || '').slice(0, 300), text: String(f.body || '').slice(0, 20000), code: String(f.code || '') } : null;
     try { await RC.send(db, config, sup, ls, { kind: f.kind === 'followup' ? 'followup' : 'check', by: by(req), edits }); flash(res, 'ok', `${f.kind === 'followup' ? 'Status update asked' : 'Ready-to-ship confirmation sent'} — ${sup.name}, PO ${f.po}`); }
-    catch (e) { if (RC.isMissing(e)) throw new HttpError(400, 'Run supabase/ready-checks.sql in Supabase first'); flash(res, 'warn', e.message); }
+    catch (e) { console.error('Ready check send:', e.message); flash(res, 'warn', RC.isMissing(e) ? `Not sent — the ready_checks table is missing: run supabase/ready-checks.sql in Supabase (${String(e.message).slice(0, 140)})` : `Not sent — ${e.message}`); }
     res.redirect(back(f));
   }));
   // dashboard switch: hide POs whose freight is booked (remembered in a cookie for a year)

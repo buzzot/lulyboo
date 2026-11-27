@@ -604,11 +604,19 @@ module.exports = function requestRoutes(router, { db, config }) {
       catch (err) { const P = require('../projects'); await P.notifyOwner(config, `[Customs] Could not read an email from ${from}`, `${subject}\n${err.message}`).catch(() => null); return res.json({ ok: true, customs: false, error: err.message }); }
     }
     // Forwarder shipment updates: sent / CC'd to shipments@…, or replies in the quote thread once that forwarder is booked.
+    // Warehouse: trucker / forwarder delivery updates sent or CC'd to warehouse@… → the container's delivery plan
+    const WH = require('../warehouse');
+    if (toList.some((x) => x.trim().toLowerCase() === WH.inbox() || /^warehouse@/i.test(x.trim()))) {
+      const out = await WH.handleEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() }).catch((e) => ({ matched: false, error: e.message }));
+      return res.json({ ok: true, warehouse: true, ...out });
+    }
     const FW = require('../forwarding');
     const bookedCode = await FW.quoteIsBooked(db, subject, text).catch(() => null);
     if (bookedCode || toList.some((x) => /^shipments@/i.test(x.trim()))) {
       const out = await FW.handleFwdEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat(), quoteCode: bookedCode });
-      return res.json({ ok: true, forwarder: true, ...out });
+      // a delivery plan / LFD / POD in a forwarder thread also goes to Warehouse (only when it matches a container)
+      const wh = await WH.handleEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: [], strict: true }).catch(() => ({ matched: false }));
+      return res.json({ ok: true, forwarder: true, ...out, warehouse: wh.matched || false });
     }
     // Forwarder quotations: replies to our request for quotation carry LBQ-XXXXX in the subject.
     const QT = require('../quotes');

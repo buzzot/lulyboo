@@ -127,9 +127,12 @@ async function send(db, config, supplier, lines, { kind = 'check', by = null, ed
   const m = compose({ supplier, items, kind, insp, code });
   if (edits?.subject) m.subject = CODE_RE.test(edits.subject) ? edits.subject : `${edits.subject} [${code}]`;   // the code keeps replies on this thread
   if (edits?.text && edits.text.trim() !== m.text.trim()) { m.text = edits.text.trim(); m.html = textHtml(m.text); }
-  await sendEmail(config, { to, cc, subject: m.subject, text: m.text, html: m.html, replyTo: [docsAddress()] });
+  // saved first: if the table isn't there, nothing goes out (no email without a record to match the reply to)
   const at = now();
-  return db.insert('ready_checks', { code, supplier_id: supplier.id, kind, items, pos: [...new Set(items.map((i) => i.po))], ship_date: items.map((i) => i.ship_date).sort()[0], status: 'sent', sent_at: at, sent_to: to.join(', '), cc: cc.join(', '), subject: m.subject, asks: m.asks, reminders: 0, facts: {}, log: [{ at, text: `${kind === 'followup' ? 'Status update asked' : 'Ready-to-ship confirmation sent'} to ${to.join(', ')}${by ? ` by ${by}` : ''}` }], created_at: at, updated_at: at });
+  const rec = await db.insert('ready_checks', { code, supplier_id: supplier.id, kind, items, pos: [...new Set(items.map((i) => i.po))], ship_date: items.map((i) => i.ship_date).sort()[0], status: 'sent', sent_at: at, sent_to: to.join(', '), cc: cc.join(', '), subject: m.subject, asks: m.asks, reminders: 0, facts: {}, log: [{ at, text: `${kind === 'followup' ? 'Status update asked' : 'Ready-to-ship confirmation sent'} to ${to.join(', ')}${by ? ` by ${by}` : ''}` }], created_at: at, updated_at: at });
+  try { await sendEmail(config, { to, cc, subject: m.subject, text: m.text, html: m.html, replyTo: [docsAddress()] }); }
+  catch (e) { await db.remove('ready_checks', { id: rec.id }).catch(() => null); throw e; }
+  return rec;
 }
 
 async function remind(db, config, k, { by = null } = {}) {
