@@ -2971,10 +2971,10 @@
   var touched = false, seq = 0;
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   var fmt = function (n) { return n == null ? '—' : Number(n).toLocaleString('en-US'); };
-  var KN = { '': 'detected type', Invoice: 'commercial invoice', 'Packing list': 'packing list', CIPL: 'CI + PL', 'Bill of lading': 'bill of lading', 'Warehouse receipt': 'warehouse receipt', 'Loading photos': 'photos', Other: 'document' };
+  var KN = { '': 'detected type', Invoice: 'commercial invoice', 'Packing list': 'packing list', CIPL: 'CI + PL', 'Bill of lading': 'bill of lading', 'Arrival notice': 'arrival notice', 'Warehouse receipt': 'warehouse receipt', 'Loading photos': 'photos', Other: 'document' };
   var kind = function () { var k = form.querySelector('input[name=kind]:checked'); return k ? k.value : ''; };
   // a bill of lading can cover the whole container (several suppliers); everything else is from one seller
-  var WHOLE = { 'Bill of lading': 1 }, whole = function () { return !!WHOLE[kind()]; };
+  var WHOLE = { 'Bill of lading': 1, 'Arrival notice': 1 }, whole = function () { return !!WHOLE[kind()]; };
   var allBtn = form.querySelector('[data-allpos]'), suggest = [];
   var sync = function () {
     var on = boxes.filter(function (b) { return b.checked; });

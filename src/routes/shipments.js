@@ -80,7 +80,7 @@ async function load(db) {
     if (stage !== 'delivered') {
       if (f.eta_prev && f.eta && f.eta > f.eta_prev && stage === 'sailed') flags.push(['amb', `ETA +${daysBetween(f.eta_prev, f.eta)} days`]);
       // one compact documents flag: "Missing: CI ×2 · BL ×2" — which POs in the tooltip
-      const SHORTK = { 'Bill of lading': 'BL', 'Warehouse receipt': 'WR', 'Loading photos': 'Photos' };
+      const SHORTK = { 'Bill of lading': 'BL', 'Arrival notice': 'AN', 'Warehouse receipt': 'WR', 'Loading photos': 'Photos' };
       const miss = new Map(); const addM = (k, po) => { if (!miss.has(k)) miss.set(k, new Set()); miss.get(k).add(PL.normPo(po) || '—'); };
       if (pd.alert) for (const p of pd.open) for (const k of p.missing) addM(k, p.po);
       for (const m of other) addM(SHORTK[m.kind] || m.kind, m.po);
@@ -434,16 +434,17 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const pf = (x) => fl(x.name, `/admin/logistics/planning/files/${x.id}`, x.content_type, null, { src: 'plan', ref: x.id });
     const of = (re) => { const seen = new Set(); return sFiles.filter((x) => re.test(x.kind || '')).filter((x) => { const k = `${x.name}|${x.size}`; if (seen.has(k)) return false; seen.add(k); return true; }).map(pf); };   // a B/L filed to several suppliers shows once
     const fwdFiles = (re) => ups.filter((u) => re.test(u.facts?.doc_type || '')).flatMap((u) => (u.files || []).map((x, i) => fl(x.name, `/admin/orders/shipping/fwd/${u.id}/files/${i}`, x.type, null, { src: 'fwd', ref: u.id, i })));
+    const uniq = (l) => { const seen = new Set(); return l.filter((x) => { const k = x.name; if (seen.has(k)) return false; seen.add(k); return true; }); };   // a file added here and also read as a forwarder update shows once
     const fwdDocs = new Set((f.docs || []).map((d) => d.type));
     const bl = [f.hbl_no ? `HBL ${f.hbl_no}` : '', f.mbl_no ? `MBL ${f.mbl_no}` : ''].filter(Boolean).join(' · ');
     const docs = [
       ...(r.pd ? [] : [{ l: 'Commercial invoice', files: of(/invoice/i) }, { l: 'Packing list', files: of(/packing/i) }]),
       ...(r.kind === 'lcl' ? [{ l: 'Warehouse receipt (FCR)', files: of(/warehouse/i) }] : []),
-      { l: r.kind === 'courier' ? 'Courier waybill' : r.kind === 'lcl' ? 'House B/L' : 'Bill of lading', files: [...of(/bill of lading|waybill/i), ...fwdFiles(/bill|bl/i)], note: bl, okIf: !!(f.hbl_no || f.mbl_no) },
+      { l: r.kind === 'courier' ? 'Courier waybill' : r.kind === 'lcl' ? 'House B/L' : 'Bill of lading', files: uniq([...of(/bill of lading|waybill/i), ...fwdFiles(/bill|bl/i)]), note: bl, okIf: !!(f.hbl_no || f.mbl_no) },
       ...(of(/loading photo/i).length ? [{ l: 'Loading photos', files: of(/loading photo/i), gallery: true }] : []),
       ...(r.kind === 'courier' ? [] : [
         { l: 'Booking / shipping advice', files: fwdFiles(/booking|shipping_advice|so\b/i), okIf: fwdDocs.has('booking') || fwdDocs.has('shipping_advice'), optional: true },
-        { l: 'Arrival notice', files: fwdFiles(/arrival/i), okIf: fwdDocs.has('arrival_notice') || !!r.arrivedOn },
+        { l: 'Arrival notice', files: uniq([...of(/arrival notice/i), ...fwdFiles(/arrival/i)]), okIf: fwdDocs.has('arrival_notice') || !!r.arrivedOn },
       ]),
       ...(r.kind === 'courier' ? [] : [{ l: 'Customs entry (7501)', customs: true, files: r.entries.flatMap((e) => (e.files || []).map((x, i) => fl(x.name, `/admin/logistics/customs/${e.id}/file/${i}`, x.type))), okIf: r.entries.some((e) => e.status === 'saved') }]),
       { l: 'Delivery receipt / POD', files: ((r.c || r.sc).delivery_files || []).map((x, i) => fl(x.name, `${BASE}/${r.id}/file/${i}`, x.type, null, { src: 'delivery', ref: '', i })) },
@@ -535,10 +536,10 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const supName = {}; for (const sid of new Set(addPos.map((l) => l.supplier_id))) supName[sid] = (r.pd?.pos || []).find((p) => p.sid === sid)?.supplier || (await db.get('suppliers', sid).catch(() => null))?.name || 'Supplier';
     const bySup = {}; for (const l of addPos) (bySup[l.supplier_id] = bySup[l.supplier_id] || []).push(l);
     const needOf = (l) => { const p = (r.pd?.pos || []).find((x) => x.sid === l.supplier_id && PL.normPo(x.po) === PL.normPo(l.po)); if (!p) return ''; return p.missing.length ? `${p.missing.join(' · ')} missing` : '✓ CI & PL'; };
-    const ADD_KINDS = [['', 'Detect'], ['Invoice', 'Commercial invoice'], ['Packing list', 'Packing list'], ['CIPL', 'CI + PL'], ['Bill of lading', 'Bill of lading'], ['Warehouse receipt', 'Warehouse receipt'], ['Loading photos', 'Photos'], ['Other', 'Other']];
+    const ADD_KINDS = [['', 'Detect'], ['Invoice', 'Commercial invoice'], ['Packing list', 'Packing list'], ['CIPL', 'CI + PL'], ['Bill of lading', 'Bill of lading'], ['Arrival notice', 'Arrival notice'], ['Warehouse receipt', 'Warehouse receipt'], ['Loading photos', 'Photos'], ['Other', 'Other']];
     const addDlg = addPos.length && editable ? html`<dialog id="dx-add" class="rp-modal ad-dlg" aria-labelledby="dx-add-t"><form method="post" action="${BASE}/${r.id}/upload" enctype="multipart/form-data" data-busy data-adddoc="${`${BASE}/${r.id}/upload/scan`}">
       <div class="rp-top"><h2 id="dx-add-t">Add a document</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
-      <p class="sub">A file you got another way — WeChat, the forwarder, a download. One file can cover several POs; it's stored once. An invoice or packing list is from one supplier; a bill of lading can cover the whole container.${AI.enabled() ? ' AI reads it, checks the quantities and suggests the POs.' : ''}</p>
+      <p class="sub">A file you got another way — WeChat, the forwarder, a download. One file can cover several POs; it's stored once. An invoice or packing list is from one supplier; a bill of lading or arrival notice can cover the whole container.${AI.enabled() ? ' AI reads it, checks the quantities and suggests the POs.' : ''}</p>
       <div class="ad-lbl">POs this file covers${Object.keys(bySup).length > 1 ? html`<button type="button" class="link small ad-whole" data-allpos hidden>Whole container — all ${addPos.length} POs</button>` : ''}</div>
       <div class="ad-pos">${Object.entries(bySup).map(([sid, ls]) => html`<div class="ad-sup" data-sup="${sid}"><div class="ad-sh"><b>${supName[sid]}</b>${ls.length > 1 ? html`<button type="button" class="link small" data-allsup="${sid}">Select all ${ls.length}</button>` : ''}<small class="ad-other">another supplier — one file is from one seller</small></div>
         <div class="ad-row">${ls.map((l) => html`<label class="ad-po"><input type="checkbox" name="pos" value="${`${l.supplier_id}|${l.po}`}" data-sid="${sid}" data-po="${PL.normPo(l.po)}"><i aria-hidden="true"></i><b>${PL.normPo(l.po)}</b>${needOf(l) ? html`<small>${needOf(l)}</small>` : ''}<em class="ad-sug" hidden>AI ✓</em></label>`)}</div></div>`)}</div>
@@ -749,7 +750,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const ups = Object.values(files || {}).flat().filter((x) => x.buffer?.length);
     if (!ups.length) return res.json({ ok: false });
     const guess = SD.kindOf(ups[0].name, ups[0].type);
-    if (!AI.enabled() || /photos/i.test(guess) && ups.every((u) => /^image\//.test(u.type || ''))) return res.json({ ok: true, ai: false, kind: guess === 'Other' ? '' : guess });
+    if (!AI.enabled() || guess === 'Arrival notice' || /photos/i.test(guess) && ups.every((u) => /^image\//.test(u.type || ''))) return res.json({ ok: true, ai: false, kind: guess === 'Other' ? '' : guess });
     const planned = r.lines.map((l) => ({ id: l.id, sid: l.supplier_id, po: PL.normPo(l.po), product: l.product || '', qty: l.qty, cartons: l.cartons, cbm: l.cbm }));
     let facts = {};
     try { facts = SD.factsFrom(await SD.readDocs({ files: ups.map((u) => ({ ...u, kind: guess })), planned })); }
@@ -779,12 +780,12 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       .filter((x) => x.sid && x.po && r.lines.some((l) => l.supplier_id === x.sid && PL.normPo(l.po) === PL.normPo(x.po)));
     if (!picks.length) throw new HttpError(400, 'Choose the PO(s) this file is for');
     // a commercial invoice / packing list / photos come from one seller; a bill of lading can cover the whole container
-    const WHOLE = ['Bill of lading'];
+    const WHOLE = ['Bill of lading', 'Arrival notice'];
     const sids = [...new Set(picks.map((x) => x.sid))];
-    if (sids.length > 1 && !WHOLE.includes(f.kind)) throw new HttpError(400, 'An invoice, packing list or photos come from one supplier — choose POs of one supplier (a bill of lading can cover several)');
+    if (sids.length > 1 && !WHOLE.includes(f.kind)) throw new HttpError(400, 'An invoice, packing list or photos come from one supplier — choose POs of one supplier (a bill of lading or arrival notice can cover several)');
     const ups = Object.values(files || {}).flat().filter((x) => x.buffer?.length);
     if (!ups.length) throw new HttpError(400, 'Choose a file');
-    const kinds = { Invoice: 'Invoice', 'Packing list': 'Packing list', CIPL: 'Invoice & packing list', 'Bill of lading': 'Bill of lading', 'Warehouse receipt': 'Warehouse receipt', 'Loading photos': 'Loading photos', Other: 'Other' };
+    const kinds = { Invoice: 'Invoice', 'Packing list': 'Packing list', CIPL: 'Invoice & packing list', 'Bill of lading': 'Bill of lading', 'Arrival notice': 'Arrival notice', 'Warehouse receipt': 'Warehouse receipt', 'Loading photos': 'Loading photos', Other: 'Other' };
     const again = new Set(); const toRead = []; let scs = [];
     for (const sid of sids) {   // filed to each supplier's POs (one copy per supplier, listed once on the shipment)
       const sp = [...new Set(picks.filter((x) => x.sid === sid).map((x) => PL.normPo(x.po)))];
@@ -795,7 +796,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         const out = await PL.storeFiles(db, sid, [u], { pos: sp, kind, by: by(req), shipmentId: mine[0]?.id || null, setKind: !!kinds[f.kind] });
         if (out.skipped.length) again.add(u.name);
         if (out.errors.length) throw new HttpError(400, out.errors.join(' · '));
-        if (/bill of lading|warehouse receipt/i.test(kind) && !toRead.includes(u)) toRead.push(u);
+        if (/bill of lading|warehouse receipt|arrival notice/i.test(kind) && !toRead.includes(u)) toRead.push(u);
       }
     }
     const pos = [...new Set(picks.map((x) => PL.normPo(x.po)))];

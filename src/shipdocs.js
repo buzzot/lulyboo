@@ -379,6 +379,7 @@ function mergeFacts(old, nw) {
 /** Kind of a file sent for a shipment. */
 function kindOf(name, type) {
   const n = String(name || '').toLowerCase();
+  if (/arrival.?notice|\bnotice.?of.?arrival|到港通知/.test(n)) return 'Arrival notice';
   if (/packing|\bp\.?l\b/.test(n)) return 'Packing list';
   if (/invoice|\bci\b/.test(n)) return 'Invoice';
   if (/\bb\/?l\b|bill.?of.?lading|\bhbl\b|\bmbl\b|lading|waybill|\bawb\b/.test(n)) return 'Bill of lading';

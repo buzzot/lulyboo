@@ -4308,6 +4308,15 @@ test('add a document: one file for several POs (stored once), one supplier only,
   assert.equal((row.match(/<b title="MBL YN0011\.pdf">/g) || []).length, 1, 'shown once'); assert.match(row, /✓ on file/);
   await req(base, 'POST', `/admin/orders/shipments/${c.id}/doc/remove`, { cookie, form: { src: 'plan', ref: bls[0].id, back: '' } });
   assert.equal(db.tables.plan_files.filter((f) => f.name === 'MBL YN0011.pdf').length, 0, 'both copies removed');
+  // an arrival notice: its own type in the form, whole container too, listed in the Arrival notice row
+  assert.match(det3, /name="kind" value="Arrival notice"/);
+  const an = new FormData(); an.append('file', new Blob([Buffer.from('%PDF arrival')], { type: 'application/pdf' }), 'AN YN0011.pdf'); an.append('kind', 'Arrival notice'); for (const v of [`${x.id}|70011`, `${y.id}|500015`]) an.append('pos', v);
+  assert.equal((await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: an, redirect: 'manual' })).status, 303);
+  assert.ok(db.tables.plan_files.filter((f) => f.name === 'AN YN0011.pdf').every((f) => f.kind === 'Arrival notice'));
+  const det4 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  const anRow = det4.slice(det4.indexOf('<b>Arrival notice</b>'), det4.indexOf('</tr>', det4.indexOf('<b>Arrival notice</b>')));
+  assert.equal((anRow.match(/<b title="AN YN0011\.pdf">/g) || []).length, 1); assert.match(anRow, /✓ on file/);
+  assert.equal(require('../src/shipdocs').kindOf('Arrival Notice ONEY123.pdf'), 'Arrival notice');
 });
 
 test('record-only shipments: create, list in Records (not active), detail, from a forwarder update, edit, make full, delete', async (t) => {
