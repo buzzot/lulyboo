@@ -2576,7 +2576,7 @@ test('shipping documents: request on the loading date, reply by email read by AI
   assert.ok(out.matched); assert.equal(sc.status, 'received'); assert.equal(sc.container_no, 'CSNU6184207'); assert.equal(sc.seal_no, 'CN4471902');
   assert.deepEqual(db.tables.plan_files.filter((f) => f.shipment_id === sc.id).map((f) => f.kind).sort(), ['Invoice', 'Packing list', 'Warehouse receipt']);
   assert.deepEqual(sc.missing, ['Bill of lading']);
-  assert.ok(db.tables.plan_orders.find((x) => x.id === o.id).shipped);
+  assert.ok(!db.tables.plan_orders.find((x) => x.id === o.id).shipped, 'loaded, but the booked container has not sailed: the line stays with it');
   assert.ok(sent.slice(before).some((m) => /\[Shipping documents\] Huanger/.test(m.subject)));
   assert.equal((await SD.handleShipEmail({ db, config, from: 'x@y.cn', subject: 'RE: LBS-ZZZZZ', text: '' })).matched, false);
 
@@ -5677,4 +5677,28 @@ test('7501: a colour variant in the container is suggested on the line with its 
   lines[0].products.pop(); lines[0].skip = [o2.id];
   await CU.variants(db, lines, c.id);
   assert.equal(lines[0].products.length, 1);
+});
+
+test('a line in a container that has not sailed is never "shipped": supplier docs, receipts and moves keep it on Load containers', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const SD = require('../src/shipdocs');
+  const s = await db.insert('suppliers', { name: 'Hooks Co' });
+  const old = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'planned' });
+  const mk = (sku, extra = {}) => db.insert('plan_orders', { supplier_id: s.id, po: '600030', sku, product: `Heart Hook ${sku}`, qty: 5000, cbm: 3.5, port: 'CNNGB', ready_date: '2026-11-23', container_id: c.id, ...extra });
+  const a = await mk('HHHP 001'); const b = await mk('HHHC 001'); const x = await mk('HHH 001', { shipped: true });   // already wrongly shipped
+  // 1) the supplier sends CI & PL before loading: the lines stay open
+  const sc = await db.insert('ship_confirmations', { supplier_id: s.id, container_id: c.id, pos: ['600030'], order_ids: [a.id, b.id], status: 'requested', planned: [] });
+  await SD.receive(db, {}, sc, { by: 'test', quiet: true, files: [{ name: 'CI PL 600030.xlsx', type: 'application/vnd.ms-excel', buffer: Buffer.from('x'), kind: 'Packing list' }] });
+  assert.ok(!(await db.get('plan_orders', a.id)).shipped, 'packing list before loading does not ship the line');
+  // 2) the load page shows all three, and heals the wrongly shipped one
+  const pg = (await req(base, 'GET', '/admin/logistics/planning/load?port=CNNGB', { cookie })).text;
+  assert.match(pg, /HHH 001|Heart Hook HHH 001/); assert.equal((await db.get('plan_orders', x.id)).shipped, false);
+  // 3) moving a line out of a shipped container into a planned one re-opens it
+  const y = await db.insert('plan_orders', { supplier_id: s.id, po: '600031', product: 'Hook', qty: 10, cbm: 1, port: 'CNNGB', container_id: old.id, shipped: true });
+  await req(base, 'POST', `/admin/logistics/planning/line/${y.id}/move`, { cookie, form: { container_id: c.id } });
+  assert.equal((await db.get('plan_orders', y.id)).container_id, c.id); assert.equal((await db.get('plan_orders', y.id)).shipped, false);
 });

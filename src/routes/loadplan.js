@@ -72,7 +72,7 @@ function loadPlanRoutes(router, { db, config }) {
     const from = o.container_id && o.container_id !== c.id ? await db.get('plan_containers', o.container_id).catch(() => null) : null;
     for (const x of [c, from]) if (x && x.status === 'booked') { flash(res, 'warn', `${require('../shipname').shipName(x)} is booked and locked — unlock it on Load containers to change what's in it`); return res.redirect(back); }
     const gone = c.status === 'shipped' || !!c.delivered_at;
-    await db.update('plan_orders', { id: o.id }, { container_id: c.id, ...(o.port ? {} : { port: c.port }), ...(gone ? { shipped: true } : {}), updated_at: now() });
+    await db.update('plan_orders', { id: o.id }, { container_id: c.id, ...(o.port ? {} : { port: c.port }), ...(gone ? { shipped: true } : o.received_at ? {} : { shipped: false }), updated_at: now() });
     flash(res, 'ok', `${o.product || `PO ${o.po}`} → ${require('../shipname').shipName(c)}${gone ? ' (shipped)' : ''}`);
     res.redirect(back);
   }));

@@ -55,7 +55,9 @@ async function update(db, c, f) {
 /** The PO lines that are still open become shipped (they stay where they are otherwise). */
 async function markShipped(db, pos) {
   const lines = await db.list('plan_orders').catch(() => []);
-  for (const l of lines) if (!l.shipped && pos.some((p) => p.sid === l.supplier_id && p.po === PL.normPo(l.po))) await db.update('plan_orders', { id: l.id }, { shipped: true, updated_at: now() }).catch(() => null);
+  const open = new Set((await db.list('plan_containers').catch(() => [])).filter((c) => c.status !== 'shipped' && !c.delivered_at).map((c) => c.id));
+  // a later part of the same PO, waiting in a container that hasn't sailed, stays open
+  for (const l of lines) if (!l.shipped && !(l.container_id && open.has(l.container_id)) && pos.some((p) => p.sid === l.supplier_id && p.po === PL.normPo(l.po))) await db.update('plan_orders', { id: l.id }, { shipped: true, updated_at: now() }).catch(() => null);
 }
 
 async function addFiles(db, c, files, { by = null } = {}) {

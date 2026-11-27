@@ -426,7 +426,7 @@ async function receive(db, config, sc, { from = '', text = '', files = [], form 
   patch.missing = missingKinds(checklistOf(nsc, await filesOf(db, nsc), f.sailing, chinaNow().day));
   await db.update('ship_confirmations', { id: sc.id }, patch);
   // confirmed → the PO lines are shipped
-  if (!delayed && patch.confirmed_at) for (const id of sc.order_ids || []) await db.update('plan_orders', { id }, { shipped: true, updated_at: now }).catch(() => null);
+  if (!delayed && (facts.loaded || facts.container_no)) await shipLines(db, sc.order_ids || []);
   if (!quiet) await tellOwner(db, config, { ...sc, ...patch }, note);
   return { matched: true, id: sc.id, delayed: !!delayed, files: stored.length };
 }
@@ -468,6 +468,16 @@ function matchLines(planned = [], facts = {}) {
   });
 }
 
+/** A line in a container is shipped when its container is (Load containers / the forwarder decide) — a supplier's
+ *  documents or "loaded" reply never ship a line whose container hasn't sailed. A line in no container can be. */
+async function canShip(db, id) {
+  const l = await db.get('plan_orders', id).catch(() => null); if (!l) return false;
+  if (!l.container_id) return true;
+  const c = await db.get('plan_containers', l.container_id).catch(() => null);
+  return !c || c.status === 'shipped' || !!c.delivered_at;
+}
+async function shipLines(db, ids) { for (const id of ids) if (await canShip(db, id)) await db.update('plan_orders', { id }, { shipped: true, updated_at: new Date().toISOString() }).catch(() => null); }
+
 /** Accept the actual figures: PO lines get them, the container its number, products their packing; stats kept. */
 async function accept(db, sc, { values = {}, updateProducts = false, by = null } = {}) {
   const facts = { ...(sc.facts || {}), ...Object.fromEntries(Object.entries(values).filter(([k]) => ['container_no', 'seal_no', 'bl_no', 'loaded_on'].includes(k))) };
@@ -477,7 +487,7 @@ async function accept(db, sc, { values = {}, updateProducts = false, by = null }
   const forCatalog = [];
   for (const { plan, act } of pairs) {
     if (!act) continue;
-    const patch = { updated_at: now, shipped: true };
+    const patch = { updated_at: now, ...(await canShip(db, plan.id) ? { shipped: true } : {}) };
     for (const k of ['cartons', 'gross_kg', 'cbm']) if (act[k] != null) patch[k] = act[k];
     if (act.cbm != null) patch.cbm_estimated = false;
     if (act.carton) [patch.carton_l_cm, patch.carton_w_cm, patch.carton_h_cm] = act.carton;
