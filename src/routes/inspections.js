@@ -280,6 +280,63 @@ module.exports = function inspectionRoutes(router, { db, config }) {
         ${i[`${side}_confirm`] === 'issue' ? html`<form method="post" action="${`${url}/keep`}" class="inline">${hid}<input type="hidden" name="side" value="${side}"><button class="link small">Keep ${PL.short(i.inspection_date)}</button></form>` : ''}
         ${i[`${side}_confirm`] !== 'confirmed' && i.inspection_date ? html`<form method="post" action="${`${url}/confirm`}" class="inline">${hid}<input type="hidden" name="side" value="${side}"><button class="link small" title="They confirmed another way (phone, WeChat)">Mark confirmed</button></form>` : ''}</span></div>`;
     const kinds = ['Inspection report', 'Inspection invoice', 'Inspection photos', 'Inspection document'];
+    const messagesCard = async (i, { co, sup, url, hid }) => {
+      const msgs = [...(i.messages || [])].reverse();
+      const TYPE = { quote: ['Booking proposal', 'warn'], info_request: ['Asks for information', 'warn'], date_issue: ['Date issue', 'bad'], booking_confirmed: ['Booking confirmed', 'ok'], date_confirmed: ['Date confirmed', 'ok'], report: ['Report', 'plan'], report_and_invoice: ['Report + invoice', 'plan'], invoice: ['Invoice', 'bk'], other: ['Message', ''] };
+      const ANS = { approved: ['Approved', 'ok'], declined: ['Declined', 'bad'], answered: ['Answered', 'done'] };
+      const allF = await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => []);
+      const reqIds = new Set(IN.reqSet(allF, i).map((f) => f.id));
+      const theirs = new Set((i.messages || []).filter((m) => m.dir === 'in').flatMap((m) => (m.files || []).map((x) => x.id)));   // what they sent us is not offered back
+      const sendable = allF.filter((f) => f.inspection_id === i.id || reqIds.has(f.id) || (f.pos || []).some((p) => IN.posOf(i).some((q) => PL.normPo(q) === PL.normPo(p)))).filter((f) => !/^Inspection (report|invoice|photos)$/.test(f.kind || '') && !theirs.has(f.id)).slice(0, 14);
+      const openN = msgs.filter((m) => m.dir === 'in' && m.status === 'open').length;
+      // documents look like everywhere else on the portal (PO Documents list)
+      const ico = (f) => (/pdf/.test(f.content_type || '') ? 'PDF' : /image/.test(f.content_type || '') ? 'IMG' : /sheet|excel|csv/.test(f.content_type || '') ? 'XLS' : /word/.test(f.content_type || '') ? 'DOC' : 'FILE');
+      const fUrl = (f) => `/admin/logistics/planning/files/${f.id}`;
+      const nameA = (f) => html`<a class="dc-nm" href="${`${fUrl(f)}?inline=1`}" title="${f.name}" ${/pdf|image/.test(f.content_type || '') ? raw(`data-preview="${fUrl(f)}?inline=1" data-type="${/image/.test(f.content_type) ? 'image' : 'doc'}" data-dl="${fUrl(f)}"`) : raw('target="_blank" rel="noopener"')}>${f.name}</a>`;
+      const docRow = (f) => html`<div class="dc-row"><span class="cp-ficon ${ico(f).toLowerCase()}">${ico(f)}</span><span class="dc-nc">${nameA(f)}</span><span class="dc-tc"><span class="dc-tg">${f.kind || 'Document'}</span></span><span class="dc-d">${PL.short(String(f.created_at || '').slice(0, 10))}</span><span class="dc-d">${f.size ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span><a class="dc-dl" href="${fUrl(f)}" title="Download" aria-label="${`Download ${f.name}`}">⬇</a></div>`;
+      const recOf = (x) => allF.find((f) => f.id === x.id) || { ...x, content_type: /\.pdf$/i.test(x.name || '') ? 'application/pdf' : /\.(png|jpe?g|webp)$/i.test(x.name || '') ? 'image/png' : '' };
+      const who = (m) => (m.dir === 'out' ? 'You' : m.role === 'supplier' ? sup.name || 'Supplier' : co?.name || 'Inspection company');
+      const facts = (a) => [a.date ? html`<span class="im-f">${PL.short(a.date)}${i.inspection_date && a.date !== i.inspection_date ? html` <i>(we asked ${PL.short(i.inspection_date)})</i>` : ''}</span>` : '',
+        a.fee != null ? html`<span class="im-f" title="${a.fee_breakdown || ''}">${a.currency && !/usd/i.test(a.currency) ? `${a.currency} ${a.fee}` : IN.usd(a.fee)}</span>` : '',
+        a.sample ? html`<span class="im-f">${a.sample} pcs sample</span>` : '', a.their_ref ? html`<span class="im-f">ID ${a.their_ref}</span>` : ''].filter(Boolean);
+      // the answer popup: Approve · Other date · Decline · Reply
+      const pane = async (m, action) => {
+        const d = await IN.replyDraft(db, i, m, action); const a = m.ai || {};
+        const wantSpec = /spec|requirement|drawing|artwork|file/i.test((a.asks || []).join(' '));
+        return html`<form method="post" action="${`${url}/reply`}" enctype="multipart/form-data" class="im-pane ${action}" data-busy>${hid}<input type="hidden" name="msg" value="${m.id}"><input type="hidden" name="action" value="${action}">
+          ${action === 'approve' ? html`<div class="im-row"><label>Inspection day <input type="date" name="date" value="${a.date || i.inspection_date || ''}"></label><label>Fee (USD) <input name="fee" inputmode="decimal" value="${a.fee ?? i.fee_quoted ?? ''}"></label></div>` : ''}
+          ${action === 'date' ? html`<div class="im-row"><label>Date you want <input type="date" name="date" required></label><span class="sub">Goes into the email where it says {date}.</span></div>` : ''}
+          <div class="im-row2"><label>To <input name="to" value="${d.to.join(', ')}"></label><label>Cc <input name="cc" value="${d.cc.join(', ')}"></label></div>
+          <label>Subject <input name="subject" value="${d.subject}"></label>
+          <label>Message <textarea name="body" rows="10">${d.body}</textarea></label>
+          ${action !== 'decline' ? html`<fieldset class="im-att"><legend>Attach</legend><div class="dc-list">${sendable.map((f) => html`<label class="dc-row im-arow"><input type="checkbox" name="attach" value="${f.id}" ${wantSpec && (reqIds.has(f.id) || /\bspec(ification)?s?\b|requirement/i.test(`${f.kind || ''} ${f.name || ''}`)) ? raw('checked') : ''}><span class="cp-ficon ${ico(f).toLowerCase()}">${ico(f)}</span><span class="dc-nc"><span class="dc-nm">${f.name}</span></span><span class="dc-tc"><span class="dc-tg">${f.kind || 'Document'}</span></span><span class="dc-d">${f.size ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span></label>`)}</div>
+            <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple aria-label="Attach more files"><span class="dz-main" data-main>+ Drop or paste (⌘V) another file</span></div><ul class="dz-list" data-list></ul></div></fieldset>` : ''}
+          <div class="rp-acts"><span class="sub">cc marsel@lulyboo.com · replies come back to this inspection</span><button type="button" class="btn ghost" data-close-dialog>Cancel</button><button class="btn">${{ approve: 'Approve & send', date: 'Send', decline: 'Decline & send', reply: 'Send' }[action]}</button></div></form>`;
+      };
+      const dialog = async (m) => {
+        const tabs = m.status === 'open' && ['quote', 'date_issue'].includes(m.ai?.type) ? ['approve', 'date', 'decline', 'reply'] : ['reply', 'approve', 'date', 'decline'];
+        return html`<dialog id="${`im-dlg-${m.id}`}" class="rp-modal im-dlg" aria-labelledby="${`im-dlg-${m.id}-t`}"><div class="rp-top"><h2 id="${`im-dlg-${m.id}-t`}">Answer ${who(m)}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div>
+          ${m.ai?.summary ? html`<p class="im-quote">${m.ai.summary}</p>` : ''}
+          <div class="im-tabs">${tabs.map((a, n) => html`<input type="radio" name="${`im-tab-${m.id}`}" id="${`im-${m.id}-${a}`}" class="im-r im-r-${a}" ${n === 0 ? raw('checked') : ''}><label for="${`im-${m.id}-${a}`}" class="im-t">${IN.ACTIONS[a]}</label>`)}
+            <div class="im-panes">${await Promise.all(tabs.map((a) => pane(m, a)))}</div></div></dialog>`;
+      };
+      const row = (m) => {
+        const a = m.ai || {}; const t = m.dir === 'in' ? TYPE[a.type] || TYPE.other : [IN.ACTIONS[m.action] || 'Reply', m.action === 'approve' ? 'ok' : m.action === 'decline' ? 'bad' : 'done'];
+        return html`<li class="im-msg ${m.dir} ${m.status === 'open' ? 'open' : ''}"><span class="im-ic" aria-hidden="true">${m.dir === 'in' ? '↙' : '↗'}</span>
+          <div class="im-b"><div class="im-h"><b>${who(m)}</b><span class="cp-tag ${t[1]}">${t[0]}</span><span class="sub">${PL.short(String(m.at).slice(0, 10))}</span>${facts(a)}</div>
+            <div class="im-sum">${m.dir === 'in' ? a.summary || m.subject || '' : `to ${m.to || ''}`}${a.asks?.length && m.status === 'open' ? html` <span class="sub">· asks: ${a.asks.join(', ')}</span>` : ''}
+              ${m.text ? html` <button type="button" class="link small" data-open-dialog="${`im-txt-${m.id}`}">${m.dir === 'in' ? 'email' : 'sent'}</button>` : ''}</div></div>
+          ${(m.files || []).length ? html`<div class="dc-list im-docs">${m.files.map((x) => docRow(recOf(x)))}</div>` : ''}
+          <div class="im-a">${m.dir === 'in' ? (m.status === 'open' ? html`<button type="button" class="btn small" data-open-dialog="${`im-dlg-${m.id}`}">Answer…</button>` : ANS[m.status] ? html`<span class="cp-tag ${ANS[m.status][1]}" title="${m.answer || ''}">${ANS[m.status][0]}</span> <button type="button" class="link small" data-open-dialog="${`im-dlg-${m.id}`}">Reply</button>` : html`<button type="button" class="link small" data-open-dialog="${`im-dlg-${m.id}`}">Reply</button>`) : ''}</div>
+          ${m.text ? html`<dialog id="${`im-txt-${m.id}`}" class="rp-modal"><div class="rp-top"><h2>${m.subject || (m.dir === 'in' ? 'Email' : 'Sent')}</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close">×</button></div><pre class="im-pre">${m.text}</pre></dialog>` : ''}</li>`;
+      };
+      return html`<section class="card im-card" id="messages"><div class="in-sh"><h3 class="in-h">Messages${openN ? html` <span class="cp-tag warn">${openN} to answer</span>` : ''}</h3></div>
+        ${msgs.length ? html`<ul class="im-list">${msgs.map(row)}</ul>${await Promise.all(msgs.filter((m) => m.dir === 'in').map(dialog))}` : ''}
+        <form method="post" action="${`${url}/ingest`}" enctype="multipart/form-data" data-busy class="im-up">${hid}
+          <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.docx" aria-label="Booking, quote, report or invoice"><span class="dz-main" data-main>Drop or paste (⌘V) a booking, quote, report or invoice</span><span class="dz-hint">email screenshot or PDF · AI reads it</span></div><ul class="dz-list" data-list></ul></div>
+          <details class="im-paste"><summary class="link small">or paste the email text</summary><textarea name="text" rows="4" placeholder="Subject and body"></textarea></details>
+          <button class="btn small ghost">Add</button></form></section>`;
+    };
     res.html(page({
       title: `${i.ref} · Inspection`, nav: adminNav('inspections'), req, flash: takeFlash(req, res), wide: true,
       body: html`<p class="crumbs"><a href="${BASE}">Inspections</a> · ${IN.posOf(i).map((p, n) => html`${n ? ', ' : ''}<a href="${poUrl(i.supplier_id, p)}">PO ${p}</a>`)}</p>
@@ -294,21 +351,20 @@ module.exports = function inspectionRoutes(router, { db, config }) {
           ${['requested', 'scheduled', 'confirmed'].includes(i.status) ? html`<form method="post" action="${`${url}/date`}" class="in-date">${hid}<label>Inspection day <input type="date" name="date" value="${i.inspection_date || ''}" required></label><button class="btn small ghost">${i.inspection_date ? 'Change date' : 'Set date (booked)'}</button><span class="sub">A new date resets the confirmations — they go out again ${i.confirm_days ?? 7} days before.</span></form>` : ''}
         </section>
 
+        ${await messagesCard(i, { co, sup, url, hid })}
+
         ${['requested', 'scheduled', 'confirmed'].includes(i.status) && i.inspection_date ? html`<section class="card"><div class="in-sh"><h3 class="in-h">Confirmations · ${i.confirm_days ?? 7} days before</h3>
           ${i.inspection_date >= today ? html`<form method="post" action="${`${url}/send-confirm`}" class="inline">${hid}<button class="btn small ghost">${i.confirm_sent_at ? 'Send again' : 'Send now'}</button></form>` : ''}</div>
           ${i.confirm_sent_at ? html`${confRow('inspector', `Inspector · ${co?.name || ''}`)}${confRow('supplier', `Supplier · ${sup.name || ''}`)}<p class="sub">No answer in ${IN.LEAD.remind_after} days → a reminder goes to whoever hasn't answered, and you get a Telegram.</p>`
             : html`<p class="sub">On ${confDay ? PL.short(confDay) : '—'} two emails go out: to the inspector (date, factory, final qty) and to the supplier (is the date OK — goods finished and at least 80% packed?). Their replies are read automatically.</p>`}</section>` : ''}
 
         <section class="card"><div class="in-sh"><h3 class="in-h">Report & invoice</h3></div>
-          ${ai ? html`<div class="in-ai ${ai.result === 'fail' ? 'f' : ai.result === 'pass' ? 'p' : ''}"><span aria-hidden="true">🤖</span><span><b>AI summary — suggests ${String(ai.result || 'unknown').toUpperCase()}:</b> ${[ai.critical != null ? `${ai.critical} critical` : '', ai.major != null ? `${lim(ai.major, ai.limit_major)} major` : '', ai.minor != null ? `${lim(ai.minor, ai.limit_minor)} minor` : '', ai.sampled ? `${ai.sampled} pcs sampled` : ''].filter(Boolean).join(' · ')}${ai.findings ? ` — ${ai.findings}` : ''}${ai.summary ? html`<br><span class="sub">${ai.summary}</span>` : ''}${ai.pos?.length ? html`<br><span class="sub">POs in the report: ${ai.pos.join(', ')} — the report is on each of them.</span>` : ''}</span></div>` : html`<p class="sub">Reports and invoices emailed to <b>${IN.inspectAddress()}</b> (keep ${i.ref} in the subject) land here and on each PO. Or add them below.</p>`}
+          ${ai ? html`<div class="in-ai ${ai.result === 'fail' ? 'f' : ai.result === 'pass' ? 'p' : ''}"><span aria-hidden="true">🤖</span><span><b>AI summary — suggests ${String(ai.result || 'unknown').toUpperCase()}:</b> ${[ai.critical != null ? `${ai.critical} critical` : '', ai.major != null ? `${lim(ai.major, ai.limit_major)} major` : '', ai.minor != null ? `${lim(ai.minor, ai.limit_minor)} minor` : '', ai.sampled ? `${ai.sampled} pcs sampled` : ''].filter(Boolean).join(' · ')}${ai.findings ? ` — ${ai.findings}` : ''}${ai.summary ? html`<br><span class="sub">${ai.summary}</span>` : ''}${ai.pos?.length ? html`<br><span class="sub">POs in the report: ${ai.pos.join(', ')} — the report is on each of them.</span>` : ''}</span></div>` : html`<p class="sub">Reports and invoices emailed to <b>${IN.inspectAddress()}</b> (keep ${i.ref} in the subject) land here and on each PO.</p>`}
           ${i.status === 'report' || (ai && !['passed', 'failed'].includes(i.status)) ? html`<form method="post" action="${`${url}/decide`}" class="in-dec">${hid}<textarea name="note" rows="2" placeholder="Notes (shown on the PO) — e.g. labels to be fixed before loading"></textarea>
             <div class="in-decb"><button class="btn in-pass" name="decision" value="pass">Pass</button><button class="btn in-fail" name="decision" value="fail">Fail</button><button class="btn ghost" name="decision" value="pass_notes">Pass with notes</button><span class="sub">Fail puts the POs on hold — Confirm booking warns until there's a Pass.</span></div></form>` : ''}
           ${['passed', 'failed'].includes(i.status) ? html`<p class="in-decided">${tagOf(i)} <span class="sub">${i.decision === 'pass_notes' ? 'with notes · ' : ''}by ${i.decided_by || '—'} · ${i.decided_at ? PL.short(String(i.decided_at).slice(0, 10)) : ''}</span>${i.decision_note ? html`<br>${i.decision_note}` : ''} <form method="post" action="${`${url}/reopen`}" class="inline">${hid}<button class="link small">Change</button></form></p>` : ''}
           <div class="in-files">${docs.map((f) => html`<span class="in-file"><span class="cp-tag">${String(f.kind || 'File').replace('Inspection ', '')}</span> ${fileA(f)}</span>`)}</div>
-          <details class="in-add"><summary class="link small">Add report, invoice or photos</summary>
-            <form method="post" action="${`${url}/files`}" enctype="multipart/form-data" data-busy class="in-addf">${hid}
-              <div class="mdrop small" data-filebox><div class="mdrop-box"><input type="file" name="file" multiple required accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.docx" aria-label="Inspection files"><span class="dz-main" data-main>Drag &amp; drop or choose files</span><span class="dz-hint">AI reads the report and the invoice</span></div><ul class="dz-list" data-list></ul><p class="dz-note" data-note role="status"></p></div>
-              <div class="in-addr">${ddSel('kind', '', [['', 'Detect type'], ...kinds.map((k) => [k, k.replace('Inspection ', '')])])}<button class="btn small">Add</button></div></form></details>
+          <p class="sub">Add a report, invoice or photos under <a href="#messages">Messages</a>.</p>
           <details class="in-invd" ${i.invoice_amount != null || i.invoice_no || ai ? raw('open') : ''}><summary class="in-h">Invoice ${i.invoice_amount != null ? html`<span class="sub">${IN.usd(i.invoice_amount)}${i.paid_at ? ` · paid ${PL.short(i.paid_at)}` : i.invoice_due ? ` · due ${PL.short(i.invoice_due)}` : ''}</span>` : html`<span class="sub">read from the inspector's email, or type it</span>`}</summary>
           <form method="post" action="${`${url}/invoice`}" class="in-grid in-inv">${hid}
             <label><span class="lbl">Invoice no.</span><input name="invoice_no" value="${i.invoice_no || ''}"></label>
@@ -362,22 +418,43 @@ module.exports = function inspectionRoutes(router, { db, config }) {
     try { await IN.sendConfirmations(db, config, { ...i, ...reset, inspector_confirm: i.inspector_confirm === 'confirmed' ? 'confirmed' : null, supplier_confirm: i.supplier_confirm === 'confirmed' ? 'confirmed' : null }, { by: by(req) }); return ['ok', 'Confirmation emails sent to the inspector and the supplier']; }
     catch (e) { return ['warn', e.message]; }
   });
+  // files of a known kind, added by hand (a report is still read by AI for the summary)
+  const addFiles = async (i, list, kind, req) => {
+    for (const x of list) { const rec = await IN.storeFile(db, i, x, kind, by(req)); if (kind === 'Inspection invoice' && !i.invoice_file_id) await db.update('inspections', { id: i.id }, { invoice_file_id: rec.id }); }
+    if (kind === 'Inspection report' && require('../ai').enabled()) {
+      try { const r = await IN.readEmail({ text: `Inspection report for ${i.ref}, PO ${IN.posOf(i).join(', ')}`, files: list }); await db.update('inspections', { id: i.id }, { ai: { result: r.result || 'unknown', critical: IN.num(r.critical), major: IN.num(r.major), minor: IN.num(r.minor), limit_major: IN.num(r.limit_major), limit_minor: IN.num(r.limit_minor), sampled: IN.num(r.sampled), findings: r.findings || '', summary: r.summary || '', pos: r.pos || [], at: now() }, status: ['passed', 'failed'].includes(i.status) ? i.status : 'report', updated_at: now() }); } catch { /* summary optional */ }
+    }
+    const fresh = await db.get('inspections', i.id);
+    await db.update('inspections', { id: i.id }, { log: IN.withLog(fresh, `${list.length} file${list.length > 1 ? 's' : ''} added (${kind.replace('Inspection ', '')})`, by(req)), updated_at: now() });
+    return 'Added';
+  };
   act('files', async (i, f, req, files) => {
     const list = (files.file || []).filter((x) => x.buffer?.length);
     if (!list.length) return ['warn', 'Choose a file'];
     const kind = ['Inspection report', 'Inspection invoice', 'Inspection photos', 'Inspection document'].includes(f.kind) ? f.kind : null;
-    if (kind) {
-      for (const x of list) { const rec = await IN.storeFile(db, i, x, kind, by(req)); if (kind === 'Inspection invoice' && !i.invoice_file_id) await db.update('inspections', { id: i.id }, { invoice_file_id: rec.id }); }
-      // a report added by hand is still read by AI for the summary
-      if (kind === 'Inspection report' && require('../ai').enabled()) {
-        try { const r = await IN.readEmail({ text: `Inspection report for ${i.ref}, PO ${IN.posOf(i).join(', ')}`, files: list }); await db.update('inspections', { id: i.id }, { ai: { result: r.result || 'unknown', critical: IN.num(r.critical), major: IN.num(r.major), minor: IN.num(r.minor), limit_major: IN.num(r.limit_major), limit_minor: IN.num(r.limit_minor), sampled: IN.num(r.sampled), findings: r.findings || '', summary: r.summary || '', pos: r.pos || [], at: now() }, status: ['passed', 'failed'].includes(i.status) ? i.status : 'report', updated_at: now() }); } catch { /* summary optional */ }
-      }
-      await db.update('inspections', { id: i.id }, { log: IN.withLog(i, `${list.length} file${list.length > 1 ? 's' : ''} added (${kind.replace('Inspection ', '')})`, by(req)), updated_at: now() });
-      return ['ok', 'Added'];
-    }
+    if (kind) return ['ok', await addFiles(i, list, kind, req)];
     // detect: the same reader as the inspect@ mailbox
     const r = await IN.handleInspectionEmail({ db, config, from: by(req), subject: `${i.ref} files added by hand`, text: `Files added by ${by(req)} for ${i.ref}.`, files: list });
     return ['ok', r.matched ? `Added ${r.files} file${r.files === 1 ? '' : 's'}` : 'Added'];
+  });
+  act('ingest', async (i, f, req, files) => {
+    const list = (files.file || []).filter((x) => x.buffer?.length); const text = String(f.text || '').trim();
+    if (!list.length && !text) return ['warn', 'Paste the email or add a file'];
+    const kind = ['Inspection report', 'Inspection invoice', 'Inspection photos', 'Inspection document'].includes(f.kind) ? f.kind : null;
+    if (kind && !text) return ['ok', await addFiles(i, list, kind, req)];
+    const co = i.company_id ? await db.get('inspection_companies', i.company_id).catch(() => null) : null;
+    const sup = await db.get('suppliers', i.supplier_id).catch(() => null);
+    const from = (text.match(/^from:.*?([^\s<>"]+@[^\s<>"]+)/im) || [])[1] || (f.role === 'supplier' ? sup?.email : f.role === 'inspector' ? co?.email : '') || '';
+    const subject = (text.match(/^subject:\s*(.+)$/im) || [])[1] || `${i.ref} added by hand`;
+    const r = await IN.handleInspectionEmail({ db, config, from, subject, text: text || `Files added by ${by(req)} for ${i.ref}.`, files: list, forId: i.id, by: by(req) });
+    return ['ok', r.matched ? `Added — read as ${({ quote: 'a booking proposal', info_request: 'a request for information', report: 'a report', invoice: 'an invoice', booking_confirmed: 'a booking confirmation', date_confirmed: 'a date confirmation', date_issue: 'a date issue' })[r.type] || 'a message'}` : 'Added'];
+  });
+  act('reply', async (i, f, req, files) => {
+    const list = (v) => String(v || '').split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+    try {
+      const r = await IN.reply(db, config, i, String(f.msg || ''), { action: f.action, to: list(f.to), cc: list(f.cc), subject: String(f.subject || '').slice(0, 300), body: String(f.body || ''), date: PL.isoDay(f.date), fee: f.fee, attach: [].concat(f.attach || []).map(String), uploads: files.file || [], by: by(req) });
+      return ['ok', `${r.label} — sent`];
+    } catch (e) { return ['warn', e.message]; }
   });
   act('decide', async (i, f, req) => {
     const d = await IN.decide(db, i, f.decision, { note: f.note, by: by(req) });

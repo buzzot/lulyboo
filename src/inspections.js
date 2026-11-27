@@ -214,7 +214,14 @@ const TOOL = {
   description: 'Read an email about a quality inspection (from the inspection company or the supplier) and its attachments.',
   input_schema: { type: 'object', properties: {
     sender_role: { type: 'string', enum: ['inspection_company', 'supplier', 'unknown'] },
-    message_type: { type: 'string', enum: ['booking_confirmed', 'date_confirmed', 'date_issue', 'report', 'invoice', 'report_and_invoice', 'other'], description: 'booking_confirmed = the company booked the date; date_confirmed = replies "OK/confirmed" to our confirmation request; date_issue = cannot do the date / asks to move' },
+    message_type: { type: 'string', enum: ['booking_confirmed', 'date_confirmed', 'date_issue', 'quote', 'info_request', 'report', 'invoice', 'report_and_invoice', 'other'], description: 'booking_confirmed = the company booked the date (final); date_confirmed = replies "OK/confirmed" to our confirmation request; date_issue = cannot do the date / asks to move; quote = proposes a date and/or a price and asks us to approve ("is it ok?"); info_request = asks us for files or information' },
+    needs_reply: { type: 'boolean', description: 'true when they ask us something: approve a date or a price, send a file, accept terms' },
+    asks: { type: 'array', items: { type: 'string' }, description: 'what they ask us for, short, e.g. "Approve Dec 1", "Product specification file", "Accept Intertek T&C"' },
+    fee_amount: { type: 'number', description: 'total fee quoted for the inspection, incl. travel and VAT' },
+    fee_currency: { type: 'string' },
+    fee_breakdown: { type: 'string', description: 'how the fee is made up, short, e.g. "USD150 × 1 man-day + travel USD26.54 + 6% VAT"' },
+    their_ref: { type: 'string', description: "the inspection company's own booking / job ID" },
+    sample_size: { type: 'number' },
     booked_date: { type: 'string', description: 'YYYY-MM-DD inspection date they confirmed or booked' },
     proposed_date: { type: 'string', description: 'YYYY-MM-DD new date they propose' },
     inspector: { type: 'string' },
@@ -242,12 +249,12 @@ async function readEmail({ text, files = [], hint = '' }) {
 }
 const isSig = (f) => /^image\//i.test(f.type || '') && ((f.buffer?.length || 0) < 30 * 1024 || /logo|signature|image0\d\d|outlook|icon/i.test(f.name || ''));
 
-async function handleInspectionEmail({ db, config, from = '', subject = '', text = '', files = [] }) {
+async function handleInspectionEmail({ db, config, from = '', subject = '', text = '', files = [], forId = null, by: byIn = null }) {
   const { rows, companies, missing } = await loadAll(db);
   if (missing) return { matched: false, missing: true };
   const kept = files.filter((f) => f.buffer?.length && !isSig(f));
   const m = String(subject).match(REF_RE) || String(text).match(REF_RE);
-  let i = m ? rows.find((x) => x.ref.toUpperCase() === `LBI-${m[1].toUpperCase()}`) : null;
+  let i = forId ? rows.find((x) => x.id === forId) : m ? rows.find((x) => x.ref.toUpperCase() === `LBI-${m[1].toUpperCase()}`) : null;
   let r = {};
   if (AI.enabled()) { try { r = await readEmail({ text: `Subject: ${subject}\nFrom: ${from}\n\n${text}`, files: kept, hint: i ? `This is about inspection ${i.ref} for PO ${posOf(i).join(', ')} on ${i.inspection_date || 'date tbc'}.` : '' }); } catch (e) { r = { summary: `Could not read it automatically (${String(e.message).slice(0, 80)}).` }; } }
   // no reference: find the inspection by the PO numbers in the report
@@ -261,8 +268,8 @@ async function handleInspectionEmail({ db, config, from = '', subject = '', text
   const fromAddr = String(from).toLowerCase().match(/[^\s<>"]+@[^\s<>"]+/)?.[0] || '';
   const co = companies.find((c) => c.id === i.company_id);
   const sameDomain = (a, b) => a && b && a.split('@')[1] === String(b).toLowerCase().split('@')[1];
-  const role = co && (sameDomain(fromAddr, co.email) || String(co.cc || '').toLowerCase().includes(fromAddr)) ? 'inspector' : r.sender_role === 'supplier' ? 'supplier' : r.sender_role === 'inspection_company' ? 'inspector' : 'supplier';
-  const by = `Email from ${fromAddr || 'unknown'}`;
+  const role = co && (sameDomain(fromAddr, co.email) || String(co.cc || '').toLowerCase().includes(fromAddr)) ? 'inspector' : r.sender_role === 'supplier' ? 'supplier' : r.sender_role === 'inspection_company' ? 'inspector' : byIn ? 'inspector' : 'supplier';
+  const by = byIn ? `Added by ${byIn}` : `Email from ${fromAddr || 'unknown'}`;
   const patch = { updated_at: now() }; const notes = [];
   // files: report / invoice / photos — as PO documents on every PO of the inspection
   const docType = (f) => (r.documents || []).find((d) => d.file_name && String(f.name).toLowerCase().includes(String(d.file_name).toLowerCase().replace(/\.[a-z0-9]+$/, '')))?.type
@@ -291,6 +298,9 @@ async function handleInspectionEmail({ db, config, from = '', subject = '', text
       notes.push(i.confirm_sent_at ? 'Inspector confirmed the date' : `Inspection company booked ${PL.short(d || i.inspection_date)}${r.inspector ? ` · ${r.inspector}` : ''}`);
     } else { patch.supplier_confirm = 'confirmed'; patch.supplier_note = (r.summary || '').slice(0, 300); notes.push('Supplier confirmed the date'); }
   }
+  // a quote / proposal is not applied: it waits for your answer (Approve · Other date · Decline · Reply)
+  if (!hasReport && r.message_type === 'quote') notes.push(`${role === 'inspector' ? 'Inspection company' : 'Supplier'} proposes${PL.isoDay(r.proposed_date || r.booked_date) ? ` ${PL.short(PL.isoDay(r.proposed_date || r.booked_date))}` : ''}${r.fee_amount != null ? ` · ${usd(r.fee_amount)}` : ''} — waiting for your answer`);
+  if (r.their_ref && !i.their_ref) patch.their_ref = String(r.their_ref).slice(0, 60);
   if (!hasReport && r.message_type === 'date_issue') {
     patch[`${role}_confirm`] = 'issue'; patch[`${role}_note`] = (r.summary || text).slice(0, 300);
     if (PL.isoDay(r.proposed_date)) patch.proposed_date = PL.isoDay(r.proposed_date);
@@ -300,7 +310,14 @@ async function handleInspectionEmail({ db, config, from = '', subject = '', text
   if (!patch.status) { const s = afterConfirm(next); if (s !== i.status) patch.status = s; }
   if (!notes.length) notes.push(`Email from ${role === 'inspector' ? 'the inspection company' : 'the supplier'}${stored.length ? ` with ${stored.length} file${stored.length > 1 ? 's' : ''}` : ''}${r.summary ? `: ${r.summary}` : ''}`);
   patch.log = withLog(i, notes.join(' · '), by);
-  await db.update('inspections', { id: i.id }, patch);
+  // the message itself, for the Messages thread and your answer
+  const type = hasReport ? 'report' : r.message_type || 'other';
+  const open = !hasReport && (r.needs_reply === true || ['quote', 'info_request', 'date_issue'].includes(type) || (r.asks || []).length > 0);
+  patch.messages = [...(i.messages || []), { id: Math.random().toString(36).slice(2, 10), dir: 'in', at: now(), from: fromAddr || String(from).slice(0, 120), role, subject: String(subject).slice(0, 300), text: String(text).slice(0, 6000), by: byIn || null,
+    files: stored.map((x) => ({ id: x.rec.id, name: x.rec.name, kind: x.t })), status: open ? 'open' : 'info',
+    ai: { type, summary: String(r.summary || '').slice(0, 600), date: PL.isoDay(r.proposed_date) || PL.isoDay(r.booked_date) || null, fee: num(r.fee_amount), currency: r.fee_currency || null, fee_breakdown: r.fee_breakdown ? String(r.fee_breakdown).slice(0, 200) : null, their_ref: r.their_ref ? String(r.their_ref).slice(0, 60) : null, sample: num(r.sample_size), asks: (r.asks || []).map((x) => String(x).slice(0, 160)).slice(0, 8), result: r.result || null } }].slice(-40);
+  try { await db.update('inspections', { id: i.id }, patch); }
+  catch (e) { if (!/messages|their_ref|column|schema cache/i.test(e.message)) throw e; delete patch.messages; delete patch.their_ref; await db.update('inspections', { id: i.id }, patch); }   // before supabase/inspection-messages.sql
   await tell(db, config, { ...i, ...patch }, notes.join(' · '));
   return { matched: true, id: i.id, files: stored.length, type: r.message_type || 'other' };
 }
@@ -380,4 +397,64 @@ async function runInspections({ db, config }) {
   return { created, confirms, reminders };
 }
 
-module.exports = { REQ_KIND, reqSet, ALWAYS_CC, TYPES, SHORT, AQLS, STATUS, OPEN, LEAD, REF_RE, inspectAddress, newRef, timing, loadAll, openPos, needs, forPo, filesOf, reqVersions, storeFile, requestDraft, sendRequest, sendConfirmations, afterConfirm, readEmail, handleInspectionEmail, decide, poGate, runInspections, withLog, posOf, covers, usd, num, isMissing, longDay, attachmentsFor };
+// ── Your answer to a message (Approve · Other date · Decline · Reply) ─────────
+const ACTIONS = { approve: 'Approve', date: 'Propose another date', decline: 'Decline', reply: 'Reply / send info' };
+const money = (v, cur) => (v == null ? '' : `${cur && !/usd/i.test(cur) ? `${cur} ` : 'USD '}${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+/** Prefilled email for each answer: { to, cc, subject, body } — edited on the page before sending. */
+async function replyDraft(db, i, msg, action) {
+  const c = await context(db, i); const a = msg.ai || {};
+  const toInspector = msg.role !== 'supplier';
+  const to = [msg.from].filter((e) => /@/.test(e || '')).concat(toInspector && !/@/.test(msg.from || '') ? [c.co?.email].filter(Boolean) : []);
+  const cc = [...new Set([...(toInspector && c.co?.cc ? String(c.co.cc).split(/[,;\s]+/) : []), ...ALWAYS_CC].map((e) => e.toLowerCase()).filter((e) => e && !to.includes(e)))];
+  const guess = (() => { const l = String(msg.from || '').split('@')[0].split(/[._-]/)[0]; return /^[a-z]{2,15}$/i.test(l) && !/^(info|sales|booking|service|admin|cs|qc|support|noreply|no|inspection)$/i.test(l) ? l[0].toUpperCase() + l.slice(1).toLowerCase() : ''; })();
+  const name = (toInspector ? c.co?.contact : c.sup?.contact_name) || guess;
+  const subj = `${/^re:/i.test(msg.subject || '') ? '' : 'Re: '}${String(msg.subject || `Inspection ${i.ref}`).replace(REF_RE, '').replace(/\[\s*\]/g, '').trim()} [${i.ref}]`;
+  const pos = posOf(i).join(', '); const d = a.date || i.inspection_date;
+  const ask = (a.asks || []).filter((x) => !/approve|confirm|ok\b|accept|t&c|terms|quot/i.test(x));
+  const NOUN = { psi: 'pre-shipment inspection (PSI)', dupro: 'during-production inspection (DUPRO)', loading: 'loading check', audit: 'factory audit' };
+  const body = {
+    approve: [`Thank you. We confirm the ${NOUN[i.type] || 'inspection'} for PO ${pos}${d ? ` on ${longDay(d)}` : ''}${a.fee != null ? `, and the quotation of ${money(a.fee, a.currency)}${a.fee_breakdown ? ` (${a.fee_breakdown})` : ''}` : ''}.`,
+      ...(/t&c|terms/i.test((a.asks || []).join(' ') + ' ' + (msg.text || '')) ? ['We accept your general terms and conditions for this service.'] : []),
+      ...(ask.length ? [`Attached: ${ask.join(', ')}.`] : []), `AQL: ${i.aql || 'General level II · 2.5 / 4.0'}.`].join('\n\n'),
+    date: `Thank you. ${d ? `${PL.short(d)} does not work for us. ` : ''}Could you please arrange the inspection for PO ${pos} on ${'{date}'} instead? Please confirm.`,
+    decline: `Thank you for the quotation. We will not go ahead with this booking for PO ${pos}${a.fee != null ? ` at ${money(a.fee, a.currency)}` : ''}. ${'{reason}'}`.trim(),
+    reply: ask.length ? `Please find attached: ${ask.join(', ')}.` : '',
+  }[action] || '';
+  return { to, cc, subject: subj, body: `Dear ${name || 'Sir or Madam'},\n\n${body}\n\nThank you,\nLulyboo Quality`, name };
+}
+/**
+ * Send your answer and apply it: approve → date, fee and their ID on the inspection (status Scheduled);
+ * other date → asked; decline / reply → the message is answered. `attach`: plan_files ids; `uploads`: new files.
+ */
+async function reply(db, config, i, msgId, { action, to = [], cc = [], subject, body, date = null, fee = null, attach = [], uploads = [], by = null }) {
+  const msg = (i.messages || []).find((m) => m.id === msgId); if (!msg && action !== 'reply') throw new Error('Message not found');
+  const bad = [...to, ...cc].find((e) => !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(e)); if (bad) throw new Error(`Check this email address: ${bad}`);
+  if (!to.length) throw new Error('Add who it goes to');
+  const files = [];
+  for (const f of uploads.filter((x) => x.buffer?.length)) { const rec = await storeFile(db, i, f, 'Inspection document', by); if (rec) files.push(rec); }
+  const all = await db.list('plan_files', { filters: { supplier_id: i.supplier_id } }).catch(() => []);
+  for (const id of attach) { const f = all.find((x) => x.id === id); if (f && !files.some((x) => x.id === f.id)) files.push(f); }
+  const attachments = []; for (const f of files) { try { attachments.push({ filename: f.name, content: await db.docs.download(f.path) }); } catch { /* skip unreadable */ } }
+  const text = String(body || '').replace('{date}', date ? longDay(date) : '…').replace('{reason}', '').trim();
+  const html = layout({ english: true, preheader: text.slice(0, 90), body: `<tr><td style="padding:24px 0 30px;">${esc(text).split(/\n{2,}/).map((x) => `<p style="margin:0 0 12px;font-size:15px;line-height:24px;">${x.replace(/\n/g, '<br>')}</p>`).join('')}</td></tr>` });
+  await sendEmail(config, { to, cc, subject, text, html, replyTo: [inspectAddress()], attachments });
+  const at = now();
+  const patch = { updated_at: at };
+  const a = msg?.ai || {};
+  if (action === 'approve') {
+    const d = PL.isoDay(date) || a.date;
+    if (d && d !== i.inspection_date) Object.assign(patch, { inspection_date: d, confirm_sent_at: null, inspector_confirm: null, supplier_confirm: null, inspector_note: null, supplier_note: null, proposed_date: null, reminded_at: null });
+    const f = num(fee) ?? a.fee; if (f != null) patch.fee_quoted = f;
+    if (a.their_ref) patch.their_ref = a.their_ref;
+    if (['todo', 'requested'].includes(i.status) || (d && d !== i.inspection_date && i.status === 'confirmed')) patch.status = 'scheduled';
+  }
+  if (action === 'date' && PL.isoDay(date)) patch.proposed_date = PL.isoDay(date);
+  const label = { approve: `Approved${patch.inspection_date || a.date ? ` ${PL.short(patch.inspection_date || a.date)}` : ''}${patch.fee_quoted != null ? ` · ${usd(patch.fee_quoted)}` : ''}`, date: `Asked for ${PL.short(PL.isoDay(date))}`, decline: 'Declined', reply: 'Replied' }[action] || 'Replied';
+  patch.messages = (i.messages || []).map((m) => (m.id === msgId ? { ...m, status: action === 'approve' ? 'approved' : action === 'decline' ? 'declined' : 'answered', answered_at: at, answer: label } : m))
+    .concat([{ id: Math.random().toString(36).slice(2, 10), dir: 'out', at, to: to.join(', '), cc: cc.join(', '), subject, text: text.slice(0, 6000), files: files.map((f) => ({ id: f.id, name: f.name })), action, reply_to: msgId || null, by }]).slice(-40);
+  patch.log = withLog(i, `${label} — email to ${to.join(', ')}${files.length ? ` with ${files.length} file${files.length > 1 ? 's' : ''}` : ''}`, by);
+  await db.update('inspections', { id: i.id }, patch);
+  return { ...i, ...patch, label };
+}
+
+module.exports = { ACTIONS, replyDraft, reply, REQ_KIND, reqSet, ALWAYS_CC, TYPES, SHORT, AQLS, STATUS, OPEN, LEAD, REF_RE, inspectAddress, newRef, timing, loadAll, openPos, needs, forPo, filesOf, reqVersions, storeFile, requestDraft, sendRequest, sendConfirmations, afterConfirm, readEmail, handleInspectionEmail, decide, poGate, runInspections, withLog, posOf, covers, usd, num, isMissing, longDay, attachmentsFor };

@@ -5755,3 +5755,42 @@ test('ready-to-ship check: one email per supplier 5 days before shipping, remind
   assert.match(sent.at(-1).subject, /^Status update — PO 200013 \[LBR-/);
   void a;
 });
+
+test('inspection messages: a booking proposal added by hand is read, waits for an answer; Approve sends the email and sets date, fee and their ID', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  process.env.RESEND_API_KEY = 're_test'; process.env.ANTHROPIC_API_KEY = 'test';
+  const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.resend.com/emails')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'em' }), { status: 200 }); }
+    if (String(url).startsWith('https://api.anthropic.com')) { const b = JSON.parse(opts.body); return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: { sender_role: 'inspection_company', message_type: 'quote', needs_reply: true, proposed_date: '2026-12-01', fee_amount: 187.13, fee_currency: 'USD', fee_breakdown: 'USD150 × 1 man-day + travel USD26.54 + 6% VAT', their_ref: '1994558', sample_size: 125, asks: ['Approve Dec 1', 'Product specification file', 'Accept Intertek T&C'], pos: ['700017'], summary: 'Intertek can inspect on Dec 1 for USD 187.13.' } }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.ANTHROPIC_API_KEY; });
+  const s = await db.insert('suppliers', { name: 'Dongguan Xing Fuming', email: 'sales@xfm.cn' });
+  const co = await db.insert('inspection_companies', { name: 'Intertek', email: 'nikki.huang@intertek.com' });
+  const spec = await db.insert('plan_files', { supplier_id: s.id, name: 'SSBSP 001 spec sheet.pdf', path: 'p/spec.pdf', kind: 'Product spec', pos: ['700017'], content_type: 'application/pdf' });
+  await db.docs.upload('p/spec.pdf', Buffer.from('%PDF spec'), 'application/pdf');
+  const i = await db.insert('inspections', { ref: 'LBI-7Q2K', supplier_id: s.id, company_id: co.id, pos: ['700017'], type: 'psi', status: 'requested', inspection_date: '2026-11-19', confirm_days: 7, log: [], created_at: new Date().toISOString() });
+  const url = `/admin/orders/inspections/${i.id}`;
+  // added by hand: pasted email text
+  assert.equal((await req(base, 'POST', `${url}/ingest`, { cookie, form: { text: 'From: Nikki Huang <nikki.huang@intertek.com>\nSubject: Inspection for lulyboo- PO700017- ID 1994558 12/01\n\nWe plan to arrange on Dec-01st, is it ok? Cost USD187.13', back: url } })).status, 303);
+  let x = await db.get('inspections', i.id);
+  assert.equal(x.inspection_date, '2026-11-19', 'a proposal is not applied by itself');
+  const m = x.messages[0]; assert.equal(m.status, 'open'); assert.equal(m.role, 'inspector'); assert.equal(m.ai.fee, 187.13); assert.equal(m.ai.their_ref, '1994558');
+  const pg = (await req(base, 'GET', url, { cookie })).text;
+  assert.match(pg, /1 to answer/); assert.match(pg, /Answer…/); assert.match(pg, /Dec 1 <i>\(we asked Nov 19\)<\/i>/);
+  assert.match(pg, /Dear Nikki,/); assert.match(pg, /We confirm the pre-shipment inspection \(PSI\) for PO 700017 on Tuesday, December 1, 2026, and the quotation of USD 187\.13/);
+  assert.match(pg, new RegExp(`name="attach" value="${spec.id}" checked`));
+  // Approve & send
+  const d = await (async () => { const IN = require('../src/inspections'); return IN.replyDraft(db, x, m, 'approve'); })();
+  assert.equal((await req(base, 'POST', `${url}/reply`, { cookie, form: { msg: m.id, action: 'approve', date: '2026-12-01', fee: '187.13', to: d.to.join(', '), cc: d.cc.join(', '), subject: d.subject, body: d.body, attach: spec.id, back: url } })).status, 303);
+  const e = sent.at(-1); assert.deepEqual(e.to, ['nikki.huang@intertek.com']); assert.ok(e.cc.includes('marsel@lulyboo.com')); assert.match(e.subject, /^Re: Inspection for lulyboo- PO700017- ID 1994558 12\/01 \[LBI-7Q2K\]$/);
+  assert.equal(e.attachments.length, 1);
+  x = await db.get('inspections', i.id);
+  assert.equal(x.inspection_date, '2026-12-01'); assert.equal(x.fee_quoted, 187.13); assert.equal(x.their_ref, '1994558'); assert.equal(x.status, 'scheduled');
+  assert.equal(x.messages[0].status, 'approved'); assert.equal(x.messages[1].dir, 'out');
+  assert.doesNotMatch((await req(base, 'GET', url, { cookie })).text, /to answer/);
+});
