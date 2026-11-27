@@ -172,7 +172,7 @@ module.exports = function customsRoutes(router, { db, config }) {
     const ps = l.products || (l.products = []); const ix = Number(f.i);
     // a product the 7501 line doesn't name (no item code on it) — added by hand, or taken off again
     if (f.product && ix === ps.length || f.remove) {
-      if (f.remove) { if (!ps[ix]?.added) throw new HttpError(400, 'Only a product you added can be removed'); ps.splice(ix, 1); }
+      if (f.remove) { if (!ps[ix]?.added) throw new HttpError(400, 'Only a product you added can be removed'); if (ps[ix].variant && ps[ix].line_id) l.skip = [...new Set([...(l.skip || []), ps[ix].line_id])]; ps.splice(ix, 1); }
       else {
         const prod = await db.get('products', String(f.product)).catch(() => null); if (!prod) throw new HttpError(404, 'Product not found');
         if (ps.some((x) => x.product_id === prod.id)) throw new HttpError(400, 'This product is already on the line');
@@ -182,6 +182,7 @@ module.exports = function customsRoutes(router, { db, config }) {
         if (ol.length) l.pos = [...new Set([...(l.pos || []), ...ol.map((o) => o.po)])];
       }
       CU.allocate(l, ps.map(({ share, value, duty, fees, per_pc, ...x }) => x));
+      if (!f.remove && e.container_id) await CU.variants(db, lines, e.container_id);
       await db.update('customs_entries', { id: e.id }, { lines });
       try { const ch = await CU.checks(db, { ...(e.facts || {}), entry_no: e.entry_no, lines }, { selfId: e.id }); await db.update('customs_entries', { id: e.id }, { checks: ch }); } catch (err) { console.error('Customs re-check failed:', err.message); }
       if (e.status === 'saved' && !f.remove) await CU.setPaid(db, ps[ps.length - 1].product_id, { rate: CU.lineRate(l), at: e.entry_date, entry: e.entry_no });
@@ -194,6 +195,7 @@ module.exports = function customsRoutes(router, { db, config }) {
       Object.assign(p, { product_id: prod.id, name: prod.product_name || p.name, supplier_id: prod.supplier_id, how: 'manual', hts_on_file: prod.hts_verified_code || null, supplier_hs: prod.hs_code || null });
     } else if (f.unlink) Object.assign(p, { product_id: null, how: null, hts_on_file: null });
     else if (p.product_id) p.how = 'confirmed';
+    if (f.product && e.container_id) await CU.variants(db, lines, e.container_id);
     await db.update('customs_entries', { id: e.id }, { lines });
     // the comparisons depend on the product: re-run them
     try { const ch = await CU.checks(db, { ...(e.facts || {}), entry_no: e.entry_no, lines }, { selfId: e.id }); await db.update('customs_entries', { id: e.id }, { checks: ch }); } catch (err) { console.error('Customs re-check failed:', err.message); }

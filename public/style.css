@@ -3124,7 +3124,7 @@ button.cu-mono{background:none;border:0;padding:0;cursor:pointer}
 .shp-row.rec .shp-t{overflow:hidden}.shp-row.rec .shp-t>b{display:inline-block;max-width:calc(100% - 70px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 /* 7501 review: products */
 .cu-pl{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;margin:2px 6px 2px 0}
-.cu-pt.ok{background:#e6f4ec;color:#1d6b40;border-color:#b7dcc6}.cu-pt.q{background:#f5f3fd;color:#5b4bb5;border-color:#d9d2f5}.cu-pt.w{background:#fdf3e1;color:#8a5300;border-color:#f1dcae}
+.cu-pt.ok{background:#e6f4ec;color:#1d6b40;border-color:#b7dcc6}.cu-pt.cu-guess{background:#f5f3fd;color:#5b4bb5;border-color:#d9d2f5}.cu-pt.w{background:#fdf3e1;color:#8a5300;border-color:#f1dcae}
 .cu-pt.no{border-style:dashed;color:#a3312a}
 .cu-lsum{margin:10px 0;padding:8px 11px;border-radius:8px;font-size:12.5px;background:#eef7f1}.cu-lsum.w{background:#fdf3e1}
 .cu-find{display:flex;flex-direction:column;gap:4px;min-width:260px}.cu-find input{font-size:13px;padding:5px 8px}
@@ -3792,3 +3792,4 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 .hc-k{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .hc-col b{font-size:13px}.hc-r{font-weight:600}.hc-arr{align-self:center;color:var(--muted)}
 .hc-d{font-weight:600;font-size:12.5px;margin-bottom:2px}.hc-d.up{color:#b4232a}.hc-d.down{color:var(--ok)}
+.cu-var{font-style:italic;opacity:.8;margin-left:2px}

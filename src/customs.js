@@ -198,7 +198,39 @@ async function link(db, e, { containerId = null, poHint = [] } = {}) {
   const uniq = (list) => [...new Map(list.filter(Boolean).map((p) => [PL.normPo(p), spell(p)])).values()];
   for (const ln of e.lines) ln.pos = uniq(ln.pos);
   const allPos = uniq([...e.pos, ...e.lines.flatMap((l) => l.pos), ...(container ? allLines.filter((l) => l.container_id === container.id).map((l) => l.po) : [])]);
+  if (container) await variants(db, e.lines, container.id);
   return { container_id: container?.id || null, match_reason: reason, pos: allPos };
+}
+
+// Colour / size variants: one 7501 line often covers products that differ only in colour (same HTS).
+// A container line no 7501 line covers is suggested on the line that has its sibling — same supplier and
+// the same name once colours and sizes are taken out (or the same HTS on the product record). Confirmed in the review.
+const COLORS = /\b(pink|blue|green|grey|gray|white|black|red|yellow|purple|beige|cream|mint|navy|orange|brown|lilac|lavender|peach|coral|teal|sage|rose|ivory|khaki|clear|transparent|multi|multicolou?r|light|dark|pastel|color|colour)\b/g;
+const STOP = new Set(['lulyboo', 'and', 'the', 'for', 'with', 'of', 'set', 'pack', 'pcs', 'pc', 'piece', 'pieces', 'a']);
+const toks = (x) => new Set(String(x || '').toLowerCase().replace(/(\d+)\s*(pcs?|pieces?)\b/g, '$1').replace(COLORS, ' ').split(/[^a-z0-9]+/).filter((t) => t && !STOP.has(t)));
+function sameItem(a, b) {
+  const A = toks(a); const B = toks(b); if (!A.size || !B.size) return false;
+  const [s, l] = A.size <= B.size ? [A, B] : [B, A]; let n = 0; for (const t of s) if (l.has(t)) n++;
+  return s.size >= 2 && n / s.size >= 0.75;
+}
+async function variants(db, lines, containerId) {
+  const ol = (await db.list('plan_orders', { filters: { container_id: containerId } }).catch(() => []));
+  const cache = {}; const prodsOf = async (sid) => (cache[sid] ||= await db.list('products', { filters: { supplier_id: sid } }).catch(() => []));
+  const covered = new Set(); const coveredP = new Set();
+  for (const l of lines) for (const p of l.products || []) { if (p.line_id) covered.add(p.line_id); if (p.product_id) coveredP.add(p.product_id); }
+  for (const l of lines) for (const id of l.skip || []) covered.add(id);   // a variant you removed is not suggested again
+  for (const o of ol) {
+    if (covered.has(o.id)) continue;
+    const pr = PL.catalogMatch(o, await prodsOf(o.supplier_id)); if (pr && coveredP.has(pr.id)) continue;
+    const name = pr?.product_name || o.product;
+    const hit = lines.find((l) => (l.products || []).some((p) => p.product_id && p.supplier_id === o.supplier_id && (sameItem(p.name, name) || (pr?.hts_verified_code && digits(pr.hts_verified_code).slice(0, 8) === digits(l.hts).slice(0, 8)))));
+    if (!hit) continue;
+    const ps = hit.products;
+    ps.push({ code: pr?.supplier_sku || o.sku || name, how: 'name', variant: true, added: true, product_id: pr?.id || null, name: name || '', supplier_id: o.supplier_id, po: o.po, line_id: o.id, unit_price: num(o.unit_price), qty: num(o.qty), hts_on_file: pr?.hts_verified_code || null, supplier_hs: pr?.hs_code || null });
+    covered.add(o.id); if (pr) coveredP.add(pr.id);
+    allocate(hit, ps.map(({ share, value, duty, fees, per_pc, ...x }) => x));
+    hit.pos = [...new Set([...(hit.pos || []), o.po])];
+  }
 }
 
 /** Split a 7501 line's value, duty and fees between its products: by PO value, else by quantity, else equally. */
@@ -444,4 +476,4 @@ async function removeEntry(db, e) {
 /** Effective rate of a line (base + chapter 99), %. */
 const lineRate = (l) => Math.round(((l.rate || 0) + (l.extras || []).reduce((a, x) => a + (x.rate || 0), 0)) * 10) / 10;
 
-module.exports = { removeEntry, setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, allocate, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };
+module.exports = { removeEntry, setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, allocate, variants, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };

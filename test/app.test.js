@@ -5657,3 +5657,24 @@ test('7501 line without item codes: add products by hand (split by PO value, pie
   j = await post({ line: '001', i: '0', remove: '1' });
   assert.deepEqual(db.tables.customs_entries.find((x) => x.id === e.id).lines[0].products.map((p) => p.code), ['GKP 001']);
 });
+
+test('7501: a colour variant in the container is suggested on the line with its sibling; removed stays removed', async (t) => {
+  const db = seedDb();
+  const s = await db.insert('suppliers', { name: 'Coooko' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: {} });
+  const o1 = await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'GK 001', product: 'Lulyboo Baby Health and Grooming Kit 14pc Set', qty: 4020, unit_price: 1, container_id: c.id });
+  const o2 = await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'GKP 001', product: 'Grooming kit 14 piece set - pink', qty: 6000, unit_price: 1, container_id: c.id });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'IBSSP 001', product: 'Baby Bath Support - Pink', qty: 2002, container_id: c.id });
+  const gk = await db.insert('products', { supplier_id: s.id, product_name: 'Lulyboo Baby Health and Grooming Kit 14pc Set', supplier_sku: 'GK 001' });
+  await db.insert('products', { supplier_id: s.id, product_name: 'Grooming kit 14 piece set - pink', supplier_sku: 'GKP 001' });
+  const CU = require('../src/customs');
+  const lines = [{ no: '001', hts: '8214.20.3000', qty: 2666, unit: 'KG', duty: 1000, value: 10000, products: [{ code: 'GK 001', how: 'sku', product_id: gk.id, name: gk.product_name, supplier_id: s.id, line_id: o1.id, qty: 4020, unit_price: 1 }] }];
+  await CU.variants(db, lines, c.id);
+  assert.deepEqual(lines[0].products.map((p) => [p.code, p.how, !!p.variant]), [['GK 001', 'sku', false], ['GKP 001', 'name', true]]);
+  assert.equal(lines[0].products[1].line_id, o2.id); assert.equal(Math.round(lines[0].products[1].duty), 599);
+  // the bath support is a different item: not suggested
+  assert.equal(lines[0].products.length, 2);
+  lines[0].products.pop(); lines[0].skip = [o2.id];
+  await CU.variants(db, lines, c.id);
+  assert.equal(lines[0].products.length, 1);
+});
