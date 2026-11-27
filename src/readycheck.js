@@ -101,16 +101,32 @@ async function inspOf(db, sid, pos) {
   return out;
 }
 
-/** Send one message to a supplier about these lines. kind: check | followup. */
-async function send(db, config, supplier, lines, { kind = 'check', by = null } = {}) {
+const itemsOf = (lines) => lines.map((l) => ({ line_id: l.id, po: l.po, product: l.product, sku: l.sku || null, qty: l.qty ?? null, ready_date: day(l.ready_date), ship_date: l.ship_date || day(l.ready_date), container_id: l.container_id || null }));
+/** The email as it would go out — shown in the popup to check and edit before sending. */
+async function draft(db, supplier, lines, { kind = 'followup' } = {}) {
   const P = require('./projects');
-  const to = await P.supplierRecipients(db, supplier);
-  if (!to.length) throw new Error(`${supplier.name} has no email address`);
+  const to = await P.supplierRecipients(db, supplier).catch(() => []);
   const cc = P.ownerEmails().filter((e) => !to.includes(e));
-  const items = lines.map((l) => ({ line_id: l.id, po: l.po, product: l.product, sku: l.sku || null, qty: l.qty ?? null, ready_date: day(l.ready_date), ship_date: l.ship_date || day(l.ready_date), container_id: l.container_id || null }));
+  const items = itemsOf(lines); const code = newCode();
+  const m = compose({ supplier, items, kind, insp: await inspOf(db, supplier.id, [...new Set(items.map((i) => i.po))]), code });
+  return { to, cc, subject: m.subject, text: m.text, code };
+}
+const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+const textHtml = (t) => layout({ english: true, preheader: String(t).split('\n').find((x) => x.trim() && !/^dear/i.test(x)) || '', body: `<tr><td style="padding:24px 0 30px;">${esc(t).split(/\n{2,}/).map((x) => `<p style="margin:0 0 12px;font-size:15px;line-height:24px;">${x.replace(/\n/g, '<br>')}</p>`).join('')}</td></tr>` });
+
+/** Send one message to a supplier about these lines. kind: check | followup. `edits` from the popup: { to, cc, subject, text, code }. */
+async function send(db, config, supplier, lines, { kind = 'check', by = null, edits = null } = {}) {
+  const P = require('./projects');
+  const to = edits?.to?.length ? edits.to : await P.supplierRecipients(db, supplier);
+  if (!to.length) throw new Error(`${supplier.name} has no email address`);
+  const cc = edits?.cc ? edits.cc.filter((e) => !to.includes(e)) : P.ownerEmails().filter((e) => !to.includes(e));
+  const bad = [...to, ...cc].find((e) => !EMAIL_RE.test(e)); if (bad) throw new Error(`Check this email address: ${bad}`);
+  const items = itemsOf(lines);
   const insp = await inspOf(db, supplier.id, [...new Set(items.map((i) => i.po))]);
-  const code = newCode();
+  const code = CODE_RE.test(edits?.code || '') ? edits.code.toUpperCase() : newCode();
   const m = compose({ supplier, items, kind, insp, code });
+  if (edits?.subject) m.subject = CODE_RE.test(edits.subject) ? edits.subject : `${edits.subject} [${code}]`;   // the code keeps replies on this thread
+  if (edits?.text && edits.text.trim() !== m.text.trim()) { m.text = edits.text.trim(); m.html = textHtml(m.text); }
   await sendEmail(config, { to, cc, subject: m.subject, text: m.text, html: m.html, replyTo: [docsAddress()] });
   const at = now();
   return db.insert('ready_checks', { code, supplier_id: supplier.id, kind, items, pos: [...new Set(items.map((i) => i.po))], ship_date: items.map((i) => i.ship_date).sort()[0], status: 'sent', sent_at: at, sent_to: to.join(', '), cc: cc.join(', '), subject: m.subject, asks: m.asks, reminders: 0, facts: {}, log: [{ at, text: `${kind === 'followup' ? 'Status update asked' : 'Ready-to-ship confirmation sent'} to ${to.join(', ')}${by ? ` by ${by}` : ''}` }], created_at: at, updated_at: at });
@@ -197,4 +213,4 @@ async function runReadyChecks({ db, config, at = new Date() }) {
   return { sent, reminded };
 }
 
-module.exports = { CODE_RE, LEAD, REMIND_AFTER, openLines, askedFor, latestFor, covers, sendOn, stateOf, compose, inspOf, send, remind, handleEmail, apply, runReadyChecks, isMissing, chinaNow };
+module.exports = { draft, CODE_RE, LEAD, REMIND_AFTER, openLines, askedFor, latestFor, covers, sendOn, stateOf, compose, inspOf, send, remind, handleEmail, apply, runReadyChecks, isMissing, chinaNow };

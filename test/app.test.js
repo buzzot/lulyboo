@@ -5759,6 +5759,12 @@ test('ready-to-ship check: one email per supplier 5 days before shipping, remind
   // quick follow-up by hand
   assert.equal((await req(base, 'POST', '/admin/orders/ready/send', { cookie, form: { supplier: s2.id, po: '200013', kind: 'followup', back: '/admin' } })).status, 303);
   assert.match(sent.at(-1).subject, /^Status update — PO 200013 \[LBR-/);
+  // follow-up from the popup: edited text and subject (code kept), shown under the button with its status
+  const dash2 = (await req(base, 'GET', '/admin', { cookie })).text;
+  assert.match(dash2, /data-open-dialog="fu-/); assert.match(dash2, /<textarea name="body" rows="14">Dear Benno,/); assert.match(dash2, /fu-meta [a-z]*" tabindex="0" data-popcard>[A-Z][a-z]{2} \d+ · sent/);
+  assert.equal((await req(base, 'POST', '/admin/orders/ready/send', { cookie, form: { supplier: s2.id, po: '200013', kind: 'followup', to: 'sales@benno.cn', cc: 'marsel@lulyboo.com', subject: 'Quick check on PO 200013', body: 'Hi, any news on the sun shades?', code: 'LBR-ABCDE', back: '/admin' } })).status, 303);
+  assert.equal(sent.at(-1).subject, 'Quick check on PO 200013 [LBR-ABCDE]'); assert.equal(sent.at(-1).text, 'Hi, any news on the sun shades?');
+  assert.ok(db.tables.ready_checks.some((x) => x.code === 'LBR-ABCDE' && x.kind === 'followup'));
   void a;
 });
 
