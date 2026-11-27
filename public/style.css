@@ -3849,3 +3849,7 @@ dialog.rp-modal:not(.im-dlg)>.rp-top{padding:18px 22px 0}dialog.rp-modal>.im-pre
 .im-msg{grid-template-columns:22px minmax(0,1fr) auto}.im-msg>.im-a{grid-column:3}
 .im-arow{grid-template-columns:18px 32px minmax(0,1.5fr) minmax(0,1fr) 58px;cursor:pointer;margin:0!important}.im-arow input{margin:0}
 .im-dlg .im-att .mdrop{margin-top:6px}.im-dlg .im-att .mdrop-box{min-height:0;padding:9px 12px;background:#fbfaf8;border-color:#ddd6cc}
+.ss-hd{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.ss-sw{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#5e5a55;text-decoration:none;white-space:nowrap}
+.ss-knob{position:relative;width:30px;height:17px;border-radius:999px;background:#d9d4cd;transition:background .15s}.ss-knob::after{content:'';position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s}
+.ss-sw.on .ss-knob{background:#1d6b40}.ss-sw.on .ss-knob::after{left:15px}.ss-sw:hover{color:var(--ink)}

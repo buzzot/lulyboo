@@ -5749,6 +5749,11 @@ test('ready-to-ship check: one email per supplier 5 days before shipping, remind
   const dash = (await req(base, 'GET', '/admin', { cookie })).text;
   assert.match(dash, /Shipping in the next 7 days/); assert.match(dash, /Booked · CY/); assert.match(dash, /No container/); assert.doesNotMatch(dash, /600040/); assert.doesNotMatch(dash, /200001/);
   assert.match(dash, /Ready-to-ship: no reply or a new date/);
+  // switch: hide booked POs (remembered in a cookie)
+  const sw = await req(base, 'GET', '/admin/orders/ready/booked?hide=1', { cookie });
+  assert.equal(sw.status, 303); assert.match(sw.cookies.join(';'), /ss_hide_booked=1/);
+  const hid = (await req(base, 'GET', '/admin', { cookie: `${cookie}; ss_hide_booked=1` })).text;
+  assert.match(hid, /ss-sw on/); assert.doesNotMatch(hid, /Booked · CY/); assert.match(hid, /No container/);
   assert.equal((await req(base, 'POST', `/admin/orders/ready/${k.id}/apply`, { cookie, form: { back: '/admin' } })).status, 303);
   assert.equal((await db.get('plan_orders', b.id)).ready_date, D(9)); assert.equal((await db.get('ready_checks', k.id)).status, 'applied');
   // quick follow-up by hand

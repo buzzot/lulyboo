@@ -83,10 +83,13 @@ async function upcoming(db, today = PL.today()) {
   return { rows, unbooked: rows.filter((r) => r.freight.todo).length, noReply: rows.filter((r) => ['noreply', 'changed'].includes(RC.stateOf(r.k, today).key)).length, today };
 }
 
-function upcomingCard(u) {
+function upcomingCard(u, { hideBooked = false } = {}) {
+  const booked = u.rows.filter((r) => r.freight.cls === 'ok').length;
+  const list = hideBooked ? u.rows.filter((r) => r.freight.cls !== 'ok') : u.rows;
   const rel = (d) => { const n = Math.round((Date.parse(`${d}T12:00:00Z`) - Date.parse(`${u.today}T12:00:00Z`)) / 864e5); return n < 0 ? `${-n}d late` : n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n}d`; };
-  const rows = u.rows.slice(0, 12);
-  return html`<section class="d-card d-12" id="shipping-soon"><div class="d-title"><h2>Shipping in the next 7 days</h2><span class="muted small">${u.rows.length ? `${u.rows.length} PO${u.rows.length === 1 ? '' : 's'}${u.unbooked ? ` · ${u.unbooked} freight not booked` : ''}${u.noReply ? ` · ${u.noReply} need a follow-up` : ''}` : ''}</span></div>
+  const rows = list.slice(0, 12);
+  return html`<section class="d-card d-12" id="shipping-soon"><div class="d-title"><h2>Shipping in the next 7 days</h2><span class="ss-hd"><span class="muted small">${u.rows.length ? `${u.rows.length} PO${u.rows.length === 1 ? '' : 's'}${u.unbooked ? ` · ${u.unbooked} freight not booked` : ''}${u.noReply ? ` · ${u.noReply} need a follow-up` : ''}` : ''}</span>
+      ${booked ? html`<a class="ss-sw ${hideBooked ? 'on' : ''}" href="${`${BASE}/booked?hide=${hideBooked ? '0' : '1'}`}" role="switch" aria-checked="${hideBooked ? 'true' : 'false'}"><span class="ss-knob" aria-hidden="true"></span>Hide booked (${booked})</a>` : ''}</span></div>
     ${rows.length ? html`<div class="ss-wrap"><table class="ss-t"><thead><tr><th>Ships</th><th>PO</th><th class="r">m³</th><th>Freight</th><th>Confirmation</th><th>Inspection</th><th></th></tr></thead><tbody>
       ${rows.map((r) => html`<tr class="${r.late ? 'late' : ''}">
         <td><b>${PL.short(r.date)}</b><div class="sub ${r.late ? 't-bad' : ''}">${rel(r.date)}${r.ready && r.ready !== r.date ? html`<span title="Supplier's ready date"> · ready ${PL.short(r.ready)}</span>` : ''}</div></td>
@@ -96,8 +99,8 @@ function upcomingCard(u) {
         <td>${chip({ k: r.k, lines: r.ls, sid: r.sid, po: r.po, here: '/admin#shipping-soon', today: u.today })}</td>
         <td><span class="ss-pill ${r.insp.ok ? 'ok' : r.insp.text === 'no inspection yet' ? 'bad' : 'warn'}">${r.insp.text}</span></td>
         <td class="r">${btn(`${BASE}/send`, 'Follow up', { cls: 'd-btn', fields: { supplier: r.sid, po: r.po, kind: 'followup', back: '/admin#shipping-soon' }, confirm: `Send ${r.sup} a short status-update email about PO ${r.po}?` })}</td></tr>`)}
-    </tbody></table></div>${u.rows.length > rows.length ? html`<p class="d-foot">+${u.rows.length - rows.length} more · <a href="/admin/orders">All purchase orders</a></p>` : ''}`
-    : html`<p class="d-empty">Nothing ships in the next 7 days.</p>`}</section>`;
+    </tbody></table></div>${list.length > rows.length ? html`<p class="d-foot">+${list.length - rows.length} more · <a href="/admin/orders">All purchase orders</a></p>` : ''}`
+    : html`<p class="d-empty">${hideBooked && u.rows.length ? 'Everything shipping in the next 7 days is booked.' : 'Nothing ships in the next 7 days.'}</p>`}</section>`;
 }
 
 function readyRoutes(router, { db, config }) {
@@ -111,6 +114,12 @@ function readyRoutes(router, { db, config }) {
     try { await RC.send(db, config, sup, ls, { kind: f.kind === 'followup' ? 'followup' : 'check', by: by(req) }); flash(res, 'ok', `${f.kind === 'followup' ? 'Status update asked' : 'Ready-to-ship confirmation sent'} — ${sup.name}, PO ${f.po}`); }
     catch (e) { if (RC.isMissing(e)) throw new HttpError(400, 'Run supabase/ready-checks.sql in Supabase first'); flash(res, 'warn', e.message); }
     res.redirect(back(f));
+  }));
+  // dashboard switch: hide POs whose freight is booked (remembered in a cookie for a year)
+  router.get(`${BASE}/booked`, G(async (req, res) => {
+    const on = req.query.hide === '1';
+    res.setCookie('ss_hide_booked', on ? '1' : '0', { maxAge: 31536000 });
+    res.redirect('/admin#shipping-soon');
   }));
   router.post(`${BASE}/:id/remind`, G(async (req, res) => {
     const { fields: f } = await parseForm(req);

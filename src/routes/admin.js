@@ -643,7 +643,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       </div>
 
       <div class="d-grid">
-        ${RCR.upcomingCard(soon)}
+        ${RCR.upcomingCard(soon, { hideBooked: /(?:^|;\s*)ss_hide_booked=1(?:;|$)/.test(req.headers.cookie || '') })}
         <section class="d-card d-6"><div class="d-title"><h2>Needs attention</h2><span class="muted small">${attentionOpen ? `${attentionOpen} open` : 'All clear'}</span></div>
           <ul class="d-attn">${attention.map((a) => html`<li><a href="${a.href}" class="${a.n ? a.tone : 'zero'}"><span class="a-dot" aria-hidden="true"></span><span class="a-label">${a.label}</span><b>${fmt.num(a.n)}</b><span class="a-go" aria-hidden="true">›</span></a></li>`)}</ul></section>
 
