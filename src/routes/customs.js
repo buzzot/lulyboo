@@ -167,7 +167,27 @@ module.exports = function customsRoutes(router, { db, config }) {
   router.post(`${BASE}/:id/link`, J(async (req) => {
     const { fields: f } = await parseForm(req);
     const e = await getE(req.params.id);
-    const lines = e.lines || []; const l = lines.find((x) => String(x.no) === String(f.line)); const p = l && (l.products || [])[Number(f.i)];
+    const lines = e.lines || []; const l = lines.find((x) => String(x.no) === String(f.line));
+    if (!l) throw new HttpError(404, 'Line not found');
+    const ps = l.products || (l.products = []); const ix = Number(f.i);
+    // a product the 7501 line doesn't name (no item code on it) — added by hand, or taken off again
+    if (f.product && ix === ps.length || f.remove) {
+      if (f.remove) { if (!ps[ix]?.added) throw new HttpError(400, 'Only a product you added can be removed'); ps.splice(ix, 1); }
+      else {
+        const prod = await db.get('products', String(f.product)).catch(() => null); if (!prod) throw new HttpError(404, 'Product not found');
+        if (ps.some((x) => x.product_id === prod.id)) throw new HttpError(400, 'This product is already on the line');
+        const ol = e.container_id ? (await db.list('plan_orders', { filters: { container_id: e.container_id } }).catch(() => [])).filter((o) => o.supplier_id === prod.supplier_id && PL.catalogMatch(o, [prod])) : [];
+        const qty = ol.reduce((a, o) => a + (Number(o.qty) || 0), 0) || null;
+        ps.push({ code: prod.supplier_sku || prod.product_name, how: 'manual', added: true, product_id: prod.id, name: prod.product_name || '', supplier_id: prod.supplier_id, po: ol[0]?.po || null, line_id: ol[0]?.id || null, unit_price: Number(ol[0]?.unit_price) || null, qty, hts_on_file: prod.hts_verified_code || null, supplier_hs: prod.hs_code || null });
+        if (ol.length) l.pos = [...new Set([...(l.pos || []), ...ol.map((o) => o.po)])];
+      }
+      CU.allocate(l, ps.map(({ share, value, duty, fees, per_pc, ...x }) => x));
+      await db.update('customs_entries', { id: e.id }, { lines });
+      try { const ch = await CU.checks(db, { ...(e.facts || {}), entry_no: e.entry_no, lines }, { selfId: e.id }); await db.update('customs_entries', { id: e.id }, { checks: ch }); } catch (err) { console.error('Customs re-check failed:', err.message); }
+      if (e.status === 'saved' && !f.remove) await CU.setPaid(db, ps[ps.length - 1].product_id, { rate: CU.lineRate(l), at: e.entry_date, entry: e.entry_no });
+      return { view: await viewOf(db, await getE(e.id)) };
+    }
+    const p = ps[ix];
     if (!p) throw new HttpError(404, 'Line not found');
     if (f.product) {
       const prod = await db.get('products', String(f.product)).catch(() => null); if (!prod) throw new HttpError(404, 'Product not found');

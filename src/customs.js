@@ -190,18 +190,7 @@ async function link(db, e, { containerId = null, poHint = [] } = {}) {
       if (!o && p) o = scope.find((x) => x.supplier_id === p.supplier_id && PL.catalogMatch(x, [p])) || null;
       found.push({ code: c0, how, product_id: p?.id || null, name: p?.product_name || o?.product || c0, supplier_id: p?.supplier_id || o?.supplier_id || null, po: o?.po || null, line_id: o?.id || null, unit_price: num(o?.unit_price), qty: num(o?.qty), hts_on_file: p?.hts_verified_code || null, supplier_hs: p?.hs_code || null, description: p?.description || null, materials: p?.materials || null, category: p?.category || null, subcategory: p?.subcategory || null });
     }
-    // split the line's value, duty and fees between its products: by PO value, else by quantity, else equally
-    const w = found.map((f) => (f.unit_price && f.qty ? f.unit_price * f.qty : null));
-    const useW = w.every((x) => x > 0) ? w : found.map((f) => f.qty || null).every((x) => x > 0) ? found.map((f) => f.qty) : found.map(() => 1);
-    const tot = useW.reduce((a, x) => a + x, 0) || 1;
-    const fees = (ln.mpf || 0) + (ln.hmf || 0);
-    ln.products = found.map((f, i) => {
-      const share = useW[i] / tot;
-      const qty = found.length === 1 ? ln.qty : f.qty && useW === w ? f.qty : ln.qty ? Math.round(ln.qty * share) : null;
-      const duty = r2(ln.duty * share); const fee = r2(fees * share);
-      return { ...f, share: Math.round(share * 1000) / 1000, value: ln.value != null ? r2(ln.value * share) : null, qty, duty, fees: fee, per_pc: qty ? Math.round(((duty + fee) / qty) * 1000) / 1000 : null };
-    });
-    ln.basis = found.length > 1 ? (useW === w ? 'PO value' : useW.every((x) => x === 1) ? 'equally' : 'quantity') : null;
+    allocate(ln, found);
     ln.pos = [...new Set([...ln.pos, ...found.map((f) => f.po).filter(Boolean)])];
   }
   // one spelling per PO: the portal's when it knows the PO ("PO310002"), else as written without "PO#"
@@ -210,6 +199,23 @@ async function link(db, e, { containerId = null, poHint = [] } = {}) {
   for (const ln of e.lines) ln.pos = uniq(ln.pos);
   const allPos = uniq([...e.pos, ...e.lines.flatMap((l) => l.pos), ...(container ? allLines.filter((l) => l.container_id === container.id).map((l) => l.po) : [])]);
   return { container_id: container?.id || null, match_reason: reason, pos: allPos };
+}
+
+/** Split a 7501 line's value, duty and fees between its products: by PO value, else by quantity, else equally. */
+function allocate(ln, found) {
+    const w = found.map((f) => (f.unit_price && f.qty ? f.unit_price * f.qty : null));
+    const useW = w.every((x) => x > 0) ? w : found.map((f) => f.qty || null).every((x) => x > 0) ? found.map((f) => f.qty) : found.map(() => 1);
+    const tot = useW.reduce((a, x) => a + x, 0) || 1;
+    const fees = (ln.mpf || 0) + (ln.hmf || 0);
+    const inPcs = !ln.unit || /^(NO|PCS?|EA|U|UNITS?)$/i.test(String(ln.unit).trim());
+    ln.products = found.map((f, i) => {
+      const share = useW[i] / tot;
+      // the 7501 quantity is often in kg: then pieces come from the PO line
+      const qty = found.length === 1 ? (inPcs ? ln.qty : f.qty || null) : f.qty && (useW === w || !inPcs) ? f.qty : ln.qty && inPcs ? Math.round(ln.qty * share) : null;
+      const duty = r2(ln.duty * share); const fee = r2(fees * share);
+      return { ...f, share: Math.round(share * 1000) / 1000, value: ln.value != null ? r2(ln.value * share) : null, qty, duty, fees: fee, per_pc: qty ? Math.round(((duty + fee) / qty) * 1000) / 1000 : null };
+    });
+    ln.basis = found.length > 1 ? (useW === w ? 'PO value' : useW.every((x) => x === 1) ? 'equally' : 'quantity') : null;
 }
 
 /** Email to the customs broker about what doesn't match (English). Returns null when nothing needs asking. */
@@ -438,4 +444,4 @@ async function removeEntry(db, e) {
 /** Effective rate of a line (base + chapter 99), %. */
 const lineRate = (l) => Math.round(((l.rate || 0) + (l.extras || []).reduce((a, x) => a + (x.rate || 0), 0)) * 10) / 10;
 
-module.exports = { removeEntry, setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };
+module.exports = { removeEntry, setPaid, brokerDraft, TOOL, HTS_TOOL, read, normalize, link, allocate, checks, reviewHts, createEntry, save, confirmHts, lineRate, fmtHts, digits, customsAddress, missingTable };

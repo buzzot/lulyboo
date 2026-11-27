@@ -5632,3 +5632,28 @@ test('shipment "What\'s in it": SKU hover shows HTS history, warns when this 750
   assert.equal((pg.match(/⚠ changed/g) || []).length, 1);
   assert.match(pg, /HTS code changed/); assert.match(pg, /Last import<\/span><b class="cu-mono">3924\.90\.5650<\/b><span class="hc-r">28\.4% total/); assert.match(pg, /Same total duty rate/);
 });
+
+test('7501 line without item codes: add products by hand (split by PO value, pieces from the PO when the 7501 is in kg), remove again', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Coooko' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: {} });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'GK 001', product: 'Grooming Kit 14pc', qty: 4020, unit_price: 1, container_id: c.id });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'GKP 001', product: 'Grooming kit 14 piece set - pink', qty: 6000, unit_price: 1, container_id: c.id });
+  const gk = await db.insert('products', { supplier_id: s.id, product_name: 'Grooming Kit 14pc', supplier_sku: 'GK 001' });
+  const gkp = await db.insert('products', { supplier_id: s.id, product_name: 'Grooming kit 14 piece set - pink', supplier_sku: 'GKP 001' });
+  const e = await db.insert('customs_entries', { entry_no: '9T2-9', status: 'pending', container_id: c.id, facts: {}, lines: [{ no: '001', description: 'NAILFILES', hts: '8214.20.3000', rate: 4, extras: [{ rate: 20 }], qty: 2666, unit: 'KG', value: 10420, duty: 2500.8, mpf: 0, hmf: 0, pos: [], products: [] }] });
+  const post = async (form) => JSON.parse((await req(base, "POST", `/admin/logistics/customs/${e.id}/link`, { cookie, form })).text);
+  let j = await post({ line: '001', i: '0', product: gk.id });
+  assert.equal(j.ok, true, j.error);
+  j = await post({ line: '001', i: '1', product: gkp.id });
+  const ps = db.tables.customs_entries.find((x) => x.id === e.id).lines[0].products;
+  assert.deepEqual(ps.map((p) => p.code), ['GK 001', 'GKP 001']);
+  assert.deepEqual(ps.map((p) => p.qty), [4020, 6000]);   // pieces from the PO, not kg
+  assert.equal(Math.round(ps[0].duty + ps[1].duty), 2501); assert.equal(ps[0].per_pc, 0.25);
+  assert.equal((await post({ line: '001', i: '1', product: gkp.id })).ok, true);   // index 1 exists → a change, not a duplicate add
+  j = await post({ line: '001', i: '0', remove: '1' });
+  assert.deepEqual(db.tables.customs_entries.find((x) => x.id === e.id).lines[0].products.map((p) => p.code), ['GKP 001']);
+});
