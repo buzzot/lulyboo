@@ -5610,3 +5610,24 @@ test('Customs draft (own 7501): classify the shipment products, 7501 lines with 
   assert.equal((await req(base, 'POST', `/admin/orders/shipments/${c.id}/customs-draft/email`, { cookie, form: { to: 'chb@broker.test', subject: mail.subject, body: mail.body } })).status, 303);
   assert.ok(db.tables.customs_drafts[0].correction_sent_at);
 });
+
+test('shipment "What\'s in it": SKU hover shows HTS history, warns when this 7501 changes the code, falls back to last used', async (t) => {
+  const db = seedDb();
+  const { server, base } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Coooko' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'shipped', fwd: {} });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'IBSSP 001', product: 'Baby Bath Support - Pink', qty: 2002, container_id: c.id, shipped: true });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600015', sku: 'GK 001', product: 'Grooming Kit', qty: 4020, container_id: c.id, shipped: true });
+  const bath = await db.insert('products', { supplier_id: s.id, product_name: 'Baby Bath Support - Pink', supplier_sku: 'IBSSP 001', hts_verified_code: '3924905650' });
+  const gk = await db.insert('products', { supplier_id: s.id, product_name: 'Grooming Kit', supplier_sku: 'GK 001' });
+  const ln = (hts, rate, pid, code, per_pc) => ({ hts, rate, extras: [{ rate: 25, label: 'Section 301' }], products: [{ product_id: pid, code, per_pc, po: '500011' }] });
+  await db.insert('customs_entries', { entry_no: '9T2-1', entry_date: '2026-09-12', status: 'saved', facts: {}, lines: [ln('3924.90.5650', 3.4, bath.id, 'IBSSP 001', 0.412), ln('9603.29.0000', 0, gk.id, 'GK 001', 0.318)] });
+  await db.insert('customs_entries', { entry_no: '9T2-2', entry_date: '2026-11-26', status: 'pending', container_id: c.id, facts: {}, lines: [{ hts: '3922.10.0000', rate: 3.4, extras: [{ rate: 25 }], products: [{ product_id: bath.id, code: 'IBSSP 001', po: '600015' }] }] });
+  const pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(pg, /HTS history · IBSSP 001/); assert.match(pg, /This 7501 uses 3922\.10\.0000 — last import used 3924\.90\.5650/);
+  assert.match(pg, /⚠ changed/); assert.match(pg, /28\.4% total/); assert.match(pg, /\$0\.412/);
+  assert.match(pg, /9603\.29\.0000<\/span><div class="sub">last used Sep 12/);
+  assert.equal((pg.match(/⚠ changed/g) || []).length, 1);
+});

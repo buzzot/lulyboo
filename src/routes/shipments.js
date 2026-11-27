@@ -477,8 +477,34 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       return html`<div class="shp-leg"><span class="sub">${label}</span><b>${port || '—'}</b>
         <div class="shp-leg-d">${x.now ? html`<b>${sh(x.now)}</b> <span class="sub">${x.actual ? act.toLowerCase() : est}</span>` : html`<span class="sub">${est} not known yet</span>`}</div>
         ${x.plan ? html`<div class="sub">planned ${sh(x.plan)}${late ? html` <span class="shp-f ${late > 0 ? 'amb' : 'grn'}">${late > 0 ? `${late} day${late === 1 ? '' : 's'} late` : `${-late} day${late === -1 ? '' : 's'} early`}</span>` : x.now ? ' · on time' : ''}</div>` : ''}</div>`; };
-    const htsOf = (l) => { for (const e of r.entries) for (const cl of e.lines || []) for (const p of cl.products || []) if ((p.line_id && p.line_id === l.id) || (l.sku && p.code && p.code.replace(/\W/g, '').toUpperCase() === String(l.sku).replace(/\W/g, '').toUpperCase())) return { hts: cl.hts, rate: cl.rate, entry: e.id }; return null; };
-    const prodHts = (l) => { const pr = prods.find((p) => p.supplier_id === l.supplier_id && ((l.sku && p.sku === l.sku) || (l.product && p.name === l.product))); return pr?.hts_verified_code || pr?.hts_code || ''; };
+    // HTS per line: this shipment's 7501, earlier imports of the same product (newest first), the product record
+    const CU = require('../customs'); const nk = (x) => String(x || '').replace(/\W/g, '').toUpperCase(); const dg = (x) => String(x || '').replace(/\D/g, '');
+    const fmtH = (x) => { const d = dg(x); return d.length >= 8 ? `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 10)}` : x || ''; };
+    const prodOf = (l) => PL.catalogMatch(l, prods.filter((p) => p.supplier_id === l.supplier_id)) || null;
+    const isMine = (p, l, pr) => (p.line_id && p.line_id === l.id) || (pr && p.product_id === pr.id) || (l.sku && p.code && nk(p.code) === nk(l.sku));
+    const htsOf = (l) => { const pr = prodOf(l); for (const e of r.entries) for (const cl of e.lines || []) for (const p of cl.products || []) if (isMine(p, l, pr)) return { hts: cl.hts, rate: CU.lineRate(cl), base: cl.rate, extras: cl.extras || [], entry: e.id, pending: e.status !== 'saved' }; return null; };
+    const pastCE = (await db.list('customs_entries', { order: 'entry_date.desc' }).catch(() => [])).filter((e) => e.status === 'saved' && !r.entries.some((x) => x.id === e.id));
+    const histOf = (l) => { const pr = prodOf(l); const out = [];
+      for (const e of pastCE) { const hit = (e.lines || []).map((cl) => [cl, (cl.products || []).find((p) => isMine(p, l, pr))]).find(([, p]) => p);
+        if (hit) out.push({ id: e.id, date: e.entry_date, entry: e.entry_no, hts: hit[0].hts, rate: CU.lineRate(hit[0]), per_pc: hit[1].per_pc, po: hit[1].po }); }
+      return out; };
+    const htsCell = (l) => { const pr = prodOf(l); const cur = htsOf(l); const hist = histOf(l); const last = hist[0];
+      const onFile = pr?.hts_verified_code || ''; const ref = last ? last.hts : onFile;
+      const changed = !!(cur && ref && dg(cur.hts) !== dg(ref));
+      const rateMoved = !changed && cur && last && cur.rate != null && last.rate != null && Math.abs(cur.rate - last.rate) >= 0.1;
+      const why = changed ? `Different from ${last ? `the last import (${sh(last.date)}, entry ${last.entry || '—'})` : 'the product record'}: ${fmtH(ref)}` : '';
+      const card = html`<span class="or-pc-card ht-card" data-wide><b class="ht-h">HTS history · ${l.sku || l.product}</b>
+        ${changed ? html`<div class="ht-warn">⚠ This 7501 uses ${fmtH(cur.hts)} — ${last ? `last import used ${fmtH(last.hts)}` : `the product record says ${fmtH(onFile)}`}. Check before it's filed.</div>` : rateMoved ? html`<div class="ht-info">Same code, rate ${last.rate}% → ${cur.rate}%</div>` : ''}
+        <table class="ht-t"><thead><tr><th>Date</th><th>HTS</th><th class="r">Rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
+          ${cur ? html`<tr class="ht-now ${changed ? 'warn' : ''}"><td>This shipment</td><td class="cu-mono">${fmtH(cur.hts)}</td><td class="r">${cur.rate != null ? `${cur.rate}%` : '—'}</td><td class="r sub">${cur.pending ? '7501 to review' : '—'}</td></tr>` : ''}
+          ${hist.slice(0, 6).map((h) => html`<tr><td title="${`Entry ${h.entry || '—'}${h.po ? ` · PO ${h.po}` : ''}`}">${sh(h.date)}</td><td class="cu-mono">${fmtH(h.hts)}</td><td class="r">${h.rate != null ? `${h.rate}%` : '—'}</td><td class="r">${h.per_pc != null ? usd(h.per_pc, 3) : '—'}</td></tr>`)}
+          ${!cur && !hist.length ? html`<tr><td colspan="4" class="sub">No customs entry for this SKU yet — first import.</td></tr>` : ''}
+        </tbody></table>
+        ${hist.length > 6 ? html`<span class="sub">+${hist.length - 6} older</span>` : ''}
+        <div class="ht-ft sub">Product record: ${onFile ? html`<span class="cu-mono">${fmtH(onFile)}</span>` : 'no verified HTS'}</div></span>`;
+      const hts = cur ? html`<a class="cu-mono hts-tip" data-hts="${cur.hts}" href="/admin/logistics/customs?review=${cur.entry}">${fmtH(cur.hts)}</a>${changed ? html` <span class="ht-flag" title="${why}">⚠ changed</span>` : ''}${cur.rate != null ? html`<div class="sub" title="${cur.extras.length ? `${cur.base}% + ${cur.extras.map((x) => `${x.rate}%${x.label ? ` ${x.label}` : ''}`).join(' + ')}` : 'Base rate'}">${cur.rate}%${cur.extras.length ? ' total' : ''}</div>` : ''}`
+        : ref ? html`<span class="sub cu-mono hts-tip" data-hts="${ref}" tabindex="0">${fmtH(ref)}</span><div class="sub">${last ? `last used ${sh(last.date)}` : 'product record'}</div>` : html`<span class="sub">—</span>`;
+      return { sku: html`<span class="ht-sku" tabindex="0" data-popcard>${l.sku || '—'}${card}</span>`, hts }; };
     const rec = {}; for (const x of ((r.c || r.sc).received || [])) rec[x.line_id] = x;
     const cost = (r.freight || 0) + (r.duty || 0) + (r.drayage || 0);
     const editable = r.stage !== 'delivered';
@@ -610,9 +636,9 @@ module.exports = function shipmentRoutes(router, { db, config }) {
               ${changes.length ? html`<ul class="shp-chg">${changes.map((x) => html`<li><span class="sub">${sh(x.at)}</span><span><b>${x.what}</b> ${x.from} → <b>${x.to}</b>${x.d ? html` <span class="shp-f ${x.d > 0 ? 'amb' : 'grn'}">${x.d > 0 ? `+${x.d}` : x.d} day${Math.abs(x.d) === 1 ? '' : 's'}</span>` : ''}</span><span class="sub">${x.src}</span></li>`)}</ul>` : html`<p class="sub shp-none">No changes from the forwarder${dep.plan ? ' — on the planned sailing' : ''}.</p>`}`}
               <h3>What's in it</h3>
               <div class="table-wrap"><table class="list shp-t"><thead><tr><th>PO</th><th>SKU</th><th>Product</th><th class="r">Ctns</th><th class="r">Pcs</th><th class="r">m³</th><th>HTS</th>${r.stage === 'delivered' ? html`<th class="r">Received</th>` : ''}</tr></thead><tbody>
-                ${r.lines.map((l) => { const h = htsOf(l); const rc = rec[l.id];
-                  return html`<tr><td><a href="/admin/orders/view?supplier=${l.supplier_id}&po=${encodeURIComponent(l.po)}">${l.po}</a></td><td class="cu-mono">${l.sku || '—'}</td><td>${l.product || '—'}${l.split_no ? html` <em class="lp-chip-pt">part ${l.split_no}</em>` : ''}</td><td class="r">${l.cartons != null ? int(l.cartons) : '—'}</td><td class="r">${l.qty != null ? int(l.qty) : '—'}</td><td class="r">${l.cbm != null ? n2(l.cbm) : '—'}</td>
-                    <td>${h ? html`<a class="cu-mono hts-tip" data-hts="${h.hts}" href="/admin/logistics/customs?review=${h.entry}">${h.hts}</a>${h.rate != null ? html` <span class="sub">${h.rate}%</span>` : ''}` : (prodHts(l) ? html`<span class="sub cu-mono hts-tip" data-hts="${prodHts(l)}" tabindex="0">${prodHts(l)}</span>` : html`<span class="sub">—</span>`)}</td>
+                ${r.lines.map((l) => { const h = htsCell(l); const rc = rec[l.id];
+                  return html`<tr><td><a href="/admin/orders/view?supplier=${l.supplier_id}&po=${encodeURIComponent(l.po)}">${l.po}</a></td><td class="cu-mono">${h.sku}</td><td>${l.product || '—'}${l.split_no ? html` <em class="lp-chip-pt">part ${l.split_no}</em>` : ''}</td><td class="r">${l.cartons != null ? int(l.cartons) : '—'}</td><td class="r">${l.qty != null ? int(l.qty) : '—'}</td><td class="r">${l.cbm != null ? n2(l.cbm) : '—'}</td>
+                    <td class="ht-c">${h.hts}</td>
                     ${r.stage === 'delivered' ? html`<td class="r">${rc ? html`${rc.received}${rc.received < rc.shipped ? html` <span class="shp-f red">−${rc.shipped - rc.received}</span>` : ''}` : '—'}</td>` : ''}</tr>`; })}
               </tbody></table></div>
               <h3>Timeline</h3>

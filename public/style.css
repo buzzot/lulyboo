@@ -3774,3 +3774,15 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 .dx-t{table-layout:fixed}.dx-t th:last-child{width:64px}.dx-t .dx-po{max-width:none;overflow:hidden}
 .dx-t th.dx-cc,.dx-t td.dx-cc{width:62px}.dx-t th:last-child{width:58px}
 .dx-cw{display:flex;align-items:center;justify-content:space-between;gap:8px}
+/* HTS history on the shipment's "What's in it" */
+.ht-sku{text-decoration:underline dotted #b9b2a8;text-underline-offset:4px;cursor:default;outline:none;white-space:nowrap}.ht-sku .or-pc-card{display:none!important}
+.pop-card.wide{width:380px}
+.ht-h{font-size:13px;margin-bottom:4px}
+.ht-t{width:100%;border-collapse:collapse;font-size:12px}.ht-t th{font-weight:600;color:var(--muted);text-align:left;padding:3px 6px 3px 0;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+.ht-t td{padding:4px 6px 4px 0;border-bottom:1px solid #f1eee9;white-space:nowrap}.ht-t .r{text-align:right;padding-right:0}
+.ht-t tr.ht-now td{font-weight:600}.ht-t tr.ht-now.warn td{color:#9a5b00}
+.ht-warn{background:#fdf3e1;color:#8a5200;border-radius:6px;padding:5px 8px;font-size:12px;margin-bottom:6px;line-height:1.4}
+.ht-info{background:#f3f1ed;border-radius:6px;padding:4px 8px;font-size:12px;margin-bottom:6px}
+.ht-ft{margin-top:6px;font-size:11.5px}
+.ht-flag{display:inline-block;font-size:11px;font-weight:600;color:#8a5200;background:#fdf3e1;border-radius:999px;padding:1px 7px;margin-left:4px;font-family:inherit;white-space:nowrap}
+.ht-c{white-space:nowrap}

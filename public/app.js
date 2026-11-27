@@ -2848,7 +2848,7 @@
   function show(x) {
     var src = x.querySelector('.or-pc-card'); if (!src) return; cur = x;
     var c = el(); var host = x.closest('dialog[open]') || document.body; if (c.parentNode !== host) host.appendChild(c);
-    c.innerHTML = src.innerHTML; c.hidden = false;
+    c.className = 'pop-card' + (src.hasAttribute('data-wide') ? ' wide' : ''); c.innerHTML = src.innerHTML; c.hidden = false;
     var r = x.getBoundingClientRect(), w = c.offsetWidth, h = c.offsetHeight;
     c.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
     var top = r.bottom + 6; if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6); c.style.top = top + 'px';
