@@ -4294,6 +4294,20 @@ test('add a document: one file for several POs (stored once), one supplier only,
   assert.equal(saved.length, 1); assert.deepEqual(saved[0].pos.sort(), ['700013', '70011']); assert.equal(saved[0].kind, 'Invoice & packing list');
   const st = await require('../src/podocs').check(db, c);
   assert.deepEqual(st.pos.filter((p) => p.sid === x.id).map((p) => p.missing), [[], []]);
+  // a bill of lading can cover the whole container: POs of both suppliers, filed to each, listed once, deleted together
+  const det2 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(det2, /data-allpos hidden>Whole container — all 3 POs/);
+  const blf = () => { const b = new FormData(); b.append('file', new Blob([Buffer.from('%PDF master BL')], { type: 'application/pdf' }), 'MBL YN0011.pdf'); b.append('kind', 'Bill of lading'); for (const v of [`${x.id}|70011`, `${x.id}|700013`, `${y.id}|500015`]) b.append('pos', v); return b; };
+  delete process.env.ANTHROPIC_API_KEY;
+  const up = await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: blf(), redirect: 'manual' });
+  assert.equal(up.status, 303); assert.match(decodeURIComponent(up.headers.get('set-cookie') || ''), /\(2 suppliers\)/);
+  const bls = db.tables.plan_files.filter((f) => f.name === 'MBL YN0011.pdf');
+  assert.equal(bls.length, 2); assert.deepEqual(bls.map((f) => f.supplier_id).sort(), [x.id, y.id].sort()); assert.ok(bls.every((f) => f.kind === 'Bill of lading'));
+  const det3 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  const row = det3.slice(det3.indexOf('<b>Bill of lading</b>'), det3.indexOf('</tr>', det3.indexOf('<b>Bill of lading</b>')));
+  assert.equal((row.match(/<b title="MBL YN0011\.pdf">/g) || []).length, 1, 'shown once'); assert.match(row, /✓ on file/);
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/doc/remove`, { cookie, form: { src: 'plan', ref: bls[0].id, back: '' } });
+  assert.equal(db.tables.plan_files.filter((f) => f.name === 'MBL YN0011.pdf').length, 0, 'both copies removed');
 });
 
 test('record-only shipments: create, list in Records (not active), detail, from a forwarder update, edit, make full, delete', async (t) => {

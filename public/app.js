@@ -2973,15 +2973,30 @@
   var fmt = function (n) { return n == null ? '—' : Number(n).toLocaleString('en-US'); };
   var KN = { '': 'detected type', Invoice: 'commercial invoice', 'Packing list': 'packing list', CIPL: 'CI + PL', 'Bill of lading': 'bill of lading', 'Warehouse receipt': 'warehouse receipt', 'Loading photos': 'photos', Other: 'document' };
   var kind = function () { var k = form.querySelector('input[name=kind]:checked'); return k ? k.value : ''; };
+  // a bill of lading can cover the whole container (several suppliers); everything else is from one seller
+  var WHOLE = { 'Bill of lading': 1 }, whole = function () { return !!WHOLE[kind()]; };
+  var allBtn = form.querySelector('[data-allpos]'), suggest = [];
   var sync = function () {
-    var on = boxes.filter(function (b) { return b.checked; }), sid = on.length ? on[0].getAttribute('data-sid') : null;
-    Array.prototype.forEach.call(form.querySelectorAll('.ad-sup'), function (g) { var other = sid && g.getAttribute('data-sup') !== sid; g.classList.toggle('dim', !!other); Array.prototype.forEach.call(g.querySelectorAll('input[name=pos]'), function (b) { b.disabled = !!other; }); });
+    var on = boxes.filter(function (b) { return b.checked; });
+    if (!whole()) {   // one seller: keep the first supplier's ticks
+      var first = on.length ? on[0].getAttribute('data-sid') : null;
+      on.forEach(function (b) { if (b.getAttribute('data-sid') !== first) b.checked = false; });
+      on = boxes.filter(function (b) { return b.checked; });
+    }
+    var sid = on.length ? on[0].getAttribute('data-sid') : null;
+    Array.prototype.forEach.call(form.querySelectorAll('.ad-sup'), function (g) { var other = !whole() && sid && g.getAttribute('data-sup') !== sid; g.classList.toggle('dim', !!other); Array.prototype.forEach.call(g.querySelectorAll('input[name=pos]'), function (b) { b.disabled = !!other; }); });
+    if (allBtn) allBtn.hidden = !whole();
     var n = input.files ? input.files.length : 0, pos = on.map(function (b) { return b.getAttribute('data-po'); });
+    var nSup = {}; on.forEach(function (b) { nSup[b.getAttribute('data-sid')] = 1; }); nSup = Object.keys(nSup).length;
     btn.disabled = !(on.length && n);
     btn.textContent = on.length > 1 ? 'Add to ' + on.length + ' POs' : 'Add';
+    // the AI found other POs than the ones ticked → say so before saving
+    var miss = suggest.filter(function (x) { return !on.some(function (b) { return b.getAttribute('data-sid') === x.sid && b.getAttribute('data-po') === x.po; }); }).map(function (x) { return x.po; });
+    var warn = suggest.length && on.length && miss.length ? '<span class="ad-mis">⚠ AI found PO ' + esc(miss.join(', ')) + ' in this file, which is not ticked — check the POs before adding.</span>' : '';
     sum.innerHTML = !on.length ? 'Tick the PO(s) this file is for.' : !n ? 'Now drop the file.'
-      : 'Will add <b>' + (n === 1 ? esc(input.files[0].name) : n + ' files') + '</b> as <b>' + esc(KN[kind()] || 'document') + '</b> to <b>PO ' + esc(pos.join(', ')) + '</b>' + (on.length > 1 ? ' — one file, linked to all' : '') + '.';
+      : 'Will add <b>' + (n === 1 ? esc(input.files[0].name) : n + ' files') + '</b> as <b>' + esc(KN[kind()] || 'document') + '</b> to <b>PO ' + esc(pos.join(', ')) + '</b>' + (nSup > 1 ? ' of ' + nSup + ' suppliers' : '') + (on.length > 1 ? ' — one file, linked to all' : '') + '.' + warn;
   };
+  if (allBtn) allBtn.addEventListener('click', function () { touched = true; boxes.forEach(function (b) { b.checked = true; }); sync(); });
   boxes.forEach(function (b) { b.addEventListener('change', function () { touched = true; sync(); }); });
   Array.prototype.forEach.call(form.querySelectorAll('[data-allsup]'), function (a) {
     a.addEventListener('click', function () { var sid = a.getAttribute('data-allsup'); touched = true; boxes.forEach(function (b) { b.checked = b.getAttribute('data-sid') === sid; }); sync(); });
@@ -2990,6 +3005,7 @@
   var scan = function () {
     var n = input.files ? input.files.length : 0; sync();
     if (!n) { ai.hidden = true; return; }
+    suggest = [];
     var my = ++seq, fd = new FormData(); Array.prototype.forEach.call(input.files, function (f) { fd.append('file', f, f.name); });
     ai.hidden = false; ai.className = 'ad-ai busy'; ai.innerHTML = '<span class="ad-spin"></span> Reading the file…';
     fetch(form.getAttribute('data-adddoc'), { method: 'POST', body: fd, credentials: 'same-origin', headers: { Accept: 'application/json' } })
@@ -2998,7 +3014,8 @@
         if (j.kind && !kind()) { var k = form.querySelector('input[name=kind][value="' + j.kind + '"]'); if (k) k.checked = true; }
         boxes.forEach(function (b) { var s = b.parentNode.querySelector('.ad-sug'); if (s) s.hidden = true; });
         (j.suggest || []).forEach(function (s) { boxes.forEach(function (b) { if (b.getAttribute('data-sid') === s.sid && b.getAttribute('data-po') === s.po) { var m = b.parentNode.querySelector('.ad-sug'); if (m) m.hidden = false; } }); });
-        if (!touched && (j.suggest || []).length) { var sid = j.suggest[0].sid; boxes.forEach(function (b) { b.checked = b.getAttribute('data-sid') === sid && j.suggest.some(function (s) { return s.sid === sid && s.po === b.getAttribute('data-po'); }); }); }
+        suggest = j.suggest || [];
+        if (!touched && suggest.length) { var sid = suggest[0].sid; boxes.forEach(function (b) { b.checked = (whole() || b.getAttribute('data-sid') === sid) && suggest.some(function (s) { return s.sid === b.getAttribute('data-sid') && s.po === b.getAttribute('data-po'); }); }); }
         if (!j.ai) { ai.className = 'ad-ai'; ai.innerHTML = j.error ? esc(j.error) + ' — choose the PO(s) and type yourself.' : 'Type set from the file name' + (j.kind ? ': <b>' + esc(KN[j.kind] || j.kind) + '</b>' : '') + '.'; sync(); return; }
         var rows = (j.checks || []).map(function (c) {
           var ok = c.diff != null && Math.abs(c.diff) <= 2, cls = c.diff == null ? '' : ok ? 'ok' : 'bad';
