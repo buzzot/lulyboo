@@ -4043,6 +4043,17 @@ test('shipment: each PO needs its own CI and PL; alert after shipping; request f
   assert.deepEqual((await D.check(db, c)).pos.find((p) => p.po === '500024').missing, ['PL']);
   const det3 = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
   assert.match(det3, /data-popcard[^>]*>✓ CI/); assert.match(det3, /id="dx-rm-0"/); assert.match(det3, /id="broker"/);
+  // + Add file as Bill of lading for POs with no shipping-docs request: shows under Whole container
+  const bl = () => { const x = new FormData(); x.append('pos', `${y.id}|500024`); x.append('kind', 'Bill of lading'); x.append('file', new Blob([Buffer.from('%PDF telex BL')], { type: 'application/pdf' }), 'telex release BL TLX-NBAF2610333A.pdf'); return x; };
+  db.tables.ship_confirmations = db.tables.ship_confirmations.filter((s) => s.supplier_id !== y.id);
+  assert.equal((await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: bl(), redirect: 'manual' })).status, 303);
+  const blRow = (t) => t.slice(t.indexOf('<b>Bill of lading</b>'), t.indexOf('</tr>', t.indexOf('<b>Bill of lading</b>')));
+  assert.match(blRow((await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text), /telex release BL TLX-NBAF2610333A\.pdf/);
+  // the same file again, earlier filed as something else: the type chosen by hand wins
+  db.tables.plan_files.find((x) => /TLX-NBAF/.test(x.name)).kind = 'Other';
+  const again = await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: bl(), redirect: 'manual' });
+  assert.equal(db.tables.plan_files.filter((x) => /TLX-NBAF/.test(x.name)).length, 1); assert.equal(db.tables.plan_files.find((x) => /TLX-NBAF/.test(x.name)).kind, 'Bill of lading');
+  assert.match(decodeURIComponent(again.headers.get('set-cookie') || ''), /already on file/);
 });
 
 test('accountant: finance pages only, document checks, bank details, mark paid with slip, owner notified, reports', async (t) => {

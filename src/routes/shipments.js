@@ -423,8 +423,11 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     if (r.delivered) ev.push([r.delivered, '✅', `Delivered${(r.c || r.sc).delivered_to ? ` to ${(r.c || r.sc).delivered_to}` : ''}`, (r.c || r.sc).delivery_note || '']);
     ev.sort((a, b) => String(b[0]).localeCompare(String(a[0])));
     // documents — each with its files (preview in a popup, download), customs linked to its record
-    const files = r.scs.length ? await db.list('plan_files').catch(() => []) : [];
-    const sFiles = files.filter((x) => r.scs.some((s) => s.id === x.shipment_id));
+    // files of this shipment: stamped with one of its shipping confirmations, or filed to one of its POs (+ Add file
+    // without a shipping-docs request, or a file sent to the PO before) — container-level kinds (B/L, FCR, photos) too
+    const files = r.scs.length || r.lines.length ? await db.list('plan_files').catch(() => []) : [];
+    const mine = new Set(r.lines.map((l) => `${l.supplier_id}|${PL.normPo(l.po)}`));
+    const sFiles = files.filter((x) => r.scs.some((s) => s.id === x.shipment_id) || (!x.shipment_id && x.supplier_id && (x.pos || []).some((p) => mine.has(`${x.supplier_id}|${PL.normPo(p)}`))));   // stamped with another shipment → not here
     const ups = r.c ? (await db.list('fwd_updates', { filters: { container_id: r.c.id } }).catch(() => [])).filter((x) => ['accepted', 'logged'].includes(x.status)) : [];
     const canSee = (t) => /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(t || '');
     const fl = (name, url, type, dl, rm = null) => ({ name, url, type: type || '', dl: dl || url, rm });
@@ -779,16 +782,19 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     if (!ups.length) throw new HttpError(400, 'Choose a file');
     const scs = r.scs.filter((s) => s.supplier_id === sid && (s.pos || []).some((p) => pos.includes(PL.normPo(p))));
     const kinds = { Invoice: 'Invoice', 'Packing list': 'Packing list', CIPL: 'Invoice & packing list', 'Bill of lading': 'Bill of lading', 'Warehouse receipt': 'Warehouse receipt', 'Loading photos': 'Loading photos', Other: 'Other' };
+    const again = [];
     for (const u of ups) {
       const kind = kinds[f.kind] || SD.kindOf(u.name, u.type);
-      await PL.storeFiles(db, sid, [u], { pos, kind, by: by(req), shipmentId: scs[0]?.id || null });
+      const out = await PL.storeFiles(db, sid, [u], { pos, kind, by: by(req), shipmentId: scs[0]?.id || null, setKind: !!kinds[f.kind] });
+      if (out.skipped.length) again.push(u.name);
+      if (out.errors.length) throw new HttpError(400, out.errors.join(' · '));
     }
     for (const sc of scs) {
       const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
       const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
       await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Added ${ups.map((u) => u.name).join(', ')} (${by(req)})` }].slice(-60), updated_at: now() }).catch(() => null);
     }
-    flash(res, 'ok', `Added ${ups.length === 1 ? ups[0].name : `${ups.length} files`} to PO ${pos.join(', ')}`);
+    flash(res, 'ok', `Added ${ups.length === 1 ? ups[0].name : `${ups.length} files`} to PO ${pos.join(', ')}${again.length ? ` · ${again.length === ups.length && ups.length === 1 ? 'this file was' : `${again.length} were`} already on file — linked${kinds[f.kind] ? ` and set to ${kinds[f.kind].toLowerCase()}` : ''}` : ''}`);
     res.redirect(`${BASE}/${r.id}#docs`);
   }));
 

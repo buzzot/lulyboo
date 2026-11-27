@@ -1514,6 +1514,17 @@
     var at = c.status === 'booked' ? 2 : c.status === 'requested' ? 1 : 0;
     return '<ol class="lp-steps" aria-label="Stage">' + ['Planned', 'Quotes', 'Booked', 'Sailed'].map(function (l, i) { return '<li class="' + (i < at ? 'done' : i === at ? 'now' : '') + '"' + (i === at ? ' aria-current="step"' : '') + '><i>' + (i < at ? '✓' : i + 1) + '</i>' + l + '</li>'; }).join('') + '</ol>';
   }
+  // Booked Volume tile: how full the box is, against its real inside volume (40HQ 76.4 m³); the practical load used for
+  // planning (65 m³) is a tick on the bar. grey < 60% · green up to the practical load · amber above it · red > 95%.
+  function volTile(c, v, sub) {
+    var t = D.box[c.box] || {};
+    if (t.lcl || !t.inner || !(v > 0)) return '<div class="lp-st"><b>' + n2(v) + ' m³</b><span>Volume' + (t.name ? ' · ' + esc(t.name) : '') + '</span>' + sub + '</div>';
+    var pct = v / t.inner * 100, capPct = t.cap / t.inner * 100;
+    var lvl = pct > 95 ? 'over' : v > t.cap ? 'tight' : pct < 60 ? 'low' : 'ok';
+    return '<div class="lp-st lp-volt"><div class="lp-vf"><b>' + n2(v) + ' m³</b><em class="' + lvl + '" title="' + n2(v) + ' of ' + n2(t.inner) + ' m³ inside volume">' + Math.round(pct) + '% full</em></div><span>Volume · ' + esc(t.name) + '</span>' +
+      '<div class="lp-vbar" role="img" aria-label="' + Math.round(pct) + '% of the container volume"><i class="' + lvl + '" style="width:' + Math.min(100, pct).toFixed(1) + '%"></i><u style="left:' + capPct.toFixed(1) + '%" title="practical load ' + t.cap + ' m³"></u></div>' +
+      '<div class="lp-vcap"><span>practical ' + t.cap + '</span><span>max ' + Math.round(t.inner) + ' m³</span></div>' + sub + '</div>';
+  }
   function bookedHTML(c) {
     var items = itemsOf(c), f = c.fwd || {}, k = f.confirmed || {}, sail = sById(c.sailing);
     var ctnP = items.reduce(function (a, o) { return a + ctnOf(o); }, 0), cbmP = usedOf(c), kgP = sumOf(c, 'kg');
@@ -1524,7 +1535,7 @@
     };
     var st = function (v, l, sub) { return '<div class="lp-st"><b>' + v + '</b><span>' + l + '</span>' + (sub || '') + '</div>'; };
     var stats = '<div class="lp-stats lp-bkstats">' +
-      st(n2(k.cbm != null ? k.cbm : cbmP) + ' m³', 'Volume', cmp(cbmP, k.cbm, n2, 'm³')) +
+      volTile(c, k.cbm != null ? k.cbm : cbmP, cmp(cbmP, k.cbm, n2, 'm³')) +
       st(int(k.ctns != null ? k.ctns : ctnP) + ' ctns', 'Cartons', cmp(ctnP, k.ctns, int, 'ctns')) +
       st((k.kg != null ? int(Math.round(k.kg)) : kgP ? int(Math.round(kgP)) : '—') + ' kg', 'Gross weight', kgP || k.kg != null ? cmp(kgP, k.kg, function (v) { return int(Math.round(v)); }, 'kg') : '') +
       st(f.cut ? esc(f.cut) : c.loading ? esc(short(c.loading)) : '—', esc(f.cutName || (D.box[c.box].lcl ? 'CFS cut-off' : 'CY cut-off'))) +
