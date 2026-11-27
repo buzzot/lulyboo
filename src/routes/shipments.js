@@ -521,7 +521,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const addPos = [...new Map(r.lines.map((l) => [`${l.supplier_id}|${PL.normPo(l.po)}`, l])).values()];
     const docsPanel = html`<section class="dx" id="docs">
       <div class="dx-hd"><h3>Documents</h3><span class="dx-prog" title="${`${nReady} of ${nItems} required documents in`}"><span class="dx-bar"><i class="${nReady >= nItems ? 'full' : ''}" style="width:${nItems ? Math.round((nReady / nItems) * 100) : 0}%"></i></span>${nReady} of ${nItems}</span>
-        <span class="dx-btns">${r.c && r.kind !== 'courier' ? html`<button type="button" class="btn ghost small" data-open-dialog="broker">${bSent ? 'Broker ✓' : 'Send to broker…'}</button>` : ''}${nMiss ? html`<button type="button" class="btn small" data-open-dialog="pd-req">Request ${nMiss} missing…</button>` : ''}</span></div>
+        <span class="dx-btns">${r.c && r.kind !== 'courier' ? html`<a class="btn ghost small" href="${`${BASE}/${r.id}/customs-draft`}" title="Our own 7501: HTS codes, duty and lower-duty options before the broker files">Customs draft</a>` : ''}${r.c && r.kind !== 'courier' ? html`<button type="button" class="btn ghost small" data-open-dialog="broker">${bSent ? 'Broker ✓' : 'Send to broker…'}</button>` : ''}${nMiss ? html`<button type="button" class="btn small" data-open-dialog="pd-req">Request ${nMiss} missing…</button>` : ''}</span></div>
       ${r.pd?.alert ? html`<p class="dx-al"><b>Shipped${f.atd ? ` ${sh(f.atd)}` : ''}</b> — ${r.pd.open.length} PO${r.pd.open.length === 1 ? '' : 's'} without ${[...new Set(r.pd.open.flatMap((p) => p.missing))].map((k) => (k === 'CI' ? 'a commercial invoice' : 'a packing list')).join(' or ')}.${bDue && !bSent ? html` The broker needs them by <b>${sh(bDue)}</b>.` : ''}</p>`
         : r.c && r.kind !== 'courier' && bEta ? html`<p class="dx-st">${bSent ? html`Sent to the broker ${sh(bSent)}` : html`Broker documents due <b>${sh(bDue)}</b> (ETA ${sh(bEta)} − 5 days)`}</p>` : ''}
       <table class="dx-t">${poRows.length ? html`<thead><tr><th>PO</th><th>Invoice</th><th>Packing list</th><th>Asked</th><th></th></tr></thead>` : ''}
@@ -782,20 +782,28 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     if (!ups.length) throw new HttpError(400, 'Choose a file');
     const scs = r.scs.filter((s) => s.supplier_id === sid && (s.pos || []).some((p) => pos.includes(PL.normPo(p))));
     const kinds = { Invoice: 'Invoice', 'Packing list': 'Packing list', CIPL: 'Invoice & packing list', 'Bill of lading': 'Bill of lading', 'Warehouse receipt': 'Warehouse receipt', 'Loading photos': 'Loading photos', Other: 'Other' };
-    const again = [];
+    const again = []; const toRead = [];
     for (const u of ups) {
       const kind = kinds[f.kind] || SD.kindOf(u.name, u.type);
       const out = await PL.storeFiles(db, sid, [u], { pos, kind, by: by(req), shipmentId: scs[0]?.id || null, setKind: !!kinds[f.kind] });
       if (out.skipped.length) again.push(u.name);
       if (out.errors.length) throw new HttpError(400, out.errors.join(' · '));
+      if (/bill of lading|warehouse receipt/i.test(kind)) toRead.push(u);
+    }
+    // a B/L (or the forwarder's warehouse receipt) also carries the shipment's facts — B/L numbers, container, vessel, dates:
+    // read it like a forwarder update so its values can be accepted into the Container & booking tiles
+    let upd = null;
+    if (r.c && toRead.length && AI.enabled()) {
+      const seen = (await db.list('fwd_updates', { filters: { container_id: r.c.id } }).catch(() => [])).some((x) => x.status !== 'dismissed' && (x.files || []).some((fl) => toRead.some((u) => fl.name === String(u.name).slice(0, 200) && Number(fl.size) === u.buffer.length)));
+      if (!seen) upd = await FW.createUpdate(db, config, { source: 'upload', subject: toRead.map((u) => u.name).join(', '), files: toRead, containerId: r.c.id, by: by(req), notify: false }).catch((e) => { console.error('B/L read failed:', e.message); return null; });
     }
     for (const sc of scs) {
       const fresh = await db.get('ship_confirmations', sc.id); const { sailing } = await SD.factsOf(db, fresh);
       const missing = SD.missingKinds(SD.checklistOf(fresh, await SD.filesOf(db, fresh), sailing, SD.chinaNow().day));
       await db.update('ship_confirmations', { id: sc.id }, { missing, log: [...(fresh.log || []), { at: now(), text: `Added ${ups.map((u) => u.name).join(', ')} (${by(req)})` }].slice(-60), updated_at: now() }).catch(() => null);
     }
-    flash(res, 'ok', `Added ${ups.length === 1 ? ups[0].name : `${ups.length} files`} to PO ${pos.join(', ')}${again.length ? ` · ${again.length === ups.length && ups.length === 1 ? 'this file was' : `${again.length} were`} already on file — linked${kinds[f.kind] ? ` and set to ${kinds[f.kind].toLowerCase()}` : ''}` : ''}`);
-    res.redirect(`${BASE}/${r.id}#docs`);
+    flash(res, 'ok', `Added ${ups.length === 1 ? ups[0].name : `${ups.length} files`} to PO ${pos.join(', ')}${again.length ? ` · ${again.length === ups.length && ups.length === 1 ? 'this file was' : `${again.length} were`} already on file — linked${kinds[f.kind] ? ` and set to ${kinds[f.kind].toLowerCase()}` : ''}` : ''}${upd ? ' · B/L read — check the values and accept to fill in the shipment' : ''}`);
+    res.redirect(upd ? `${BASE}/${r.id}#fwd-${upd.id}` : `${BASE}/${r.id}#docs`);
   }));
 
   router.post(`${BASE}/:id/request-docs`, G(async (req, res) => {

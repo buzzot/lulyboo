@@ -3257,3 +3257,6 @@
     });
   });
 })();
+
+// Print buttons (customs draft → Print / PDF)
+(function () { document.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-print]'); if (b) { e.preventDefault(); window.print(); } }); })();

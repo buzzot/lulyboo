@@ -5473,3 +5473,117 @@ test('Product development costs: add (with file), spread over a planned quantity
   // a cost needs a title and an amount
   assert.equal((await req(base, 'POST', `/admin/products/${p.id}/dev/costs`, { cookie, form: { title: '', amount: '5' } })).status, 400);
 });
+
+test('Shipments + Add file → Bill of lading: AI reads it as a forwarder update to accept into the tiles (once per file)', async (t) => {
+  const db = seedDb(); const { server, base } = await startServer(db); t.after(() => server.close());
+  const realFetch = global.fetch; let calls = 0;
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('api.anthropic.com')) {
+      calls++; const sent = JSON.parse(opts.body);
+      return new Response(JSON.stringify({ model: 'claude-test', usage: { input_tokens: 10, output_tokens: 10 }, content: [{ type: 'tool_use', name: sent.tool_choice.name, input: { doc_type: 'bill_of_lading', summary: 'House B/L, telex release', hbl_no: 'NBAF2610333A', mbl_no: 'EGLV143661924442', container_no: 'EGHU3571618', seal_no: 'EMCGAF3685', vessel: 'EVER FRANK', voyage: '1245E', etd: '2026-11-12', eta: '2026-11-27', pos: ['600018'] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; }); process.env.ANTHROPIC_API_KEY = 'test';
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Ningbo Coooko' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '20GP', status: 'shipped', fwd: { forwarder: 'Panda Logistics' } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600018', product: 'Water teether', qty: 3540, cbm: 2.65, container_id: c.id, shipped: true });
+  const bl = () => { const x = new FormData(); x.append('pos', `${s.id}|600018`); x.append('kind', 'Bill of lading'); x.append('file', new Blob([Buffer.from('%PDF RS logistics BL')], { type: 'application/pdf' }), 'BL NBAF2610333A.pdf'); return x; };
+  const up = await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: bl(), redirect: 'manual' });
+  assert.equal(up.status, 303); assert.match(up.headers.get('location'), /#fwd-/);
+  assert.equal(db.tables.fwd_updates.length, 1); const u = db.tables.fwd_updates[0];
+  assert.equal(u.container_id, c.id); assert.equal(u.status, 'pending'); assert.equal(u.facts.hbl_no, 'NBAF2610333A');
+  // the same B/L again: no second read
+  await fetch(`${base}/admin/orders/shipments/${c.id}/upload`, { method: 'POST', headers: { cookie }, body: bl(), redirect: 'manual' });
+  assert.equal(db.tables.fwd_updates.length, 1); assert.equal(calls, 1);
+  // accept → the tiles have the B/L numbers and the container
+  await req(base, 'POST', `/admin/orders/shipping/fwd/${u.id}/accept`, { cookie, form: { v_hbl_no: 'NBAF2610333A', v_mbl_no: 'EGLV143661924442', v_container_no: 'EGHU3571618', v_eta: '2026-11-27', back: `/admin/orders/shipments/${c.id}` } });
+  const pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text;
+  assert.match(pg, /NBAF2610333A/); assert.match(pg, /EGLV143661924442/); assert.match(pg, /EGHU3571618/);
+});
+
+test('Customs draft (own 7501): classify the shipment products, 7501 lines with duty + 301 + China extra, defensible lower codes, info re-run, broker compare + keep', async (t) => {
+  const realFetch = global.fetch; const calls = [];
+  const ROWS = {
+    '3924.10': [{ htsno: '3924.10.40.00', description: 'Tableware and kitchenware', general: '3.4%', footnotes: [{ value: 'See 9903.88.03.' }] }],
+    '9503.00': [{ htsno: '9503.00.00.73', description: 'Toys for children under 3', general: 'Free', footnotes: [] }],
+    '7009.10': [{ htsno: '7009.10.00.00', description: 'Rear-view mirrors for vehicles', general: '3.9%', footnotes: [{ value: 'See 9903.88.03.' }] }],
+    '8516.79': [{ htsno: '8516.79.00.00', description: 'Other electrothermic appliances', general: '2.7%', footnotes: [] }],
+    '9903.88.03': [{ htsno: '9903.88.03', description: 'Section 301', general: 'The duty provided in the applicable subheading + 25%' }],
+  };
+  const answers = {
+    feeder: [{ hts: '3924.10.4000', title: 'Tableware of plastics', fit: 'strong', why: 'The feeder gives the set its essential character (GRI 3(b)).' }, { hts: '9503.00.0073', title: 'Toys under 3', fit: 'possible', why: 'If the rattle is the main item.' }, { hts: '8516.79.0000', title: 'Electrothermic', fit: 'weak', why: 'Not electric.' }],
+    mirror: [{ hts: '7009.10.0000', title: 'Rear-view mirrors', fit: 'possible', why: 'Glass mirror for a vehicle.' }],
+  };
+  global.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.startsWith('https://hts.usitc.gov')) { const k = decodeURIComponent(u.split('keyword=')[1]); const hit = Object.keys(ROWS).find((x) => k.startsWith(x)); return new Response(JSON.stringify(hit ? ROWS[hit] : []), { status: 200 }); }
+    if (u.startsWith('https://api.anthropic.com')) {
+      const sent = JSON.parse(opts.body); calls.push(sent); const name = sent.tool_choice.name; const txt = JSON.stringify(sent.messages);
+      const which = /mirror/i.test(txt) ? 'mirror' : 'feeder';
+      const input = name === 'classify_product' ? { customs_description: which === 'mirror' ? 'Baby back-seat car mirror.' : 'Mesh feeder and rattle set for babies.', summary: which, candidates: answers[which], missing_facts: which === 'mirror' ? ['Mirror material: glass or acrylic'] : [] }
+        : { codes: answers[which].map((c) => ({ hts: c.hts, matches: c.fit !== 'weak', fit: c.fit, why: c.why })) };
+      return new Response(JSON.stringify({ model: 'm', content: [{ type: 'tool_use', name, input }] }), { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  process.env.ANTHROPIC_API_KEY = 'sk-test'; process.env.EMAIL_DEV_LOG = 'true'; Duty._cache.clear();
+  const db = seedDb(); const { server, base } = await startServer(db);
+  t.after(() => { global.fetch = realFetch; delete process.env.ANTHROPIC_API_KEY; Duty._cache.clear(); server.close(); });
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((x) => x.split(';')[0]).join('; ');
+  const s = await db.insert('suppliers', { name: 'Ningbo Coooko' });
+  const pf = await db.insert('products', { supplier_id: s.id, product_name: 'Self feeder and rattle set', supplier_sku: 'SFRS 001', unit_price: 0.68, currency: 'USD', status: 'Selected' });
+  const pm = await db.insert('products', { supplier_id: s.id, product_name: 'Baby car mirror', supplier_sku: 'CMR 001', unit_price: 1.35, currency: 'USD', status: 'Selected' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '20GP', status: 'shipped', fwd: { hbl_no: 'NBAF2610333A', mbl_no: 'EGLV143661924442', vessel: 'EVER FRANK', voyage: '1245E', etd: '2026-11-12', eta: '2026-11-27', pod: 'Los Angeles' } });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600020', product: 'Self feeder and rattle set', sku: 'SFRS 001', qty: 5000, unit_price: 0.68, cartons: 167, gross_kg: 400, container_id: c.id, shipped: true });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600020', product: 'Baby car mirror', sku: 'CMR 001', qty: 500, unit_price: 1.35, cartons: 25, gross_kg: 58, container_id: c.id, shipped: true });
+  // an earlier 7501 of another product carries the China-wide extra
+  await db.insert('customs_entries', { entry_no: 'E-0', entry_date: '2026-10-01', status: 'saved', lines: [{ hts: '9503.00.0073', rate: 0, extras: [{ code: '9903.01.24', rate: 20, label: 'IEEPA' }], products: [] }], facts: {} });
+  // start screen, then build
+  let pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}/customs-draft`, { cookie })).text;
+  assert.match(pg, /Prepare the draft/);
+  assert.match((await req(base, 'GET', `/admin/orders/shipments/${c.id}`, { cookie })).text, /customs-draft"[^>]*>Customs draft</);
+  assert.equal((await req(base, 'POST', `/admin/orders/shipments/${c.id}/customs-draft/build`, { cookie, form: {} })).status, 303);
+  const d = db.tables.customs_drafts[0]; assert.ok(d);
+  const T = d.data.totals;
+  assert.equal(T.value, 4075); // 5000 × 0.68 + 500 × 1.35
+  // feeder: 3.4 + 25 (301) + 20 (China extra) on 3,400 · mirror 3.9 + 25 + 20 on 675
+  assert.equal(T.duty, 141.93); assert.equal(T.s301, 1018.75); assert.equal(T.other, 815);
+  assert.equal(T.mpf, 33.58); assert.equal(T.hmf, 5.09);
+  const feeder = d.data.items.find((x) => x.sku === 'SFRS 001');
+  assert.equal(feeder.code.hts, '3924.10.4000');
+  const toy = feeder.alts.find((x) => x.hts === '9503.00.0073'); assert.equal(toy.total, 20); assert.equal(toy.save, 965.6); assert.ok(toy.ok);
+  assert.ok(!feeder.alts.find((x) => x.hts === '8516.79.0000').ok, 'a weak code is never offered as a saving');
+  assert.equal(T.save, 965.6);
+  pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}/customs-draft`, { cookie })).text;
+  assert.match(pg, /3924\.10\.4000/); assert.match(pg, /9903\.88\.03/); assert.match(pg, /9903\.01\.24/); assert.match(pg, /−\$965\.60/); assert.match(pg, /Mirror material: glass or acrylic/);
+  assert.match(pg, /RSLC|EGLV143661924442/); assert.match(pg, /11\/27\/2026/);
+  // info for the mirror: a file + note → re-classified with photos/docs and the note
+  calls.length = 0;
+  const fd = new FormData(); fd.append('product_id', pm.id); fd.append('note', 'Mirror is acrylic, shatter-proof.');
+  fd.append('files', new Blob([Buffer.from('%PDF spec')], { type: 'application/pdf' }), 'CMR spec.pdf');
+  assert.equal((await fetch(`${base}/admin/orders/shipments/${c.id}/customs-draft/info`, { method: 'POST', headers: { cookie }, body: fd, redirect: 'manual' })).status, 303);
+  assert.ok(db.tables.supplier_documents.some((x) => x.product_id === pm.id && x.kind === 'customs' && x.name === 'CMR spec.pdf'));
+  assert.equal(calls[0].tool_choice.name, 'classify_product'); assert.match(JSON.stringify(calls[0].messages), /Mirror is acrylic/); assert.match(JSON.stringify(calls[0].messages), /"type":"document"/);
+  assert.equal(db.tables.customs_drafts[0].notes[pm.id], 'Mirror is acrylic, shatter-proof.');
+  // the broker's 7501 comes in: feeder filed under 9503 (cheaper), mirror the same as ours
+  await db.insert('customs_entries', { entry_no: '9T2-1', entry_date: '2026-11-28', status: 'saved', container_id: c.id, total: 2500, lines: [
+    { hts: '9503.00.0073', rate: 0, extras: [{ code: '9903.01.24', rate: 20 }], products: [{ product_id: pf.id, duty: 680 }] },
+    { hts: '7009.10.0000', rate: 3.9, extras: [{ code: '9903.88.03', rate: 25 }, { code: '9903.01.24', rate: 20 }], products: [{ product_id: pm.id, duty: 330.08 }] }], facts: {} });
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/customs-draft/build`, { cookie, form: {} });
+  const cmp = db.tables.customs_drafts[0].compare; assert.ok(cmp);
+  const rf = cmp.rows.find((x) => x.product_id === pf.id); assert.equal(rf.broker.hts, '9503.00.0073'); assert.equal(rf.same, false); assert.ok(rf.diff < 0);
+  assert.equal(cmp.rows.find((x) => x.product_id === pm.id).same, true);
+  pg = (await req(base, 'GET', `/admin/orders/shipments/${c.id}/customs-draft`, { cookie })).text;
+  assert.match(pg, /broker −\$/); assert.doesNotMatch(pg, /Draft the email/, 'no correction email when the broker filed lower');
+  // keep the broker's code for the feeder → saved on the product
+  await req(base, 'POST', `/admin/orders/shipments/${c.id}/customs-draft/keep`, { cookie, form: { product_id: pf.id, which: 'broker' } });
+  const pr = await db.get('products', pf.id); assert.equal(pr.hts_verified_code, '9503000073'); assert.equal(pr.hts_declare_code, null);
+  // a broker line filed higher than ours → correction email offered and sent
+  const CD = require('../src/customs-draft');
+  const mail = CD.correctionEmail(db.tables.customs_drafts[0].data, { rows: [{ ...rf, broker: { hts: '7009.10.0000', rate: 48.9, duty: 3000, entry: '9T2-1' }, diff: 1354.4, same: false }] }, { shipment: 'NB0027' });
+  assert.match(mail.body, /filed 7009\.10\.0000 \(48\.9%\), we propose 3924\.10\.4000/); assert.match(mail.body, /post-summary correction/);
+  assert.equal((await req(base, 'POST', `/admin/orders/shipments/${c.id}/customs-draft/email`, { cookie, form: { to: 'chb@broker.test', subject: mail.subject, body: mail.body } })).status, 303);
+  assert.ok(db.tables.customs_drafts[0].correction_sent_at);
+});

@@ -122,22 +122,24 @@ function basisOf(p, last) {
 const dutyPc = (rate, b) => (rate == null || !b.value_pc ? null : Math.round(b.value_pc * rate * 10) / 1000);
 
 /** Inputs for the model: photos (≤3), documents (≤2 PDFs / images ≤ 6 MB), fields, history. */
-async function inputs(db, p, { customs = [], reuse = false } = {}) {
+async function inputs(db, p, { customs = [], reuse = false, note = '' } = {}) {
+  const noteText = String(note || '').trim() ? `\n\nImporter's note (facts about the goods, from the importer): ${String(note).trim().slice(0, 1500)}` : '';
   const S = require('./services');
   const content = [];
   // re-run: the saved customs description stands in for the photos and documents (far fewer tokens)
   if (reuse && p.customs_description) {
     const f = { name: p.product_name, sku: p.supplier_sku, customs_description: p.customs_description, materials: p.materials, country_of_origin: p.country_of_origin || 'China (assumed)', supplier_hs_code: p.hs_code || undefined, declared_on_imports: [...new Set(customs.map((x) => x.hts).filter(Boolean))] };
-    content.push({ type: 'text', text: `Classify this product for US import. No photos this time: use the customs description, written earlier from the photos and documents; return it unchanged as customs_description unless a fact in it is contradicted.\n${JSON.stringify(f, null, 1)}` });
+    content.push({ type: 'text', text: `Classify this product for US import. No photos this time: use the customs description, written earlier from the photos and documents; return it unchanged as customs_description unless a fact in it is contradicted.\n${JSON.stringify(f, null, 1)}${noteText}` });
     return { content, sources: { ...(p.hts_review?.sources || {}), reused: true } };
   }
   const imgs = ((await S.imagesFor(db, [p.id]).catch(() => ({})))[p.id] || []).slice(0, 3);
   let nPhotos = 0;
   for (const im of imgs) { try { const b = await db.storage.download(im.path); if (b?.length) { content.push(ai.imageBlock ? ai.imageBlock(b) : { type: 'image', source: { type: 'base64', media_type: 'image/webp', data: b.toString('base64') } }); nPhotos++; } } catch { /* skip */ } }
   const docs = (await db.list('supplier_documents', { filters: { product_id: p.id } }).catch(() => [])).filter((d) => /\.(pdf|png|jpe?g|webp)$/i.test(d.name || '') && (!d.bytes || d.bytes < 6 * 1024 * 1024));
-  docs.sort((a, b) => (a.kind === 'specification' ? -1 : 0) - (b.kind === 'specification' ? -1 : 0));
+  const prio = (d) => (d.kind === 'customs' ? 0 : d.kind === 'specification' ? 1 : 2);   // files added for customs first, then the spec
+  docs.sort((a, b) => prio(a) - prio(b) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
   const used = [];
-  for (const d of docs.slice(0, 2)) {
+  for (const d of docs.slice(0, 3)) {
     try {
       const b = await db.docs.download(d.path); if (!b?.length) continue;
       const ext = (d.name.toLowerCase().match(/\.([a-z]+)$/) || [])[1];
@@ -154,7 +156,7 @@ async function inputs(db, p, { customs = [], reuse = false } = {}) {
     declared_on_imports: [...new Set(customs.map((x) => x.hts).filter(Boolean))],
     previous_customs_description: p.customs_description || undefined,
   };
-  content.unshift({ type: 'text', text: `Classify this product for US import. ${nPhotos} photo(s)${used.length ? ` and ${used.length} document(s) (${used.join(', ')})` : ''} attached.\n${JSON.stringify(fields, null, 1)}` });
+  content.unshift({ type: 'text', text: `Classify this product for US import. ${nPhotos} photo(s)${used.length ? ` and ${used.length} document(s) (${used.join(', ')})` : ''} attached.\n${JSON.stringify(fields, null, 1)}${noteText}` });
   return { content, sources: { photos: nPhotos, docs: used, fields: Object.keys(fields).filter((k) => fields[k] !== undefined && !(Array.isArray(fields[k]) && !fields[k].length)) } };
 }
 
@@ -188,10 +190,10 @@ function picks(review) {
 }
 
 /** Run the classification. Returns { review, customs_description }. */
-async function classify(db, p, { customs = [], by = null, fetchImpl, reuse = false } = {}) {
+async function classify(db, p, { customs = [], by = null, fetchImpl, reuse = false, note = '' } = {}) {
   if (!ai.enabled()) throw Object.assign(new Error('AI is not configured: set ANTHROPIC_API_KEY'), { status: 503 });
   const last = customs[0] || null;
-  const { content, sources } = await inputs(db, p, { customs, reuse });
+  const { content, sources } = await inputs(db, p, { customs, reuse, note });
   const { result } = await ai.callTool({ tool: TOOL, system: SYSTEM, content, maxTokens: 2500 });
   const seen = new Set();
   const candidates = (result.candidates || []).map((c) => ({ hts: digits(c.hts).slice(0, 10), title: String(c.title || '').slice(0, 80), fit: FITS.includes(c.fit) ? c.fit : 'possible', why: String(c.why || '').slice(0, 700) }))
@@ -292,4 +294,4 @@ function patch({ review, customs_description }) {
   return { hts_review: review, customs_description: customs_description || null, hts_rates_at: review.rates_at };
 }
 
-module.exports = { TOOL, SYSTEM, classify, recheck, rateOf, rateAll, picks, compare, brokerEmail, patch, originExtrasOf, basisOf, inputs };
+module.exports = { TOOL, SYSTEM, classify, recheck, rateOf, rateAll, picks, compare, brokerEmail, patch, originExtrasOf, basisOf, inputs, s301Of };
