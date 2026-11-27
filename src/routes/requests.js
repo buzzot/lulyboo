@@ -579,6 +579,12 @@ module.exports = function requestRoutes(router, { db, config }) {
       const out = await IN.handleInspectionEmail({ db, config, from, subject, text: String(f['body-plain'] || text), files: Object.values(parsed.files).flat() }).catch((e) => ({ matched: false, error: e.message }));
       if (out.matched || toList.some((x) => /^inspect@/i.test(x.trim()))) return res.json({ ok: true, inspection: true, ...out });
     }
+    // Ready-to-ship confirmations: replies carry LBR-XXXXX in the subject.
+    const RC = require('../readycheck');
+    if (RC.CODE_RE.test(subject)) {
+      const out = await RC.handleEmail({ db, config, from, subject, text: String(f['body-plain'] || text) }).catch((e) => ({ matched: false, error: e.message }));
+      if (out.matched) return res.json({ ok: true, ready: true, ...out });
+    }
     // Shipping documents from suppliers: replies to the shipment confirmation carry LBS-XXXXX in the subject.
     const SD = require('../shipdocs');
     if (SD.CODE_RE.test(subject) || toList.some((x) => /^docs@/i.test(x.trim()))) {

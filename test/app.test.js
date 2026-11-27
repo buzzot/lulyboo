@@ -5702,3 +5702,56 @@ test('a line in a container that has not sailed is never "shipped": supplier doc
   await req(base, 'POST', `/admin/logistics/planning/line/${y.id}/move`, { cookie, form: { container_id: c.id } });
   assert.equal((await db.get('plan_orders', y.id)).container_id, c.id); assert.equal((await db.get('plan_orders', y.id)).shipped, false);
 });
+
+test('ready-to-ship check: one email per supplier 5 days before shipping, reminder, AI-read reply, apply new date, PO chip + dashboard', async (t) => {
+  const db = seedDb();
+  const { server, base, config } = await startServer(db);
+  t.after(() => server.close());
+  const cookie = (await req(base, 'POST', '/admin/login', { form: { password: 'pw-test' } })).cookies.map((c) => c.split(';')[0]).join('; ');
+  const RC = require('../src/readycheck'); const PL = require('../src/planning');
+  process.env.RESEND_API_KEY = 're_test';
+  const realFetch = global.fetch; const sent = [];
+  global.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://api.resend.com/emails')) { sent.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ id: 'em' }), { status: 200 }); }
+    if (String(url).startsWith('https://api.anthropic.com')) { const b = JSON.parse(opts.body); return new Response(JSON.stringify({ model: 'x', usage: {}, content: [{ type: 'tool_use', name: b.tool_choice.name, input: { ready_ok: false, new_date: PL.addDays(PL.today(), 9), inspection_date: PL.addDays(PL.today(), 6), summary: 'Packaging late; ready later.' } }] }), { status: 200 }); }
+    return realFetch(url, opts);
+  };
+  t.after(() => { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.ANTHROPIC_API_KEY; });
+  const T = PL.today(); const D = (n) => PL.addDays(T, n);
+  const s = await db.insert('suppliers', { name: 'Coooko', email: 'lin@coooko.cn' });
+  const s2 = await db.insert('suppliers', { name: 'Benno', email: 'sales@benno.cn' });
+  const c = await db.insert('plan_containers', { port: 'CNNGB', box: '40HQ', status: 'booked', loading_date: D(4) });
+  const a = await db.insert('plan_orders', { supplier_id: s.id, po: '600030', product: 'Heart Hook - Pink', qty: 8040, cbm: 5, ready_date: D(-3), container_id: c.id });   // ships on the CY date
+  const b = await db.insert('plan_orders', { supplier_id: s.id, po: '600031', product: 'Heart Hook - Cream', qty: 5040, cbm: 3, ready_date: D(5) });
+  await db.insert('plan_orders', { supplier_id: s.id, po: '600040', product: 'Later', qty: 1, ready_date: D(12) });   // too far
+  await db.insert('plan_orders', { supplier_id: s2.id, po: '200013', product: 'Sun Shade', qty: 5016, cbm: 12, ready_date: D(2) });
+  await db.insert('inspections', { ref: 'LBI-T1', supplier_id: s.id, pos: ['600031'], status: 'scheduled', inspection_date: D(3) });
+  const nine = new Date(`${T}T02:00:00Z`);   // 10:00 China
+  let r = await RC.runReadyChecks({ db, config, at: nine });
+  assert.equal(r.sent, 2); assert.equal(sent.length, 2);
+  const m = sent.find((x) => /600030/.test(x.subject));
+  assert.match(m.subject, /Ready-to-ship confirmation — PO 600030, 600031 \(.+\) \[LBR-[A-Z0-9]{5}\]/); assert.ok(m.cc.includes('marsel@lulyboo.com'));
+  assert.match(m.text, /Inspection for PO 600030/); assert.doesNotMatch(m.text, /Inspection for PO 600030, 600031/); assert.match(m.text, /PO 600031: inspection booked for/);
+  assert.doesNotMatch(m.text, /600040/);
+  r = await RC.runReadyChecks({ db, config, at: nine }); assert.equal(r.sent, 0, 'not twice');
+  // no reply 2 days later → one reminder
+  const k = db.tables.ready_checks.find((x) => x.supplier_id === s.id);
+  k.sent_at = new Date(Date.now() - 2.5 * 864e5).toISOString();
+  r = await RC.runReadyChecks({ db, config, at: nine }); assert.equal(r.reminded, 1); assert.match(sent.at(-1).subject, /^Reminder: ready-to-ship/);
+  r = await RC.runReadyChecks({ db, config, at: nine }); assert.equal(r.reminded, 0);
+  // the reply comes back: new date + inspection date
+  process.env.ANTHROPIC_API_KEY = 'test';
+  const out = await RC.handleEmail({ db, config, from: 'lin@coooko.cn', subject: `RE: ${k.subject}`, text: 'Sorry, packaging is late.' });
+  assert.equal(out.status, 'changed');
+  const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=600031`, { cookie })).text;
+  assert.match(po, /rc-chip bad[^>]*>✉ New date/); assert.match(po, /Apply /);
+  const dash = (await req(base, 'GET', '/admin', { cookie })).text;
+  assert.match(dash, /Shipping in the next 7 days/); assert.match(dash, /Booked · CY/); assert.match(dash, /No container/); assert.doesNotMatch(dash, /600040/);
+  assert.match(dash, /Ready-to-ship: no reply or a new date/);
+  assert.equal((await req(base, 'POST', `/admin/orders/ready/${k.id}/apply`, { cookie, form: { back: '/admin' } })).status, 303);
+  assert.equal((await db.get('plan_orders', b.id)).ready_date, D(9)); assert.equal((await db.get('ready_checks', k.id)).status, 'applied');
+  // quick follow-up by hand
+  assert.equal((await req(base, 'POST', '/admin/orders/ready/send', { cookie, form: { supplier: s2.id, po: '200013', kind: 'followup', back: '/admin' } })).status, 303);
+  assert.match(sent.at(-1).subject, /^Status update — PO 200013 \[LBR-/);
+  void a;
+});

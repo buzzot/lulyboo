@@ -544,7 +544,11 @@ module.exports = function adminRoutes(router, { db, config }) {
     const fwdReview = (await db.list('fwd_updates', { filters: { status: 'pending' } }).catch(() => [])).length;
     const customsReview = (await db.list('customs_entries', { filters: { status: 'pending' } }).catch(() => [])).length;
     const arriving = (await db.list('plan_containers').catch(() => [])).filter((c) => c.fwd?.eta && !c.fwd.ata && !c.fwd.arrived && c.status === 'shipped' && c.fwd.eta <= require('../planning').addDays(todayStr, 7)).length;
+    const RCR = require('./readychecks');
+    const soon = await safe('shipping soon', RCR.upcoming(db, todayStr), { rows: [], unbooked: 0, noReply: 0, today: todayStr });
     const attention = [
+      { label: 'Shipping within 7 days — freight not booked', n: soon.unbooked, href: '/admin#shipping-soon', tone: 'danger' },
+      { label: 'Ready-to-ship: no reply or a new date', n: soon.noReply, href: '/admin#shipping-soon', tone: 'warn' },
       { label: 'Shipping documents to review', n: shipReview, href: '/admin/orders/shipping', tone: 'info' },
       { label: 'Forwarder updates to review', n: fwdReview, href: '/admin/orders/shipping#forwarder', tone: 'info' },
       { label: 'Shipments arriving this week', n: arriving, href: '/admin/orders/shipping#forwarder', tone: 'info' },
@@ -639,6 +643,7 @@ module.exports = function adminRoutes(router, { db, config }) {
       </div>
 
       <div class="d-grid">
+        ${RCR.upcomingCard(soon)}
         <section class="d-card d-6"><div class="d-title"><h2>Needs attention</h2><span class="muted small">${attentionOpen ? `${attentionOpen} open` : 'All clear'}</span></div>
           <ul class="d-attn">${attention.map((a) => html`<li><a href="${a.href}" class="${a.n ? a.tone : 'zero'}"><span class="a-dot" aria-hidden="true"></span><span class="a-label">${a.label}</span><b>${fmt.num(a.n)}</b><span class="a-go" aria-hidden="true">›</span></a></li>`)}</ul></section>
 

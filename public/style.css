@@ -3793,3 +3793,19 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 .hc-col b{font-size:13px}.hc-r{font-weight:600}.hc-arr{align-self:center;color:var(--muted)}
 .hc-d{font-weight:600;font-size:12.5px;margin-bottom:2px}.hc-d.up{color:#b4232a}.hc-d.down{color:var(--ok)}
 .cu-var{font-style:italic;opacity:.8;margin-left:2px}
+/* Ready-to-ship confirmation chip (PO tile, dashboard) */
+.rc-line{margin-top:8px}
+.rc-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;background:#f1efeb;color:#5e5a55;cursor:default;outline:none;white-space:nowrap}
+.rc-chip.bk{background:#e8eef9;color:#2c4f8f}.rc-chip.ok{background:#e6f4ec;color:#1d6b40}.rc-chip.warn{background:#fdf3e1;color:#8a5200}.rc-chip.bad{background:#fbe9e7;color:#a3312a}.rc-chip.plan{background:#efeafb;color:#5b4bb5}.rc-chip.plan0{background:transparent;border:1px dashed #d4cfc8;color:#7a756e;font-weight:500}
+.rc-chip .or-pc-card{display:none!important}
+.rc-rows{display:grid;gap:4px;margin:6px 0 8px;font-size:12.5px}.rc-rows>div{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px;align-items:baseline}.rc-rows>div>span:first-child{color:var(--muted);font-size:11.5px}
+.rc-acts{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;border-top:1px solid var(--line);padding-top:8px}
+.t-bad{color:#a3312a}
+/* Dashboard: shipping in the next 7 days */
+.ss-wrap{overflow-x:auto}.ss-t{width:100%;border-collapse:collapse;font-size:13.5px}
+.ss-t th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
+.ss-t td{padding:9px 10px;border-bottom:1px solid #f1eee9;vertical-align:top}.ss-t .r{text-align:right}.ss-t tr:last-child td{border-bottom:0}
+.ss-t tr.late td:first-child{box-shadow:inset 3px 0 0 #c0392b}
+.ss-t td .sub{font-size:12px}.ss-t .trunc{max-width:190px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ss-pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:999px;background:#f1efeb;color:#5e5a55;white-space:nowrap}.ss-pill.ok{background:#e6f4ec;color:#1d6b40}.ss-pill.warn{background:#fdf3e1;color:#8a5200}.ss-pill.bad{background:#fbe9e7;color:#a3312a}
+.rc-code{font-weight:400;font-size:11.5px;margin-left:6px}

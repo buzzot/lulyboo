@@ -251,6 +251,7 @@ module.exports = function orderRoutes(router, { db, config }) {
     }
     const notesG = groupBy(ls.filter((o) => o.notes), (o) => String(o.notes).trim());
     const shipSection = await require('./shipping').shipmentSection(db, supplier, p?.po || poQ, back);
+    const readyChip = p ? await require('./readychecks').chipFor(db, supplier, ls, back).catch((e) => { console.error('Ready chip:', e.message); return ''; }) : '';
     // where this PO's goods are now (Orders → Shipments), and the volume the supplier actually loaded
     const SH = require('./shipments');
     const ids = new Set(ls.map((o) => o.id));
@@ -271,7 +272,7 @@ module.exports = function orderRoutes(router, { db, config }) {
             const n = first ? Math.round((Date.parse(first) - Date.parse(td)) / 86400000) : null;
             const sub = allShipped ? 'all lines shipped' : !first ? 'not given by the supplier' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} late` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`;
             const ports = p.ports.map(portName).filter(Boolean);
-            return html`<div class="cp-kpi ${!allShipped && n != null && n < 0 ? 'bad' : ''}"><span>Ready to ship</span><b>${first ? (ds.length > 1 ? `${PL.short(first)} – ${PL.short(ds[ds.length - 1])}` : PL.short(first)) : '—'}</b><small>${sub}${ds.length > 1 && !allShipped ? ` · ${ds.length} dates` : ''} · ${ports.length ? html`<b class="or-kp">⚓ ${ports.join(', ')}</b>` : html`<span>port to confirm</span>`}</small></div>`; })()}
+            return html`<div class="cp-kpi ${!allShipped && n != null && n < 0 ? 'bad' : ''}"><span>Ready to ship</span><b>${first ? (ds.length > 1 ? `${PL.short(first)} – ${PL.short(ds[ds.length - 1])}` : PL.short(first)) : '—'}</b><small>${sub}${ds.length > 1 && !allShipped ? ` · ${ds.length} dates` : ''} · ${ports.length ? html`<b class="or-kp">⚓ ${ports.join(', ')}</b>` : html`<span>port to confirm</span>`}</small>${allShipped ? '' : html`<div class="rc-line">${readyChip}</div>`}</div>`; })()}
           ${(() => { const c = ls.map(PK.ctn); const tot = c.reduce((a, x) => a + (x || 0), 0); const miss = ls.filter((o, i) => o.product && c[i] == null).length;
             return html`<div class="cp-kpi"><span>Quantity</span><b>${p.qty ? int(p.qty) : '—'}</b><small>pieces · ${tot ? html`<b class="or-kp">${int(tot)} cartons</b>${miss ? html` <span title="${`${miss} line${miss === 1 ? '' : 's'} without packing`}">+${miss}?</span>` : ''}` : 'cartons unknown'}</small></div>`; })()}
           ${(() => { const priced = ls.filter((o) => o.unit_price && o.qty); const amt = priced.reduce((a, o) => a + Number(o.unit_price) * Number(o.qty), 0); return html`<div class="cp-kpi"><span>PO value</span><b>${amt ? money(amt, priced[0].currency) : '—'}</b><small>${!priced.length ? 'no cost on the lines' : priced.length < ls.filter((o) => o.product).length ? `${priced.length} of ${ls.filter((o) => o.product).length} lines priced` : 'cost × quantity'}</small></div>`; })()}
