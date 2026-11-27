@@ -27,7 +27,8 @@ function chip({ k, lines, sid, po, here, today = PL.today() }) {
   const open = lines.filter((l) => !l.shipped && l.ship_date);
   const plan = RC.sendOn(open);
   if (!k && !open.length) return '';
-  const label = k ? st.label : plan ? (plan <= today ? 'Check due — sends at 9:00 China' : `Check goes ${PL.short(plan)}`) : 'No date';
+  const past = open.length && open.every((l) => l.ship_date < today);
+  const label = k ? st.label : past ? 'Not sent' : plan ? (plan <= today ? 'Check due — sends at 9:00 China' : `Check goes ${PL.short(plan)}`) : 'No date';
   const f = k?.facts || {};
   const act = [];
   if (!k || ['confirmed', 'applied'].includes(k.status) || k.kind === 'followup') act.push(btn(`${BASE}/send`, k ? 'Ask again' : 'Send now', { fields: { supplier: sid, po, kind: 'check', back: here }, confirm: `Email the supplier now to confirm PO ${po} is ready${open[0] ? ` on ${PL.short(open[0].ship_date)}` : ''}?` }));
@@ -43,7 +44,7 @@ function chip({ k, lines, sid, po, here, today = PL.today() }) {
       <div><span>Reply</span>${k.reply_at ? html`<span><b>${PL.short(day(k.reply_at))}</b> · ${f.summary || '—'}</span>` : html`<span class="sub">none yet${st.key === 'noreply' ? ' — follow up' : ''}</span>`}</div>
       ${f.new_date ? html`<div><span>New date</span><b class="t-bad">${PL.short(f.new_date)}</b></div>` : ''}
       ${f.inspection_date ? html`<div><span>Inspection</span><b>${PL.short(f.inspection_date)}</b></div>` : ''}
-    </div>` : html`<p class="sub" style="margin:4px 0 6px">${plan ? `Goes automatically on ${PL.short(plan)} (5 days before shipping ${PL.short(open[0]?.ship_date)}), at 9:00 China time — one email for all of this supplier's lines shipping then. It asks to confirm the date and, if not booked, the inspection date.` : 'Needs a ready date first.'}</p>`}
+    </div>` : html`<p class="sub" style="margin:4px 0 6px">${past ? 'The shipping date has passed, so nothing goes automatically — use Quick follow-up to ask for a status update.' : plan ? `Goes automatically on ${PL.short(plan)} (5 days before shipping ${PL.short(open[0]?.ship_date)}), at 9:00 China time — one email for all of this supplier's lines shipping then. It asks to confirm the date and, if not booked, the inspection date.` : 'Needs a ready date first.'}</p>`}
     <div class="rc-acts">${act}</div></span>`;
   return html`<span class="rc-chip ${k ? st.cls : 'plan0'}" tabindex="0" data-popcard>✉ ${label}${card}</span>`;
 }
@@ -59,7 +60,8 @@ async function chipFor(db, supplier, lines, here) {
 /** Dashboard: POs shipping in the next 7 days (and late ones), freight and readiness at a glance. */
 async function upcoming(db, today = PL.today()) {
   const containers = await db.list('plan_containers').catch(() => []);
-  const lines = (await RC.openLines(db, { containers })).filter((l) => l.ship_date <= PL.addDays(today, 7));
+  // shipping within the next 7 days, plus up to 7 days late — older dates are stale, not "shipping soon"
+  const lines = (await RC.openLines(db, { containers })).filter((l) => l.ship_date >= PL.addDays(today, -7) && l.ship_date <= PL.addDays(today, 7));
   let checks = []; try { checks = await db.list('ready_checks', { order: 'created_at.desc' }); } catch (e) { if (!RC.isMissing(e)) throw e; }
   const sups = Object.fromEntries((await db.list('suppliers').catch(() => [])).map((s) => [s.id, s]));
   const IN = require('../inspections'); const insRows = await db.list('inspections').catch(() => []);

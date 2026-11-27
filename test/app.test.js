@@ -5725,6 +5725,7 @@ test('ready-to-ship check: one email per supplier 5 days before shipping, remind
   const b = await db.insert('plan_orders', { supplier_id: s.id, po: '600031', product: 'Heart Hook - Cream', qty: 5040, cbm: 3, ready_date: D(5) });
   await db.insert('plan_orders', { supplier_id: s.id, po: '600040', product: 'Later', qty: 1, ready_date: D(12) });   // too far
   await db.insert('plan_orders', { supplier_id: s2.id, po: '200013', product: 'Sun Shade', qty: 5016, cbm: 12, ready_date: D(2) });
+  await db.insert('plan_orders', { supplier_id: s2.id, po: '200001', product: 'Old', qty: 1, ready_date: D(-30) });   // long overdue: not on the dashboard
   await db.insert('inspections', { ref: 'LBI-T1', supplier_id: s.id, pos: ['600031'], status: 'scheduled', inspection_date: D(3) });
   const nine = new Date(`${T}T02:00:00Z`);   // 10:00 China
   let r = await RC.runReadyChecks({ db, config, at: nine });
@@ -5746,7 +5747,7 @@ test('ready-to-ship check: one email per supplier 5 days before shipping, remind
   const po = (await req(base, 'GET', `/admin/orders/view?supplier=${s.id}&po=600031`, { cookie })).text;
   assert.match(po, /rc-chip bad[^>]*>✉ New date/); assert.match(po, /Apply /);
   const dash = (await req(base, 'GET', '/admin', { cookie })).text;
-  assert.match(dash, /Shipping in the next 7 days/); assert.match(dash, /Booked · CY/); assert.match(dash, /No container/); assert.doesNotMatch(dash, /600040/);
+  assert.match(dash, /Shipping in the next 7 days/); assert.match(dash, /Booked · CY/); assert.match(dash, /No container/); assert.doesNotMatch(dash, /600040/); assert.doesNotMatch(dash, /200001/);
   assert.match(dash, /Ready-to-ship: no reply or a new date/);
   assert.equal((await req(base, 'POST', `/admin/orders/ready/${k.id}/apply`, { cookie, form: { back: '/admin' } })).status, 303);
   assert.equal((await db.get('plan_orders', b.id)).ready_date, D(9)); assert.equal((await db.get('ready_checks', k.id)).status, 'applied');
