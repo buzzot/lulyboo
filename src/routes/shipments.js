@@ -490,20 +490,21 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const fileCard = (list) => html`${list.map((x) => { const see = canSee(x.type); const u = `${x.url}?inline=1`;
       return html`<div class="dx-pf" data-armbox><div class="dx-pn"><b title="${x.name}">${x.name}</b>${x.meta ? html`<small>${x.meta}</small>` : ''}</div>
         <div class="dx-pa">${see ? html`<a href="${u}" data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}">Open</a>` : ''}<a href="${x.dl}" download>Download</a>${x.rm && editable ? html`<button type="button" class="bd-del" data-arm aria-label="${`Delete ${x.name}`}" title="Delete this file">Delete</button><button class="bd-yes" form="${rmId(x.rm)}">✓ Delete</button>` : ''}</div></div>`; })}`;
-    const chip = (cls, label, list = [], tip = '') => {
+    const chip = (cls, label, list = [], tip = '', note = '') => {
       if (!list.length) return html`<span class="dx-chip ${cls}" title="${tip}">${label}</span>`;
       const x = list[0]; const see = canSee(x.type); const u = `${x.url}?inline=1`;
-      return html`<span class="dx-chip ${cls}" tabindex="0" role="button" data-popcard ${see ? raw(`data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}"`) : raw(`data-href="${x.dl}"`)}>${label}${list.length > 1 ? html` <em>${list.length}</em>` : ''}<span class="or-pc-card dx-card">${fileCard(list)}</span></span>`;
+      return html`<span class="dx-chip ${cls}" tabindex="0" role="button" data-popcard ${see ? raw(`data-preview="${u}" data-type="${/image/.test(x.type) ? 'image' : 'doc'}" data-dl="${x.dl}"`) : raw(`data-href="${x.dl}"`)}>${label}${list.length > 1 ? html` <em>${list.length}</em>` : ''}<span class="or-pc-card dx-card">${note ? html`<div class="dx-pnote">${note}</div>` : ''}${fileCard(list)}</span></span>`;
     };
     const nextFu = {};
     for (const p of r.pd?.pos || []) if (p.sc && p.missing.length) { try { const fr = await db.get('ship_confirmations', p.sc.id); const { sailing: sl } = await SD.factsOf(db, fr); nextFu[`${p.sid}|${p.po}`] = SD.nextFollowup(fr, SD.checklistOf(fr, await SD.filesOf(db, fr), sl, SD.chinaNow().day)); } catch { /* no follow-up shown */ } }
     const poRows = (r.pd?.pos || []).map((p, pi) => {
       const ciIds = new Set(p.ci.map((x) => x.id)); const comb = p.pl.some((x) => ciIds.has(x.id));
       const gone = r.pd.shipped ? ['miss', 'Missing'] : ['soft', 'Not yet'];
-      const ci = p.ci.length ? chip('ok', html`✓ CI${comb ? html`<span class="s"> · combined</span>` : ''}`, p.ci.map(pfx)) : p.pi.length ? chip('pi', 'PI only', p.pi.map(pfx)) : chip(gone[0], gone[1], [], r.pd.shipped ? 'Shipped without a commercial invoice for this PO' : 'Expected when the goods ship');
-      const pl = p.pl.length ? chip('ok', html`✓ PL${comb ? html`<span class="s"> · combined</span>` : ''}`, p.pl.map(pfx)) : chip(gone[0], gone[1]);
+      const combNote = comb ? 'Combined CI & PL — one file for both' : '';
+      const ci = p.ci.length ? chip('ok', '✓ CI', p.ci.map(pfx), '', combNote) : p.pi.length ? chip('pi', 'PI only', p.pi.map(pfx)) : chip(gone[0], gone[1], [], r.pd.shipped ? 'Shipped without a commercial invoice for this PO' : 'Expected when the goods ship');
+      const pl = p.pl.length ? chip('ok', '✓ PL', p.pl.map(pfx), '', combNote) : chip(gone[0], gone[1]);
       const nx = nextFu[`${p.sid}|${p.po}`];
-      return { ok: (p.ci.length ? 1 : 0) + (p.pl.length ? 1 : 0), html: html`<tr><td class="dx-po"><b>${p.po}</b><small title="${p.supplier}">${p.supplier}</small></td><td>${ci}</td><td>${pl}</td>
+      return { ok: (p.ci.length ? 1 : 0) + (p.pl.length ? 1 : 0), html: html`<tr><td class="dx-po"><b>${p.po}</b><small title="${p.supplier}">${p.supplier}</small></td><td class="dx-cc">${ci}</td><td class="dx-cc">${pl}</td>
         <td class="dx-ask">${p.asked ? html`<b>${sh(p.asked)}</b>${nx && p.missing.length ? html`<small>next ${sh(nx)}</small>` : ''}` : html`<span class="sub">—</span>`}</td>
         <td class="dx-act">${p.missing.length ? html`<button type="button" class="link small" data-open-dialog="${`pd-po-${pi}`}">Request</button>` : html`<button type="button" class="dx-ok" data-open-dialog="${`pd-po-${pi}`}" title="Both documents in — click to ask for something else">✓</button>`}</td></tr>` };
     });
@@ -511,8 +512,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
       const ok = d.files.length > 0 || !!d.okIf;
       const files = d.files.map((x) => ({ ...x, meta: '' }));
       const c = files.length ? chip('ok', html`✓ ${files.length === 1 ? 'on file' : `${files.length} files`}`, files) : ok ? chip('ok', '✓ recorded', [], d.note || '') : d.optional ? chip('soft', 'optional') : chip('soft', 'Not yet');
-      return { ok, optional: !!d.optional || (!ok && /delivery receipt/i.test(d.l) && r.stage !== 'delivered'), html: html`<tr><td class="dx-po"><b>${d.l}</b>${d.note ? html`<small class="cu-mono">${d.note}</small>` : ''}</td><td colspan="3">${c}</td>
-        <td class="dx-act">${d.customs && r.entries.length ? html`<a class="link small" href="/admin/logistics/customs?review=${r.entries[0].id}" title="${`Entry ${r.entries[0].entry_no || ''} · duty ${usd(r.entries[0].duty, 2)} + fees ${usd(r.entries[0].fees, 2)}`}">Record →</a>` : ''}</td></tr>` };
+      return { ok, optional: !!d.optional || (!ok && /delivery receipt/i.test(d.l) && r.stage !== 'delivered'), html: html`<tr><td class="dx-po"><b>${d.l}</b>${d.note ? html`<small class="cu-mono">${d.note}</small>` : ''}</td><td colspan="4"><span class="dx-cw">${c}${d.customs && r.entries.length ? html`<a class="link small" href="/admin/logistics/customs?review=${r.entries[0].id}" title="${`Entry ${r.entries[0].entry_no || ''} · duty ${usd(r.entries[0].duty, 2)} + fees ${usd(r.entries[0].fees, 2)}`}">Record →</a>` : ''}</span></td></tr>` };
     });
     const nItems = poRows.length * 2 + conRows.filter((x) => !x.optional).length;
     const nReady = poRows.reduce((a, x) => a + x.ok, 0) + conRows.filter((x) => !x.optional && x.ok).length;
@@ -524,7 +524,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         <span class="dx-btns">${r.c && r.kind !== 'courier' ? html`<a class="btn ghost small" href="${`${BASE}/${r.id}/customs-draft`}" title="Our own 7501: HTS codes, duty and lower-duty options before the broker files">Customs draft</a>` : ''}${r.c && r.kind !== 'courier' ? html`<button type="button" class="btn ghost small" data-open-dialog="broker">${bSent ? 'Broker ✓' : 'Send to broker…'}</button>` : ''}${nMiss ? html`<button type="button" class="btn small" data-open-dialog="pd-req">Request ${nMiss} missing…</button>` : ''}</span></div>
       ${r.pd?.alert ? html`<p class="dx-al"><b>Shipped${f.atd ? ` ${sh(f.atd)}` : ''}</b> — ${r.pd.open.length} PO${r.pd.open.length === 1 ? '' : 's'} without ${[...new Set(r.pd.open.flatMap((p) => p.missing))].map((k) => (k === 'CI' ? 'a commercial invoice' : 'a packing list')).join(' or ')}.${bDue && !bSent ? html` The broker needs them by <b>${sh(bDue)}</b>.` : ''}</p>`
         : r.c && r.kind !== 'courier' && bEta ? html`<p class="dx-st">${bSent ? html`Sent to the broker ${sh(bSent)}` : html`Broker documents due <b>${sh(bDue)}</b> (ETA ${sh(bEta)} − 5 days)`}</p>` : ''}
-      <table class="dx-t">${poRows.length ? html`<thead><tr><th>PO</th><th>Invoice</th><th>Packing list</th><th>Asked</th><th></th></tr></thead>` : ''}
+      <table class="dx-t">${poRows.length ? html`<thead><tr><th>PO</th><th class="dx-cc">CI</th><th class="dx-cc">PL</th><th class="dx-ask">Asked</th><th></th></tr></thead>` : ''}
         <tbody>${poRows.map((x) => x.html)}
         ${poRows.length ? html`<tr class="dx-grp"><td colspan="5">Whole ${r.kind === 'courier' ? 'shipment' : r.kind === 'lcl' ? 'shipment' : 'container'}</td></tr>` : ''}
         ${conRows.map((x) => x.html)}</tbody></table>

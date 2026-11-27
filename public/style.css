@@ -3762,3 +3762,15 @@ span.rq-bar i.r{background:#3d9a68}span.rq-bar i.w{background:#e6e1dd}
 @media print{header.top,.subnav,nav.crumb,.cd-acts,.cd-docs,.cd-mail,.cd-keep,.flash,footer{display:none!important}.cd-2{grid-template-columns:1fr}.cd-x{break-inside:avoid}body{background:#fff}.card{box-shadow:none}}
 .ad-lbl .ad-whole{margin-left:10px;text-transform:none;letter-spacing:0;font-size:12.5px}
 .ad-sum .ad-mis,.ad-mis{display:block;margin-top:6px;color:#b2382a;font-weight:600}
+/* Shipment page: steady two columns — details flex, documents a fixed-width panel */
+.shp-two{grid-template-columns:minmax(0,1fr) clamp(340px,30vw,410px)}
+.shp-t td:first-child a,.shp-t .hts-tip,.shp-t td .cu-mono{white-space:nowrap}
+.dx-t th.dx-cc,.dx-t td.dx-cc{width:56px;padding-left:4px;padding-right:4px;text-align:center}
+.dx-t td.dx-cc .dx-chip{min-width:48px;justify-content:center;padding:0 6px;height:24px;font-size:11.5px}
+.dx-t th.dx-ask{width:58px}.dx-t td.dx-ask{width:58px}
+.dx-pnote{font-size:12px;font-weight:600;color:var(--ok);background:var(--ok-soft);border-radius:6px;padding:4px 8px;margin-bottom:6px}
+.dx-hd .dx-btns .btn{padding-left:10px;padding-right:10px}
+@media(max-width:1000px){.shp-two{grid-template-columns:1fr}}
+.dx-t{table-layout:fixed}.dx-t th:last-child{width:64px}.dx-t .dx-po{max-width:none;overflow:hidden}
+.dx-t th.dx-cc,.dx-t td.dx-cc{width:62px}.dx-t th:last-child{width:58px}
+.dx-cw{display:flex;align-items:center;justify-content:space-between;gap:8px}
