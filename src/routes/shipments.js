@@ -482,17 +482,24 @@ module.exports = function shipmentRoutes(router, { db, config }) {
     const fmtH = (x) => { const d = dg(x); return d.length >= 8 ? `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 10)}` : x || ''; };
     const prodOf = (l) => PL.catalogMatch(l, prods.filter((p) => p.supplier_id === l.supplier_id)) || null;
     const isMine = (p, l, pr) => (p.line_id && p.line_id === l.id) || (pr && p.product_id === pr.id) || (l.sku && p.code && nk(p.code) === nk(l.sku));
-    const htsOf = (l) => { const pr = prodOf(l); for (const e of r.entries) for (const cl of e.lines || []) for (const p of cl.products || []) if (isMine(p, l, pr)) return { hts: cl.hts, rate: CU.lineRate(cl), base: cl.rate, extras: cl.extras || [], entry: e.id, pending: e.status !== 'saved' }; return null; };
+    const htsOf = (l) => { const pr = prodOf(l); for (const e of r.entries) for (const cl of e.lines || []) for (const p of cl.products || []) if (isMine(p, l, pr)) return { hts: cl.hts, rate: CU.lineRate(cl), base: cl.rate, extras: cl.extras || [], entry: e.id, entry_no: e.entry_no, date: e.entry_date, duty: p.duty, per_pc: p.per_pc, pending: e.status !== 'saved' }; return null; };
     const pastCE = (await db.list('customs_entries', { order: 'entry_date.desc' }).catch(() => [])).filter((e) => e.status === 'saved' && !r.entries.some((x) => x.id === e.id));
     const histOf = (l) => { const pr = prodOf(l); const out = [];
       for (const e of pastCE) { const hit = (e.lines || []).map((cl) => [cl, (cl.products || []).find((p) => isMine(p, l, pr))]).find(([, p]) => p);
-        if (hit) out.push({ id: e.id, date: e.entry_date, entry: e.entry_no, hts: hit[0].hts, rate: CU.lineRate(hit[0]), per_pc: hit[1].per_pc, po: hit[1].po }); }
+        if (hit) out.push({ id: e.id, date: e.entry_date, entry: e.entry_no, hts: hit[0].hts, rate: CU.lineRate(hit[0]), base: hit[0].rate, extras: hit[0].extras || [], duty: hit[1].duty, qty: hit[1].qty, per_pc: hit[1].per_pc, po: hit[1].po }); }
       return out; };
+    const brk = (x) => (x.base != null || x.extras?.length ? [`${x.base ?? 0}% base`, ...(x.extras || []).map((e) => `${e.rate}%${e.label ? ` ${e.label}` : ''}`)].join(' + ') : '');
+    const cmpCard = (cur, last, onFile) => { const was = last || { hts: onFile, rate: null };
+      const d = cur.rate != null && was.rate != null ? Math.round((cur.rate - was.rate) * 10) / 10 : null;
+      const col = (x, title, sub) => html`<div class="hc-col"><span class="hc-k">${title}</span><b class="cu-mono">${fmtH(x.hts)}</b><span class="hc-r">${x.rate != null ? `${x.rate}% total` : 'rate unknown'}</span>${brk(x) ? html`<span class="sub">${brk(x)}</span>` : ''}${x.per_pc != null ? html`<span class="sub">duty ${usd(x.per_pc, 3)}/pc${x.duty != null ? ` · ${usd(x.duty, 2)} on the entry` : ''}</span>` : ''}<span class="sub">${sub}</span></div>`;
+      return html`<span class="or-pc-card hc-card" data-wide><b class="ht-h">HTS code changed</b>
+        <div class="hc-grid">${col(was, last ? 'Last import' : 'Product record', last ? `${sh(last.date)} · entry ${last.entry || '—'}` : 'no earlier 7501')}<span class="hc-arr" aria-hidden="true">→</span>${col(cur, 'This 7501', `${cur.date ? sh(cur.date) : ''}${cur.entry_no ? ` · entry ${cur.entry_no}` : ''}${cur.pending ? ' · to review' : ''}`)}</div>
+        ${d != null ? html`<div class="hc-d ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d === 0 ? 'Same total duty rate' : `Duty ${d > 0 ? '+' : '−'}${Math.abs(d)} pts ${d > 0 ? 'higher' : 'lower'} than last time`}</div>` : ''}
+        <span class="sub">Check with the broker before it's filed.</span></span>`; };
     const htsCell = (l) => { const pr = prodOf(l); const cur = htsOf(l); const hist = histOf(l); const last = hist[0];
       const onFile = pr?.hts_verified_code || ''; const ref = last ? last.hts : onFile;
       const changed = !!(cur && ref && dg(cur.hts) !== dg(ref));
       const rateMoved = !changed && cur && last && cur.rate != null && last.rate != null && Math.abs(cur.rate - last.rate) >= 0.1;
-      const why = changed ? `Different from ${last ? `the last import (${sh(last.date)}, entry ${last.entry || '—'})` : 'the product record'}: ${fmtH(ref)}` : '';
       const card = html`<span class="or-pc-card ht-card" data-wide><b class="ht-h">HTS history · ${l.sku || l.product}</b>
         ${changed ? html`<div class="ht-warn">⚠ This 7501 uses ${fmtH(cur.hts)} — ${last ? `last import used ${fmtH(last.hts)}` : `the product record says ${fmtH(onFile)}`}. Check before it's filed.</div>` : rateMoved ? html`<div class="ht-info">Same code, rate ${last.rate}% → ${cur.rate}%</div>` : ''}
         <table class="ht-t"><thead><tr><th>Date</th><th>HTS</th><th class="r">Rate</th><th class="r">Duty/pc</th></tr></thead><tbody>
@@ -502,7 +509,7 @@ module.exports = function shipmentRoutes(router, { db, config }) {
         </tbody></table>
         ${hist.length > 6 ? html`<span class="sub">+${hist.length - 6} older</span>` : ''}
         <div class="ht-ft sub">Product record: ${onFile ? html`<span class="cu-mono">${fmtH(onFile)}</span>` : 'no verified HTS'}</div></span>`;
-      const hts = cur ? html`<a class="cu-mono hts-tip" data-hts="${cur.hts}" href="/admin/logistics/customs?review=${cur.entry}">${fmtH(cur.hts)}</a>${changed ? html` <span class="ht-flag" title="${why}">⚠ changed</span>` : ''}${cur.rate != null ? html`<div class="sub" title="${cur.extras.length ? `${cur.base}% + ${cur.extras.map((x) => `${x.rate}%${x.label ? ` ${x.label}` : ''}`).join(' + ')}` : 'Base rate'}">${cur.rate}%${cur.extras.length ? ' total' : ''}</div>` : ''}`
+      const hts = cur ? html`<a class="cu-mono hts-tip" data-hts="${cur.hts}" href="/admin/logistics/customs?review=${cur.entry}">${fmtH(cur.hts)}</a>${changed ? html` <span class="ht-flag" tabindex="0" data-popcard>⚠ changed${cmpCard(cur, last, onFile)}</span>` : ''}${cur.rate != null ? html`<div class="sub" title="${cur.extras.length ? `${cur.base}% + ${cur.extras.map((x) => `${x.rate}%${x.label ? ` ${x.label}` : ''}`).join(' + ')}` : 'Base rate'}">${cur.rate}%${cur.extras.length ? ' total' : ''}</div>` : ''}`
         : ref ? html`<span class="sub cu-mono hts-tip" data-hts="${ref}" tabindex="0">${fmtH(ref)}</span><div class="sub">${last ? `last used ${sh(last.date)}` : 'product record'}</div>` : html`<span class="sub">—</span>`;
       return { sku: html`<span class="ht-sku" tabindex="0" data-popcard>${l.sku || '—'}${card}</span>`, hts }; };
     const rec = {}; for (const x of ((r.c || r.sc).received || [])) rec[x.line_id] = x;

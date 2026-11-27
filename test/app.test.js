@@ -5630,4 +5630,5 @@ test('shipment "What\'s in it": SKU hover shows HTS history, warns when this 750
   assert.match(pg, /⚠ changed/); assert.match(pg, /28\.4% total/); assert.match(pg, /\$0\.412/);
   assert.match(pg, /9603\.29\.0000<\/span><div class="sub">last used Sep 12/);
   assert.equal((pg.match(/⚠ changed/g) || []).length, 1);
+  assert.match(pg, /HTS code changed/); assert.match(pg, /Last import<\/span><b class="cu-mono">3924\.90\.5650<\/b><span class="hc-r">28\.4% total/); assert.match(pg, /Same total duty rate/);
 });
